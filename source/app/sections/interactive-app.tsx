@@ -259,8 +259,9 @@ export function InteractiveApp({
 	const fullscreen = altScreenActive;
 	const terminalRows = useTerminalRows();
 
-	// Status line — resolved once per render, no state needed
-	const statusLineConfig = useMemo(() => loadPreferences().statusLine, []);
+	// Status line — re-read config every render so /statusline changes take
+	// effect immediately. The sync file read is cheap for a small JSON file.
+	const statusLineConfig = loadPreferences().statusLine;
 	const terminalWidth = useTerminalWidth();
 	const statusLineData = useMemo<StatusLineData | null>(() => {
 		if (!statusLineConfig?.enabled) return null;
