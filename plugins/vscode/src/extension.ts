@@ -33,7 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.StatusBarAlignment.Right,
 		100,
 	);
-	statusBarItem.command = 'omnicode.connect';
+	statusBarItem.command = 'nanocoder.connect';
 	updateStatusBar(false);
 	statusBarItem.show();
 
@@ -42,9 +42,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register commands
 	context.subscriptions.push(
-		vscode.commands.registerCommand('omnicode.connect', connect),
-		vscode.commands.registerCommand('omnicode.disconnect', disconnect),
-		vscode.commands.registerCommand('omnicode.startCli', startCli),
+		vscode.commands.registerCommand('nanocoder.connect', connect),
+		vscode.commands.registerCommand('nanocoder.disconnect', disconnect),
+		vscode.commands.registerCommand('nanocoder.startCli', startCli),
 	);
 
 	// Push active editor state to the CLI so the input box can show an
@@ -59,7 +59,7 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	// Auto-connect if configured
-	const config = vscode.workspace.getConfiguration('omnicode');
+	const config = vscode.workspace.getConfiguration('nanocoder');
 	if (config.get<boolean>('autoConnect', true)) {
 		setTimeout(() => connect(), 1000);
 	}
