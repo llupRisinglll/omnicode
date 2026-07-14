@@ -3,6 +3,19 @@
 [简体中文](README.zh-CN.md)
 [繁體中文](README.zh-TW.md)
 
+## Custom Features (Fork Additions)
+
+Features added to this fork that may not be in the original repo:
+
+- [x] Status line position control (`/statusline position top|bottom`)
+- [x] Status line in `/settings` menu
+- [x] Enhanced compact file diff display with inline word highlighting
+- [x] Working indicator with animated gear and timer (`⚙ Working... (12s)`)
+- [x] Multiline cursor navigation and word-jump fixes
+- [x] `$ARGUMENTS` pass-through for commands without declared parameters
+
+---
+
 An open coding agent for your terminal, built by a community collective rather than a company. Bring your own model, keep your code on your machine, and owe nothing to anyone.
 
 Built by the [Nano Collective](https://nanocollective.org), a community collective building AI tooling not for profit, but for the community. Nanocoder runs agentic coding on the model of your choice: local models via Ollama, or any OpenAI-compatible API such as OpenRouter, Anthropic, and Google. You decide which provider runs your code and where your data goes. No closed-source features and no paid tiers gating the useful parts: **privacy-respecting**, **local-first**, and **open for all**.
