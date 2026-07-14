@@ -418,6 +418,7 @@ export interface UserPreferences {
 	reasoningExpanded?: boolean;
 	compactToolDisplay?: boolean;
 	enablePromptScrubbing?: boolean;
+	showWorkingIndicator?: boolean;
 	/**
 	 * Interactive TUI screen mode. true (default): fullscreen on the
 	 * alternate screen buffer with in-app scrolling (wheel / PgUp / PgDn).
