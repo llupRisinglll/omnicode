@@ -53,22 +53,22 @@
 		"configuration": {
 			"title": "Omnicode",
 			"properties": {
-				"omnicode.serverPort": {
+				"nanocoder.serverPort": {
 					"type": "number",
 					"default": 51820,
 					"description": "WebSocket server port for communication with Omnicode CLI"
 				},
-				"omnicode.autoConnect": {
+				"nanocoder.autoConnect": {
 					"type": "boolean",
 					"default": true,
 					"description": "Automatically connect to Omnicode CLI on startup"
 				},
-				"omnicode.autoStartCli": {
+				"nanocoder.autoStartCli": {
 					"type": "boolean",
 					"default": false,
 					"description": "Automatically start Omnicode CLI if not running"
 				},
-				"omnicode.showDiffPreview": {
+				"nanocoder.showDiffPreview": {
 					"type": "boolean",
 					"default": true,
 					"description": "Show diff preview before applying file changes"

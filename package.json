@@ -1,5 +1,5 @@
 {
-	"name": "@nanocollective/omnicode",
+	"name": "@nanocollective/nanocoder",
 	"main": "dist/cli.js",
 	"version": "1.28.1",
 	"description": "The best Claude Code alternative -- multi-provider agentic coding CLI. Use DeepSeek, Ollama, GLM, or any OpenAI-compatible API with a Claude Code-level harness.",

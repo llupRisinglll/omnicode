@@ -1,6 +1,6 @@
 # AGENTS.md
 
-AI coding agent instructions for **@nanocollective/omnicode**
+AI coding agent instructions for **@nanocollective/nanocoder**
 
 ## Project Overview
 
