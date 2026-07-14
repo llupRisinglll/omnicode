@@ -19,6 +19,9 @@ Features added to this fork that may not be in the original repo.
 - [ ] `$ARGUMENTS` pass-through for commands without declared parameters
 - [ ] Styled task list display with progress count and themed borders
 - [ ] Custom fork banner with ASCII art
+- [ ] Optimized welcome header with version, model, directory, and git branch
+- [ ] Conditional tips display (first run or after 12+ hours)
+- [ ] Condensed agent override messages (single line instead of multiple)
 
 ### Task List Display
 
