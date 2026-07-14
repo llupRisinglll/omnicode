@@ -1,21 +1,26 @@
 import {Box, useInput} from 'ink';
-import React from 'react';
+import React, {useMemo} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
+import {BuiltinStatusLine} from '@/components/BuiltinStatusLine';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
+import {StatusLine} from '@/components/StatusLine';
+import {loadPreferences} from '@/config/preferences';
 import type {useChatHandler} from '@/hooks/chat-handler';
 import type {AppHandlers} from '@/hooks/useAppHandlers';
 import type {useAppState} from '@/hooks/useAppState';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
-import {useTerminalRows} from '@/hooks/useTerminalWidth';
+import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {UIStateProvider} from '@/hooks/useUIState';
 import type {useUserMessageQueue} from '@/hooks/useUserMessageQueue';
 import type {useVSCodeServer} from '@/hooks/useVSCodeServer';
+import {getGitStatusSummarySync} from '@/tools/git/utils';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
+import type {StatusLineData} from '@/types/statusline';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
 import {displayCompactCountsSummary} from '@/utils/tool-result-display';
@@ -254,6 +259,40 @@ export function InteractiveApp({
 	const fullscreen = altScreenActive;
 	const terminalRows = useTerminalRows();
 
+	// Status line — resolved once per render, no state needed
+	const statusLineConfig = useMemo(() => loadPreferences().statusLine, []);
+	const terminalWidth = useTerminalWidth();
+	const statusLineData = useMemo<StatusLineData | null>(() => {
+		if (!statusLineConfig?.enabled) return null;
+
+		let git: StatusLineData['git'];
+		try {
+			const gs = getGitStatusSummarySync();
+			if (gs) {
+				git = {
+					branch: gs.branch,
+					dirty: gs.detached || gs.isDefault,
+				};
+			}
+		} catch {}
+
+		return {
+			model: {
+				id: appState.currentModel,
+				display_name: appState.currentModel,
+			},
+			workspace: {
+				current_dir: process.cwd(),
+				project_dir: process.cwd(),
+			},
+			git,
+			context: {
+				used_percent: appState.contextPercentUsed,
+			},
+			version: '1.28.1',
+		};
+	}, [statusLineConfig, appState.currentModel, appState.contextPercentUsed]);
+
 	return (
 		// Fullscreen layout on the alternate screen buffer: the root Box is
 		// pinned to the exact terminal height so the frame can never exceed
@@ -387,6 +426,29 @@ export function InteractiveApp({
 							/>
 						</UIStateProvider>
 					)}
+
+			{/* Status line — persistent bar at the bottom */}
+			{statusLineConfig?.enabled && statusLineData && (
+				<>
+					{statusLineConfig.command ? (
+						<StatusLine
+							command={statusLineConfig.command}
+							data={statusLineData}
+							terminalWidth={terminalWidth}
+							padding={statusLineConfig.padding ?? 0}
+						/>
+					) : (
+						<BuiltinStatusLine
+							model={statusLineData.model}
+							workspace={statusLineData.workspace}
+							git={statusLineData.git}
+							context={statusLineData.context}
+							terminalWidth={terminalWidth}
+							padding={statusLineConfig.padding ?? 0}
+						/>
+					)}
+				</>
+			)}
 			</Box>
 		</Box>
 	);
