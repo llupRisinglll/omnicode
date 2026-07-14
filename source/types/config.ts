@@ -418,5 +418,6 @@ export interface UserPreferences {
 	reasoningExpanded?: boolean;
 	compactToolDisplay?: boolean;
 	enablePromptScrubbing?: boolean;
+	showWorkingIndicator?: boolean;
 	statusLine?: import('@/types/statusline').StatusLineConfig;
 }
