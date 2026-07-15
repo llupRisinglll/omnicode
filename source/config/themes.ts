@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import type {Theme, ThemePreset} from '@/types/ui';
+import type {Colors, Theme, ThemePreset} from '@/types/ui';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -17,4 +17,11 @@ export function getThemeColors(themePreset: ThemePreset) {
 	return themes[themePreset].colors;
 }
 
-export const defaultTheme: ThemePreset = 'tokyo-night';
+export const defaultTheme: ThemePreset = 'omnicode';
+
+// Background for chat/input text boxes. 'none' means the theme wants the
+// terminal's own background (Ink omits the bg entirely when undefined).
+export function getTextboxBackground(colors: Colors): string | undefined {
+	if (colors.textboxBackground === 'none') return undefined;
+	return colors.textboxBackground ?? colors.base;
+}

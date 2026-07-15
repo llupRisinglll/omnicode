@@ -42,7 +42,7 @@ const FORK_BANNER = `▄█▀█▄ █▄░▄█ █▄░█ █ █▀▀ 
 function ForkBanner() {
 	const {colors} = useTheme();
 	return (
-		<Gradient colors={[colors.primary, colors.tool]}>
+		<Gradient colors={colors.bannerGradient ?? [colors.primary, colors.tool]}>
 			<Text>{FORK_BANNER}</Text>
 		</Gradient>
 	);
@@ -92,15 +92,19 @@ export default memo(function WelcomeMessage({
 
 	return (
 		<>
-			{/* Banner */}
+			{/* Banner — marginTop separates it from the shell prompt that launched us */}
 			{showForkBanner ? (
-				<Box marginBottom={1}>
+				<Box marginTop={1} marginBottom={1}>
 					<ForkBanner />
 				</Box>
 			) : (
-				<Gradient colors={[colors.primary, colors.tool]}>
-					<BigText text="Nanocoder" font={nanocoderShape} />
-				</Gradient>
+				<Box marginTop={1}>
+					<Gradient
+						colors={colors.bannerGradient ?? [colors.primary, colors.tool]}
+					>
+						<BigText text="Nanocoder" font={nanocoderShape} />
+					</Gradient>
+				</Box>
 			)}
 
 			{/* Fork Attribution */}

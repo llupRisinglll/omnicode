@@ -2,7 +2,7 @@ import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {getAppConfig} from '@/config/index';
 import {loadPreferences} from '@/config/preferences';
-import {defaultTheme} from '@/config/themes';
+import {defaultTheme, getThemeColors} from '@/config/themes';
 import {resolveTune} from '@/config/tune';
 import {CustomCommandExecutor} from '@/custom-commands/executor';
 import {CustomCommandLoader} from '@/custom-commands/loader';
@@ -142,6 +142,17 @@ export function useAppState(
 	// Ref to access in async loops
 	const reasoningExpandedRef = useRef(false);
 	reasoningExpandedRef.current = reasoningExpanded;
+
+	// Whether the active theme defines assistantIcon (currently only
+	// omnicode). Threaded as a ref — rather than read via config's cached
+	// getColors() — into the conversation loop / tool executor / display
+	// helpers so the omnicode-only behaviors (merged Thought line, detailed
+	// bash/read compact lines) react live to a mid-session /theme switch and
+	// stay deterministic in tests instead of depending on disk-cached prefs.
+	const iconThemeRef = useRef(
+		Boolean(getThemeColors(currentTheme).assistantIcon),
+	);
+	iconThemeRef.current = Boolean(getThemeColors(currentTheme).assistantIcon);
 
 	// Compact tool display state
 	const [compactToolDisplay, setCompactToolDisplay] = useState<boolean>(true);
@@ -324,6 +335,7 @@ export function useAppState(
 		currentTitleShape,
 		reasoningExpanded,
 		reasoningExpandedRef,
+		iconThemeRef,
 		toolManager,
 		customCommandLoader,
 		customCommandExecutor,

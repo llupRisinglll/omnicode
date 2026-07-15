@@ -49,10 +49,14 @@ export default memo(function StreamingReasoning({
 	const elapsedSec = (Date.now() - effectiveStartTime) / 1000;
 	const tokPerSec = elapsedSec > 0.1 ? (tokens / elapsedSec).toFixed(1) : '—';
 
+	// Omnicode: mirror AssistantReasoning's grey "stats line" treatment for the
+	// live header too, so collapsed → settled doesn't flash color/indent.
+	const isIconTheme = Boolean(colors.assistantIcon);
+
 	return (
 		<Box flexDirection="column" marginBottom={2}>
-			<Box>
-				<Text color={colors.tool}>
+			<Box paddingLeft={isIconTheme ? 2 : 0}>
+				<Text color={isIconTheme ? colors.secondary : colors.tool}>
 					<AnimatedGear /> Thinking
 					<Spinner type="simpleDots" />
 				</Text>

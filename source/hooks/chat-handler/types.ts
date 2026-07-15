@@ -38,6 +38,11 @@ export interface UseChatHandlerProps {
 	// normal-mode turn would otherwise look like a finished plan.
 	onPlanTurnComplete?: () => void;
 	reasoningExpandedRef?: React.RefObject<boolean>;
+	// Whether the active theme defines assistantIcon (currently only
+	// omnicode). Threaded as a live ref rather than read from config's
+	// disk-cached getColors() so the omnicode-only merged-Thought-line and
+	// detailed-bash/read-line behaviors react to a mid-session theme switch.
+	iconThemeRef?: React.RefObject<boolean>;
 	compactToolDisplayRef?: React.RefObject<boolean>;
 	onSetCompactToolCounts?: (counts: Record<string, number> | null) => void;
 	compactToolCountsRef?: React.MutableRefObject<Record<string, number>>;
