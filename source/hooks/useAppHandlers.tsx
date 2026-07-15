@@ -134,6 +134,7 @@ export interface AppHandlers {
 	) => Promise<void>;
 	handleCheckpointCancel: () => void;
 	enterSessionSelectorMode: (showAll?: boolean) => void;
+	applySession: (session: Session) => void;
 	handleSessionSelect: (sessionId: string) => Promise<void>;
 	handleSessionCancel: () => void;
 	enterCheckpointLoadMode: (
@@ -742,6 +743,7 @@ export function useAppHandlers(props: UseAppHandlersProps): AppHandlers {
 		handleCheckpointCancel,
 		enterCheckpointLoadMode,
 		enterSessionSelectorMode,
+		applySession,
 		handleSessionSelect,
 		handleSessionCancel,
 		handleMessageSubmit,
