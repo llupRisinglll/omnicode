@@ -791,6 +791,8 @@ export default function UserInput({
 
 		// Handle navigation
 		if (key.upArrow) {
+			// In multiline mode, Up/Down navigate lines — let TextInput handle it
+			if (input.includes('\n')) return;
 			// File autocomplete navigation takes priority
 			if (isFileAutocompleteMode && fileCompletions.length > 0) {
 				setSelectedFileIndex(prev =>
@@ -813,6 +815,8 @@ export default function UserInput({
 		}
 
 		if (key.downArrow) {
+			// In multiline mode, Up/Down navigate lines — let TextInput handle it
+			if (input.includes('\n')) return;
 			// File autocomplete navigation takes priority
 			if (isFileAutocompleteMode && fileCompletions.length > 0) {
 				setSelectedFileIndex(prev =>
@@ -946,6 +950,7 @@ export default function UserInput({
 						key={textInputKey}
 						value={input}
 						onChange={updateInput}
+						onEdgeArrow={handleHistoryNavigation}
 						onSubmit={handleSubmit}
 						onEnter={handleSubmit}
 						placeholder="/ commands, ! bash, ↑/↓ history"
