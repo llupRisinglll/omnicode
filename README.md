@@ -52,12 +52,22 @@ Features added to this fork that may not be in the original repo.
 - [ ] Optimized welcome header with version, model, directory, and git branch
 - [ ] Conditional tips display (first run or after 12+ hours)
 - [ ] Condensed agent override messages (single line instead of multiple)
+- [ ] TUI rendering overhaul: dual screen modes (inline/fullscreen via `--alt-screen`) with scrolling, reliable `/clear`, and graceful exit
 
 ### Task List Display
 
 The task list now renders in a styled box with the user's preferred title shape, theme colors, and a progress counter:
 
 ![Task List Display](docs/task-list-display.png)
+
+### TUI Screen Modes
+
+Two rendering modes, mirroring what Claude Code and Codex ship:
+
+- **Inline (default)** — renders on the main screen; finished messages print once into the terminal's native scrollback, so your terminal's scrollbar, mouse wheel, and search (Ctrl+Shift+F) work as usual. The transcript stays in the terminal after exit.
+- **Fullscreen** (`--alt-screen` flag, or `"alternateScreen": true` in preferences) — a fixed-height layout on the alternate screen buffer with in-app scrolling: mouse wheel (3 rows/tick) and PgUp/PgDn (half a page), with a scroll indicator and automatic snap-back to bottom on new output. Note: with mouse reporting active, select text with Shift+drag. `--no-alt-screen` forces inline mode over the preference.
+
+In both modes `/clear` fully resets the terminal to a fresh welcome banner, and exiting (Ctrl+C or `/exit`) erases the input UI cleanly, leaving the transcript and a farewell instead of a dead input box.
 
 ---
 
