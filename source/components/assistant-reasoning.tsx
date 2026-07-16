@@ -8,6 +8,7 @@ import {Colors, parseMarkdown} from '@/markdown-parser/index';
 import type {AssistantReasoningProps} from '@/types/index';
 import {wrapWithTrimmedContinuations} from '@/utils/text-wrapping';
 import {calculateTokens} from '@/utils/token-calculator';
+import {getGroupedCompactDescription} from '@/utils/tool-result-display';
 
 // Module-level store for reasoning start times, shared across components.
 // StreamingReasoning sets it when reasoning starts; AssistantReasoning reads it.
@@ -15,6 +16,17 @@ let lastReasoningStartTime: number | null = null;
 
 export function setReasoningStartTime(time: number) {
 	lastReasoningStartTime = time;
+}
+
+/**
+ * Read the last reasoning start time set by StreamingReasoning. Used by the
+ * conversation loop (a non-component module) to compute a completed turn's
+ * thinking duration for the omnicode merged "Thought for Ns" summary line —
+ * see ThoughtRunSummary below and conversation-loop's pendingThought
+ * accumulator.
+ */
+export function getReasoningStartTime(): number | null {
+	return lastReasoningStartTime;
 }
 
 // Indent applied to the expanded body so the "⚙ Thought" header acts as a
@@ -72,10 +84,18 @@ export default function AssistantReasoning({
 		}
 	}, [reasoning, colors, effectiveWidth]);
 
+	// Omnicode: the header renders as an all-secondary-grey "stats line" (same
+	// muted treatment as the "Worked for …" CompletionMessage), padded to line
+	// up under the assistant icon column. Every other theme keeps the classic
+	// colors.tool header, flush left.
+	const isIconTheme = Boolean(colors.assistantIcon);
+
 	return (
 		<Box flexDirection="column" marginBottom={1}>
-			<Box>
-				<Text color={colors.tool}>{'⚙'} Thought</Text>
+			<Box paddingLeft={isIconTheme ? 2 : 0}>
+				<Text color={isIconTheme ? colors.secondary : colors.tool}>
+					{'⚙'} Thought
+				</Text>
 				{thinkingDuration !== null && (
 					<Text color={colors.secondary}>
 						{isFastThinking
@@ -101,6 +121,49 @@ export default function AssistantReasoning({
 					</Box>
 				</Box>
 			)}
+		</Box>
+	);
+}
+
+/**
+ * Omnicode-only: the merged, Claude-Code-style summary line for a run of
+ * consecutive collapsed Thought headers (optionally followed by tool
+ * tallies), e.g. "⚙ Thought for 5s, read 1 file  ctrl+r to expand". Built by
+ * conversation-loop's pendingThought accumulator so a run of thinking turns
+ * (with or without a trailing tool tally) collapses into one grey line
+ * instead of stacking a separate header per turn. Every other theme never
+ * constructs this component — reasoning there always renders through the
+ * per-turn AssistantReasoning header above.
+ */
+export function ThoughtRunSummary({
+	totalMs,
+	toolCounts,
+}: {
+	totalMs: number;
+	toolCounts?: Record<string, number>;
+}) {
+	const {colors} = useTheme();
+	const nonInteractive = useNonInteractiveRender();
+
+	const totalSeconds = Math.floor(totalMs / 1000);
+	const isFastThinking = totalMs > 0 && totalSeconds < 1;
+	const durationLabel = isFastThinking ? '<1s' : formatElapsed(totalSeconds);
+
+	const toolSummary = toolCounts
+		? Object.entries(toolCounts)
+				.map(([toolName, count]) =>
+					getGroupedCompactDescription(toolName, count).toLowerCase(),
+				)
+				.join(', ')
+		: '';
+
+	return (
+		<Box paddingLeft={2} marginBottom={1}>
+			<Text color={colors.secondary}>
+				{'⚙'} Thought for {durationLabel}
+				{toolSummary ? `, ${toolSummary}` : ''}
+				{!nonInteractive ? '  ctrl+r to expand' : ''}
+			</Text>
 		</Box>
 	);
 }

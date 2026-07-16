@@ -25,7 +25,7 @@ import {
 	updateSelectedTheme,
 	updateShowWorkingIndicator,
 } from '@/config/preferences';
-import {getThemeColors, themes} from '@/config/themes';
+import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
@@ -196,7 +196,7 @@ function ThemePreviewMessage({
 	compact = false,
 }: {
 	accentColor: string;
-	baseColor: string;
+	baseColor: string | undefined;
 	children: ReactNode;
 	compact?: boolean;
 }) {
@@ -235,7 +235,7 @@ function ThemeMiniPreview({
 				</Box>
 				<ThemePreviewMessage
 					accentColor={colors.primary}
-					baseColor={colors.base}
+					baseColor={getTextboxBackground(colors)}
 					compact={compact}
 				>
 					<Text color={colors.text}>
@@ -253,7 +253,7 @@ function ThemeMiniPreview({
 
 				<ThemePreviewMessage
 					accentColor={colors.secondary}
-					baseColor={colors.base}
+					baseColor={getTextboxBackground(colors)}
 					compact={compact}
 				>
 					<Text color={colors.text}>

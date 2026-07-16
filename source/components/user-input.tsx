@@ -6,6 +6,7 @@ import {AnimatedGear, ElapsedTimer} from '@/components/animated-gear-timer';
 import {DevelopmentModeIndicator} from '@/components/development-mode-indicator';
 import TextInput from '@/components/text-input';
 import {getShowWorkingIndicator} from '@/config/preferences';
+import {getTextboxBackground} from '@/config/themes';
 import {useInputState} from '@/hooks/useInputState';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
@@ -119,7 +120,10 @@ export default function UserInput({
 	const {boxWidth, isNarrow, actualWidth, truncate} = useResponsiveTerminal();
 	// Must match the wrapWidth passed to TextInput below — both sides use it to
 	// decide whether Up/Down means line navigation or history.
-	const inputWrapWidth = boxWidth - 3;
+	// Themes with a promptChar render a rounded, inset box and keep the "❯ "
+	// prefix visible while typing: side margins (2) + rounded border (2) +
+	// paddingX (2) + prefix (2). Classic style: left border (1) + padding (2).
+	const inputWrapWidth = boxWidth - (colors.promptChar ? 8 : 3);
 	const [textInputKey, setTextInputKey] = useState(0);
 	const completionJustSelectedRef = useRef(false);
 	// Store the full InputState draft when starting history navigation, so it can be restored
@@ -903,6 +907,29 @@ export default function UserInput({
 		);
 	}
 
+	// Queued-messages list. Icon themes (omnicode) render it ABOVE the input
+	// box; classic themes keep it inside the box below the input row.
+	const queuedBlock = queuedMessages.length > 0 && (
+		<Box flexDirection="column" marginTop={1}>
+			<Text color={colors.secondary}>
+				Queued messages (↑/↓ select, Enter edit, Del remove):
+			</Text>
+			{queuedMessages.map((message, index) => {
+				const isSelected = index === selectedQueuedIndex;
+				return (
+					<Text
+						key={message.id}
+						color={isSelected ? colors.info : colors.primary}
+						bold={isSelected}
+					>
+						{isSelected ? '▸ ' : '  '}
+						{formatQueuedMessage(message)}
+					</Text>
+				);
+			})}
+		</Box>
+	);
+
 	return (
 		<>
 			{!isBashMode ? (
@@ -922,6 +949,13 @@ export default function UserInput({
 								<ElapsedTimer startTime={workingStartTime} />
 							)}
 						</Box>
+					) : colors.assistantIcon ? (
+						<Text>
+							<Text color={colors.secondary}>{colors.assistantIcon} </Text>
+							<Text color={colors.primary}>
+								What would you like me to help with?
+							</Text>
+						</Text>
 					) : (
 						<Text color={colors.primary} bold>
 							What would you like me to help with?
@@ -934,23 +968,55 @@ export default function UserInput({
 				</Text>
 			)}
 
+			{Boolean(colors.promptChar) && queuedBlock && (
+				<Box marginX={1} flexDirection="column">
+					{queuedBlock}
+				</Box>
+			)}
+
 			<Box
 				flexDirection="column"
-				marginTop={1}
-				backgroundColor={colors.base}
-				width={boxWidth}
-				padding={1}
-				borderStyle="bold"
+				marginTop={colors.promptChar ? 0 : 1}
+				backgroundColor={getTextboxBackground(colors)}
+				width={colors.promptChar ? boxWidth - 2 : boxWidth}
+				marginX={colors.promptChar ? 1 : 0}
+				paddingX={1}
+				paddingY={colors.promptChar ? 0 : 1}
+				borderStyle={colors.promptChar ? 'round' : 'bold'}
 				borderLeft={true}
-				borderRight={false}
-				borderTop={false}
-				borderBottom={false}
-				borderLeftColor={isBashMode ? colors.tool : colors.primary}
+				borderRight={Boolean(colors.promptChar)}
+				borderTop={Boolean(colors.promptChar)}
+				borderBottom={Boolean(colors.promptChar)}
+				borderColor={
+					colors.promptChar
+						? isBashMode
+							? colors.tool
+							: colors.secondary
+						: undefined
+				}
+				borderLeftColor={
+					colors.promptChar
+						? undefined
+						: isBashMode
+							? colors.tool
+							: colors.primary
+				}
 			>
 				{/* Input row */}
 				<Box>
-					{input.length === 0 && (
-						<Text color={isBashMode ? colors.tool : textColor}>{'>'} </Text>
+					{(input.length === 0 || Boolean(colors.promptChar)) && (
+						<Text
+							color={
+								isBashMode
+									? colors.tool
+									: colors.promptChar
+										? colors.primary
+										: textColor
+							}
+							bold={Boolean(colors.promptChar)}
+						>
+							{colors.promptChar ?? '>'}{' '}
+						</Text>
 					)}
 					<TextInput
 						key={textInputKey}
@@ -1019,26 +1085,7 @@ export default function UserInput({
 						))}
 					</Box>
 				)}
-				{queuedMessages.length > 0 && (
-					<Box flexDirection="column" marginTop={1}>
-						<Text color={colors.secondary}>
-							Queued messages (↑/↓ select, Enter edit, Del remove):
-						</Text>
-						{queuedMessages.map((message, index) => {
-							const isSelected = index === selectedQueuedIndex;
-							return (
-								<Text
-									key={message.id}
-									color={isSelected ? colors.info : colors.primary}
-									bold={isSelected}
-								>
-									{isSelected ? '▸ ' : '  '}
-									{formatQueuedMessage(message)}
-								</Text>
-							);
-						})}
-					</Box>
-				)}
+				{!colors.promptChar && queuedBlock}
 				{isBusy && (
 					<Box marginTop={1}>
 						<Text color={colors.secondary}>

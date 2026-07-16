@@ -263,6 +263,7 @@ export default function App({
 			appState.setPlanTurnCompleted(true);
 		},
 		reasoningExpandedRef: appState.reasoningExpandedRef,
+		iconThemeRef: appState.iconThemeRef,
 		compactToolDisplayRef: appState.compactToolDisplayRef,
 		onSetCompactToolCounts: appState.setCompactToolCounts,
 		compactToolCountsRef: appState.compactToolCountsRef,

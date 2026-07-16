@@ -1,4 +1,30 @@
 {
+	"omnicode": {
+		"name": "omnicode",
+		"displayName": "Omnicode",
+		"themeType": "dark",
+		"colors": {
+			"text": "#c0caf5",
+			"base": "#1a1b26",
+			"primary": "#bb9af7",
+			"tool": "#bb9af7",
+			"success": "#7AF778",
+			"error": "#f7768e",
+			"secondary": "#565f89",
+			"info": "#bb9af7",
+			"warning": "#e0af68",
+			"diffAdded": "#1f3a28",
+			"diffRemoved": "#3a1f28",
+			"diffAddedText": "#7AF778",
+			"diffRemovedText": "#f7768e",
+			"diffAddedWord": "#338844",
+			"diffRemovedWord": "#883344",
+			"textboxBackground": "none",
+			"promptChar": "\u276f",
+			"bannerGradient": ["#bb9af7", "#bb9af7"],
+			"assistantIcon": "\u2726"
+		}
+	},
 	"tokyo-night": {
 		"name": "tokyo-night",
 		"displayName": "Tokyo Night",
