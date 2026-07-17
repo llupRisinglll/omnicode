@@ -14,6 +14,7 @@ import {
 } from '@/config/preferences';
 import {CommandIntegration} from '@/custom-commands/command-integration';
 import {useTheme} from '@/hooks/useTheme';
+import {appendRelevantProjectContext} from '@/memory/project-context';
 import {generateKey} from '@/session/key-generator';
 import {formatAvailableSkillsForPrompt} from '@/skills/prompt';
 import {
@@ -673,6 +674,8 @@ export function useChatHandler({
 					systemPrompt = enhanced;
 				}
 			}
+
+			systemPrompt = await appendRelevantProjectContext(systemPrompt, message);
 
 			// Create stream request
 			const systemMessage: Message = {
