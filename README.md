@@ -25,6 +25,7 @@ New work lands on `rc/*` branches here first, then gets proposed back to the ori
 | Feature | Upstream status |
 |---|---|
 | Dual TUI screen modes — inline default / `--alt-screen` fullscreen with in-app scrolling, reliable `/clear`, graceful exit | PR open upstream |
+| Provider config robustness — save no longer wipes providers; startup falls back to a working provider instead of freezing | PR open upstream |
 | Omnicode theme + chat layout overhaul (rounded input/message boxes, merged tool-activity lines, truncated output previews) | Fork-exclusive |
 | Session resume/continue flags (`--resume`/`--continue`) | Incubating on `rc/session-resume-continue` |
 | Statusline position control (`/statusline position top\|bottom`) | Incubating on `rc/statusline` |
