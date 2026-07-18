@@ -18,13 +18,13 @@ Omnicode exists because switching between CLI coding tools got tiring: one tool 
 
 Omnicode is a fork of [Nano-Collective/nanocoder](https://github.com/Nano-Collective/nanocoder) — not a rewrite, not a clone. It contains everything in Nanocoder, plus changes that haven't been released upstream yet.
 
-New work lands on `rc/*` branches here first, then gets proposed back to the original repo once it's finished and proven: [multiline cursor navigation](https://github.com/Nano-Collective/nanocoder/pull/657) is already merged upstream; [dual TUI screen modes](https://github.com/Nano-Collective/nanocoder/pull/669) has an open PR. Omnicode is where Nanocoder's next release lives before it's a release — the same relationship Neovim has to Vim.
+New work lands on `rc/*` branches here first, then gets proposed back to the original repo once it's finished and proven: the multiline cursor navigation work is already merged upstream, and the TUI screen modes work has an open upstream PR. Omnicode is where Nanocoder's next release lives before it's a release — the same relationship Neovim has to Vim.
 
 ## What Omnicode has that Nanocoder doesn't (yet)
 
 | Feature | Upstream status |
 |---|---|
-| Dual TUI screen modes — inline default / `--alt-screen` fullscreen with in-app scrolling, reliable `/clear`, graceful exit | PR open — [nanocoder#669](https://github.com/Nano-Collective/nanocoder/pull/669) |
+| Dual TUI screen modes — inline default / `--alt-screen` fullscreen with in-app scrolling, reliable `/clear`, graceful exit | PR open upstream |
 | Omnicode theme + chat layout overhaul (rounded input/message boxes, merged tool-activity lines, truncated output previews) | Fork-exclusive |
 | Session resume/continue flags (`--resume`/`--continue`) | Incubating on `rc/session-resume-continue` |
 | Statusline position control (`/statusline position top\|bottom`) | Incubating on `rc/statusline` |
