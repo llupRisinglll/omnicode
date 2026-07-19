@@ -24,7 +24,8 @@ import type {
 	RestoredInputDraft,
 	SubmittedInputDraft,
 } from '@/types/hooks';
-import {Completion} from '@/types/index';
+import {Completion, CustomCommandCompletionSource} from '@/types/index';
+import type {Colors} from '@/types/ui';
 import {
 	extractImageReferences,
 	readClipboardImage,
@@ -51,7 +52,7 @@ interface ChatProps {
 	queuedMessages?: QueuedUserMessage[];
 	onRemoveQueuedMessage?: (id: string) => void;
 	placeholder?: string;
-	customCommands?: string[]; // List of custom command names and aliases
+	customCommands?: CustomCommandCompletionSource[]; // Custom command names/aliases with descriptions
 	disabled?: boolean; // Disable input when AI is processing
 	isBusy?: boolean; // True when in-flight work is cancellable; Escape is owned by the global handler, so it must not clear the input
 	onToggleMode?: () => void; // Callback when user presses shift+tab to toggle development mode
@@ -292,14 +293,22 @@ export default function UserInput({
 				// Include all when no prefix, otherwise filter by prefix
 				return (
 					!commandPrefix ||
-					cmd.toLowerCase().includes(commandPrefix.toLowerCase())
+					cmd.name.toLowerCase().includes(commandPrefix.toLowerCase())
 				);
 			})
-			.sort((a, b) => a.localeCompare(b));
+			.sort((a, b) => a.name.localeCompare(b.name));
 
 		return [
-			...builtInCompletions.map(cmd => ({name: cmd, isCustom: false})),
-			...customCompletions.map(cmd => ({name: cmd, isCustom: true})),
+			...builtInCompletions.map(cmd => ({
+				name: cmd,
+				isCustom: false,
+				description: commandRegistry.get(cmd)?.description,
+			})),
+			...customCompletions.map(cmd => ({
+				name: cmd.name,
+				isCustom: true,
+				description: cmd.description,
+			})),
 		] as Completion[];
 	}, [input, isCommandMode, isFileAutocompleteMode, customCommands]);
 
@@ -887,6 +896,38 @@ export default function UserInput({
 		return {start, end, items: completions.slice(start, end)};
 	}, [completions, selectedCompletionIndex]);
 
+	// Shared name-column width so every visible row's description starts at
+	// the same offset, like openclaude's completion menu. Sized off the full
+	// completions list (not just the current window) so the column doesn't
+	// jump around as the user arrows through a scrolled list.
+	//
+	// The completion rows render INSIDE the input Box's content area, so the
+	// budget must match THAT box's interior width, not the raw terminal
+	// columns (actualWidth) — using actualWidth overestimates the available
+	// space by exactly the border/padding/margin overhead below, which is
+	// what let long rows wrap under icon themes. Mirrors the inputWrapWidth /
+	// user-message.tsx textWidth derivation, minus the "❯ " prefix term those
+	// use (completion rows have their own '▸ '/'/' marker instead):
+	//   promptChar: width={boxWidth - 2} (side margins already reserved) minus
+	//     rounded border (2) minus paddingX (2) = boxWidth - 6.
+	//   classic: width={boxWidth} minus left border only (1) minus paddingX
+	//     (2) = boxWidth - 3.
+	const completionInteriorWidth = (colors as Colors & {promptChar?: string})
+		.promptChar
+		? boxWidth - 6
+		: boxWidth - 3;
+	const commandCompletionAvailableWidth = Math.max(20, completionInteriorWidth);
+	const commandNameColumnWidth = useMemo(() => {
+		const longestName = completions.reduce(
+			(max, item) => Math.max(max, item.name.length),
+			0,
+		);
+		return Math.min(
+			longestName + 2,
+			Math.floor(commandCompletionAvailableWidth * 0.4),
+		);
+	}, [completions, commandCompletionAvailableWidth]);
+
 	// When disabled, show minimal UI to avoid cluttering the screen
 	if (disabled) {
 		return (
@@ -970,19 +1011,38 @@ export default function UserInput({
 						{commandCompletionWindow.items.map((completion, index) => {
 							const completionIndex = commandCompletionWindow.start + index;
 							const isSelected = completionIndex === selectedCompletionIndex;
+							const marker = isSelected ? '▸ ' : '  ';
+							const paddedName = completion.name.padEnd(commandNameColumnWidth);
+							// Never wraps to a second line: truncate the description to
+							// whatever width remains after the marker, '/', and name column.
+							const descriptionText =
+								!isNarrow && completion.description
+									? truncate(
+											completion.description,
+											Math.max(
+												0,
+												commandCompletionAvailableWidth -
+													marker.length -
+													1 -
+													paddedName.length -
+													1,
+											),
+										)
+									: '';
 							return (
 								<Text
 									key={`${completion.isCustom ? 'custom' : 'built-in'}-${completion.name}`}
-									color={
-										isSelected
-											? colors.info
-											: completion.isCustom
-												? colors.info
-												: colors.primary
-									}
-									bold={isSelected}
+									wrap="truncate"
 								>
-									{isSelected ? '▸ ' : '  '}/{completion.name}
+									<Text
+										color={isSelected ? colors.info : colors.secondary}
+										bold={isSelected}
+									>
+										{marker}/{paddedName}
+									</Text>
+									{descriptionText && (
+										<Text color={colors.secondary}> {descriptionText}</Text>
+									)}
 								</Text>
 							);
 						})}
