@@ -1,6 +1,6 @@
 import {Box, Text, useApp, useInput} from 'ink';
 import Spinner from 'ink-spinner';
-import React, {useMemo} from 'react';
+import React, {useMemo, useRef} from 'react';
 import {createStaticComponents} from '@/app/components/app-container';
 import {NonInteractiveShell} from '@/app/components/non-interactive-shell';
 import {useAppLogging} from '@/app/hooks/useAppLogging';
@@ -60,6 +60,8 @@ export default function App({
 	cliMode,
 	trustDirectory = false,
 	altScreenActive = false,
+	initialSession,
+	openSessionSelectorOnStart = false,
 }: AppProps) {
 	// Resolve the initial development mode with this precedence:
 	// 1. --mode CLI flag (highest priority)
@@ -261,6 +263,7 @@ export default function App({
 			appState.setPlanTurnCompleted(true);
 		},
 		reasoningExpandedRef: appState.reasoningExpandedRef,
+		iconThemeRef: appState.iconThemeRef,
 		compactToolDisplayRef: appState.compactToolDisplayRef,
 		onSetCompactToolCounts: appState.setCompactToolCounts,
 		compactToolCountsRef: appState.compactToolCountsRef,
@@ -306,6 +309,21 @@ export default function App({
 		developmentMode: appState.developmentMode,
 		tune: appState.tune,
 	});
+
+	// Track reasoning start time (single value for current turn)
+	const reasoningStartTimeRef = useRef<number | null>(null);
+
+	// Record start time when reasoning begins (boolean flag avoids string comparison issues)
+	const hasReasoning = Boolean(chatHandler.streamingReasoning);
+	const hadReasoning = useRef(false);
+
+	if (hasReasoning && !hadReasoning.current) {
+		// Reasoning just started
+		reasoningStartTimeRef.current = Date.now();
+	}
+	hadReasoning.current = hasReasoning;
+	// Don't clear here — AssistantReasoning renders after isGenerating goes false.
+	// The ref is overwritten on next reasoning start, so no memory leak.
 
 	// All app-level structured logging lives in this hook so the orchestrator
 	// stays focused on render/state composition.
@@ -488,6 +506,25 @@ export default function App({
 		dismissActiveEditor: vscodeServer.dismissActiveEditor,
 	});
 
+	// Apply a session resolved by cli.tsx from --continue/--resume <id> (or open
+	// the picker for a bare --resume), once on mount. Reuses the exact same
+	// applySession path as the in-app /resume command so messages, provider,
+	// model, sessionId, key-generator reseed, and scrollback replay all stay
+	// in sync. Guarded by a ref (not an empty dep array) so a re-render before
+	// the effect fires — e.g. from the vscode-prompt-dispatcher bind above —
+	// can't apply it twice.
+	const startupSessionAppliedRef = React.useRef(false);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: startup-only effect, guarded by the ref above
+	React.useEffect(() => {
+		if (startupSessionAppliedRef.current) return;
+		startupSessionAppliedRef.current = true;
+		if (initialSession) {
+			appHandlers.applySession(initialSession);
+		} else if (openSessionSelectorOnStart) {
+			appState.setActiveMode('sessionSelector');
+		}
+	}, []);
+
 	// Bind the chat-input submit handler into the VS Code prompt dispatcher
 	// now that appHandlers exists. The dispatcher was created earlier (before
 	// appHandlers) because useVSCodeServer needs `onPrompt` immediately.
@@ -634,6 +671,9 @@ export default function App({
 		);
 	}
 
+	const showAssistantReasoning =
+		chatHandler.streamingReasoning && chatHandler.streamingContent;
+
 	const liveComponent =
 		appState.liveComponent ??
 		(chatHandler.isGenerating &&
@@ -643,13 +683,15 @@ export default function App({
 					<StreamingReasoning
 						reasoning={chatHandler.streamingReasoning}
 						expand={appState.reasoningExpanded}
+						startTime={reasoningStartTimeRef.current ?? Date.now()}
 					/>
 				)}
 				{/* Reasoning stream is complete when text streaming begins */}
-				{chatHandler.streamingReasoning && chatHandler.streamingContent && (
+				{showAssistantReasoning && (
 					<AssistantReasoning
 						reasoning={chatHandler.streamingReasoning}
 						expand={appState.reasoningExpanded}
+						startTime={reasoningStartTimeRef.current ?? undefined}
 					/>
 				)}
 				{chatHandler.streamingContent && (

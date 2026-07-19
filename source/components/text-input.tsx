@@ -1,6 +1,12 @@
 import chalk from 'chalk';
 import {Text, useInput} from 'ink';
 import {useEffect, useRef, useState} from 'react';
+import {useOptionalTheme} from '@/hooks/useTheme';
+import {
+	findSpanForBackspace,
+	getPlaceholderSpans,
+	snapOutOfPlaceholder,
+} from '@/utils/atomic-deletion';
 import {
 	getVisualLineSegments,
 	moveCursorToVisualLine,
@@ -36,6 +42,7 @@ function TextInput({
 	handleEnter = true,
 	onEdgeArrow,
 }: Props) {
+	const {colors} = useOptionalTheme();
 	const [state, setState] = useState({
 		cursorOffset: (originalValue || '').length,
 		cursorWidth: 0,
@@ -88,7 +95,26 @@ function TextInput({
 
 	const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
 	const value = mask ? mask.repeat(originalValue.length) : originalValue;
-	let renderedValue = value;
+
+	// Paste placeholders render in the theme's primary color so they read as
+	// tokens, not literal text (mask mode never contains the pattern)
+	const placeholderSpans = getPlaceholderSpans(value);
+	const inPlaceholderSpan = (offset: number) =>
+		placeholderSpans.some(span => offset >= span.start && offset < span.end);
+	const stylePlaceholderSpans = (text: string) => {
+		if (placeholderSpans.length === 0) return text;
+		let styled = '';
+		let last = 0;
+		for (const span of placeholderSpans) {
+			styled +=
+				text.slice(last, span.start) +
+				chalk.hex(colors.primary)(text.slice(span.start, span.end));
+			last = span.end;
+		}
+		return styled + text.slice(last);
+	};
+
+	let renderedValue = stylePlaceholderSpans(value);
 	let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
 
 	if (showCursor && focus) {
@@ -106,7 +132,9 @@ function TextInput({
 				renderedValue +=
 					char === '\n' ? chalk.inverse(' ') + '\n' : chalk.inverse(char);
 			} else {
-				renderedValue += char;
+				renderedValue += inPlaceholderSpan(i)
+					? chalk.hex(colors.primary)(char)
+					: char;
 			}
 
 			i++;
@@ -145,8 +173,10 @@ function TextInput({
 					// First/last visual line — hand off to history navigation
 					onEdgeArrow?.(direction);
 				} else {
-					cursorOffsetRef.current = next;
-					setState(s => ({...s, cursorOffset: next}));
+					// Paste placeholders are atomic — never land the cursor inside one
+					const snapped = snapOutOfPlaceholder(val, next, 'nearest');
+					cursorOffsetRef.current = snapped;
+					setState(s => ({...s, cursorOffset: snapped}));
 				}
 				return;
 			}
@@ -171,17 +201,19 @@ function TextInput({
 				if (key.leftArrow) {
 					// Ctrl+Left: jump to start of previous word
 					if (showCursor) {
-						nextCursorOffset = moveToPrevWord(
+						nextCursorOffset = snapOutOfPlaceholder(
 							originalValueRef.current,
-							cursorOffsetRef.current,
+							moveToPrevWord(originalValueRef.current, cursorOffsetRef.current),
+							'left',
 						);
 					}
 				} else if (key.rightArrow) {
 					// Ctrl+Right: jump to end of next word
 					if (showCursor) {
-						nextCursorOffset = moveToNextWord(
+						nextCursorOffset = snapOutOfPlaceholder(
 							originalValueRef.current,
-							cursorOffsetRef.current,
+							moveToNextWord(originalValueRef.current, cursorOffsetRef.current),
+							'right',
 						);
 					}
 				} else {
@@ -202,7 +234,11 @@ function TextInput({
 						case 'b': {
 							// Move cursor back one character
 							if (showCursor) {
-								nextCursorOffset--;
+								nextCursorOffset = snapOutOfPlaceholder(
+									originalValueRef.current,
+									nextCursorOffset - 1,
+									'left',
+								);
 							}
 
 							break;
@@ -211,7 +247,11 @@ function TextInput({
 						case 'f': {
 							// Move cursor forward one character
 							if (showCursor) {
-								nextCursorOffset++;
+								nextCursorOffset = snapOutOfPlaceholder(
+									originalValueRef.current,
+									nextCursorOffset + 1,
+									'right',
+								);
 							}
 
 							break;
@@ -262,31 +302,58 @@ function TextInput({
 				}
 			} else if (key.leftArrow) {
 				if (showCursor) {
-					nextCursorOffset--;
+					// Hop over an adjacent paste placeholder as one unit
+					nextCursorOffset = snapOutOfPlaceholder(
+						originalValueRef.current,
+						nextCursorOffset - 1,
+						'left',
+					);
 				}
 			} else if (key.rightArrow) {
 				if (showCursor) {
-					nextCursorOffset++;
+					nextCursorOffset = snapOutOfPlaceholder(
+						originalValueRef.current,
+						nextCursorOffset + 1,
+						'right',
+					);
 				}
 			} else if (key.backspace || key.delete) {
 				if (cursorOffset > 0) {
-					nextValue =
-						originalValueRef.current.slice(0, cursorOffset - 1) +
-						originalValueRef.current.slice(
-							cursorOffset,
-							originalValueRef.current.length,
-						);
-					nextCursorOffset--;
+					// Backspace at a placeholder boundary consumes the whole placeholder
+					const span = findSpanForBackspace(
+						originalValueRef.current,
+						cursorOffset,
+					);
+					if (span) {
+						nextValue =
+							originalValueRef.current.slice(0, span.start) +
+							originalValueRef.current.slice(span.end);
+						nextCursorOffset = span.start;
+					} else {
+						nextValue =
+							originalValueRef.current.slice(0, cursorOffset - 1) +
+							originalValueRef.current.slice(
+								cursorOffset,
+								originalValueRef.current.length,
+							);
+						nextCursorOffset--;
+					}
 				}
 			} else {
+				// Defensive: never splice typed text into the middle of a placeholder
+				const insertAt = snapOutOfPlaceholder(
+					originalValueRef.current,
+					cursorOffset,
+					'right',
+				);
 				nextValue =
-					originalValueRef.current.slice(0, cursorOffset) +
+					originalValueRef.current.slice(0, insertAt) +
 					input +
 					originalValueRef.current.slice(
-						cursorOffset,
+						insertAt,
 						originalValueRef.current.length,
 					);
-				nextCursorOffset += input.length;
+				nextCursorOffset = insertAt + input.length;
 
 				if (input.length > 1) {
 					nextCursorWidth = input.length;

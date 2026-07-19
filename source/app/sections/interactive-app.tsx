@@ -1,21 +1,26 @@
 import {Box, useInput} from 'ink';
-import React from 'react';
+import React, {useMemo} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
+import {BuiltinStatusLine} from '@/components/BuiltinStatusLine';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
+import {StatusLine} from '@/components/StatusLine';
+import {loadPreferences} from '@/config/preferences';
 import type {useChatHandler} from '@/hooks/chat-handler';
 import type {AppHandlers} from '@/hooks/useAppHandlers';
 import type {useAppState} from '@/hooks/useAppState';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
-import {useTerminalRows} from '@/hooks/useTerminalWidth';
+import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {UIStateProvider} from '@/hooks/useUIState';
 import type {useUserMessageQueue} from '@/hooks/useUserMessageQueue';
 import type {useVSCodeServer} from '@/hooks/useVSCodeServer';
+import {getGitStatusSummarySync} from '@/tools/git/utils';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
+import type {StatusLineData} from '@/types/statusline';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
 import {displayCompactCountsSummary} from '@/utils/tool-result-display';
@@ -247,12 +252,70 @@ export function InteractiveApp({
 		{isActive: cancellable},
 	);
 
+	// Status line — re-read config every render so /statusline changes take
+	// effect immediately. The sync file read is cheap for a small JSON file.
+	const statusLineConfig = loadPreferences().statusLine;
+	const terminalWidth = useTerminalWidth();
+	const terminalRows = useTerminalRows();
+	const statusLineData = useMemo<StatusLineData | null>(() => {
+		if (!statusLineConfig?.enabled) return null;
+
+		let git: StatusLineData['git'];
+		try {
+			const gs = getGitStatusSummarySync();
+			if (gs) {
+				git = {
+					branch: gs.branch,
+					dirty: gs.detached || gs.isDefault,
+				};
+			}
+		} catch {}
+
+		return {
+			model: {
+				id: appState.currentModel,
+				display_name: appState.currentModel,
+			},
+			workspace: {
+				current_dir: process.cwd(),
+				project_dir: process.cwd(),
+			},
+			git,
+			context: {
+				used_percent: appState.contextPercentUsed,
+			},
+			version: '1.28.1',
+		};
+	}, [statusLineConfig, appState.currentModel, appState.contextPercentUsed]);
+
+	const statusLinePosition = statusLineConfig?.position ?? 'bottom';
+
+	const statusLineElement =
+		statusLineConfig?.enabled && statusLineData ? (
+			statusLineConfig.command ? (
+				<StatusLine
+					command={statusLineConfig.command}
+					data={statusLineData}
+					terminalWidth={terminalWidth}
+					padding={statusLineConfig.padding ?? 0}
+				/>
+			) : (
+				<BuiltinStatusLine
+					model={statusLineData.model}
+					workspace={statusLineData.workspace}
+					git={statusLineData.git}
+					context={statusLineData.context}
+					terminalWidth={terminalWidth}
+					padding={statusLineConfig.padding ?? 0}
+				/>
+			)
+		) : null;
+
 	// Fullscreen layout if and only if cli.tsx put us on the alternate
 	// screen. Inline mode (--no-alt-screen / alternateScreen:false pref),
 	// test renderers, and piped stdout all use the classic flow layout
 	// with Static + native scrollback.
 	const fullscreen = altScreenActive;
-	const terminalRows = useTerminalRows();
 
 	return (
 		// Fullscreen layout on the alternate screen buffer: the root Box is
@@ -283,9 +346,9 @@ export function InteractiveApp({
 				}
 			/>
 
-			{/* Footer: modals, input. flexShrink=0 so the chat viewport above
-			    absorbs ALL vertical shrink — without it Yoga crushes the
-			    input box when the transcript is tall. */}
+			{/* Footer: modals, status line, input. flexShrink=0 so the chat
+			    viewport above absorbs ALL vertical shrink — without it Yoga
+			    crushes the input box when the transcript is tall. */}
 			<Box flexDirection="column" flexShrink={0}>
 				{appState.planReviewState?.show && (
 					<PlanReviewPrompt
@@ -341,6 +404,9 @@ export function InteractiveApp({
 					</Box>
 				)}
 
+				{/* Status line — top position, rendered above the input area */}
+				{statusLinePosition === 'top' && statusLineElement}
+
 				{appState.startChat &&
 					appState.activeMode === null &&
 					!appState.isSettingsMode &&
@@ -356,7 +422,12 @@ export function InteractiveApp({
 								onQuestionAnswer={handleQuestionAnswer}
 								mcpInitialized={appState.mcpInitialized}
 								client={appState.client}
-								customCommands={Array.from(appState.customCommandCache.keys())}
+								customCommands={Array.from(
+									appState.customCommandCache.entries(),
+								).map(([name, command]) => ({
+									name,
+									description: command.metadata.description,
+								}))}
 								inputDisabled={false}
 								onSubmittedDraft={handleSubmittedDraft}
 								restoreSubmittedDraft={restoredDraft}
@@ -386,6 +457,9 @@ export function InteractiveApp({
 							/>
 						</UIStateProvider>
 					)}
+
+				{/* Status line — bottom position (default), rendered below the input area */}
+				{statusLinePosition === 'bottom' && statusLineElement}
 			</Box>
 		</Box>
 	);

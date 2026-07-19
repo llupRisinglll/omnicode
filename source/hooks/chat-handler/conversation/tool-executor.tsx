@@ -24,6 +24,7 @@ import {parseToolArguments} from '@/utils/tool-args-parser';
 import {
 	ALWAYS_EXPANDED_TOOLS,
 	displayToolResult,
+	getCompactToolDetail,
 	LIVE_TASK_TOOLS,
 } from '@/utils/tool-result-display';
 
@@ -82,6 +83,30 @@ export interface ToolDisplayOptions {
 	onCompactToolCount?: (toolName: string) => void;
 	onLiveTaskUpdate?: () => void;
 	nonInteractiveMode?: boolean;
+	/**
+	 * Called immediately before a "detailed" compact tool line (bash command,
+	 * read path) renders, so any pending merged activity summary (omnicode's
+	 * "Thought for Ns, ..." line — see conversation-loop's flushCompactCounts)
+	 * flushes first and the detailed line appears in the right chronological
+	 * spot. No-op for every theme other than omnicode, where there is nothing
+	 * pending to flush.
+	 */
+	onBeforeDetailedToolLine?: () => void;
+	/**
+	 * Whether the active theme defines assistantIcon (currently only
+	 * omnicode) — threaded from useAppState's iconThemeRef snapshot for this
+	 * turn. Gates the detailed-line behavior below; every other theme keeps
+	 * folding these into the count tally exactly as before.
+	 */
+	iconTheme?: boolean;
+	/**
+	 * Live ref to the ctrl+r expand toggle (reasoningExpandedRef). Read at
+	 * each display call so the omnicode output preview under a detailed tool
+	 * line honors the CURRENT toggle state for newly rendered lines — same
+	 * semantics reasoning already has (Ink Static scrollback never
+	 * re-renders; ctrl+r changes what subsequent renders show).
+	 */
+	previewExpandedRef?: React.RefObject<boolean>;
 }
 
 /**
@@ -153,6 +178,28 @@ export const displayExecutedTool = async (
 		const isError =
 			result.content.startsWith('Error: ') ||
 			result.content.startsWith('⚒ Validation failed');
+
+		// Enhanced compact display for file operations (shows path + diff)
+		const isFileOp =
+			result.name === 'write_file' ||
+			result.name === 'string_replace' ||
+			result.name === 'diff_edit';
+
+		// Omnicode: every tool with a meaningful primary detail (command,
+		// path, pattern, URL, query, …) gets its own detailed line instead of
+		// folding into the count tally — see getCompactToolDetail. Gated
+		// exclusively on options.iconTheme so every other theme keeps
+		// tallying these the way it always has. Tools with no single detail
+		// (getCompactToolDetail → null) still tally, even in omnicode.
+		const isDetailedOmnicodeOp =
+			Boolean(options.iconTheme) &&
+			getCompactToolDetail(result.name, toolCall.function.arguments) !== null;
+
+		const iconDisplay = {
+			iconTheme: options.iconTheme,
+			expanded: options.previewExpandedRef?.current ?? false,
+		};
+
 		if (isError) {
 			// Condense failures to a short red one-liner in compact mode.
 			await displayToolResult(
@@ -161,8 +208,41 @@ export const displayExecutedTool = async (
 				toolManager,
 				addToChatQueue,
 				true,
+				iconDisplay,
 			);
 		} else if (options.nonInteractiveMode) {
+			await displayToolResult(
+				toolCall,
+				result,
+				toolManager,
+				addToChatQueue,
+				true,
+				iconDisplay,
+			);
+		} else if (isFileOp) {
+			// File operations get enhanced compact display with path + diff
+			await displayToolResult(
+				toolCall,
+				result,
+				toolManager,
+				addToChatQueue,
+				true,
+				iconDisplay,
+			);
+		} else if (isDetailedOmnicodeOp) {
+			// Flush any pending merged activity summary first so this detailed
+			// line appears in chronological order, then render it.
+			options.onBeforeDetailedToolLine?.();
+			await displayToolResult(
+				toolCall,
+				result,
+				toolManager,
+				addToChatQueue,
+				true,
+				iconDisplay,
+			);
+		} else if (isFileOp) {
+			// File operations get enhanced compact display with path + diff
 			await displayToolResult(
 				toolCall,
 				result,
@@ -467,6 +547,9 @@ export const executeToolsDirectly = async (
 		 * cancel (escape) propagates into running subagents.
 		 */
 		signal?: AbortSignal;
+		onBeforeDetailedToolLine?: () => void;
+		iconTheme?: boolean;
+		previewExpandedRef?: React.RefObject<boolean>;
 	},
 ): Promise<ToolResult[]> => {
 	// Import processToolUse here to avoid circular dependencies

@@ -2,12 +2,16 @@ import {Box, Text, useFocus, useInput} from 'ink';
 import Spinner from 'ink-spinner';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {commandRegistry} from '@/commands';
+import {AnimatedGear, ElapsedTimer} from '@/components/animated-gear-timer';
 import {DevelopmentModeIndicator} from '@/components/development-mode-indicator';
 import TextInput from '@/components/text-input';
+import {getShowWorkingIndicator} from '@/config/preferences';
+import {getTextboxBackground} from '@/config/themes';
 import {useInputState} from '@/hooks/useInputState';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useUIStateContext} from '@/hooks/useUIState';
+
 import type {
 	QueuedUserMessage,
 	UserMessageQueueDraft,
@@ -24,7 +28,8 @@ import type {
 	RestoredInputDraft,
 	SubmittedInputDraft,
 } from '@/types/hooks';
-import {Completion} from '@/types/index';
+import {Completion, CustomCommandCompletionSource} from '@/types/index';
+import type {Colors} from '@/types/ui';
 import {
 	extractImageReferences,
 	readClipboardImage,
@@ -35,7 +40,10 @@ import {
 	getFileCompletions,
 } from '@/utils/file-autocomplete';
 import {handleFileMention} from '@/utils/file-mention-handler';
-import {assemblePrompt} from '@/utils/prompt-processor';
+import {
+	assemblePrompt,
+	expandPastePlaceholdersForDisplay,
+} from '@/utils/prompt-processor';
 import {getVisualLineSegments} from '@/utils/text-wrapping';
 import type {ActiveEditorState} from '@/vscode/vscode-server';
 
@@ -51,7 +59,7 @@ interface ChatProps {
 	queuedMessages?: QueuedUserMessage[];
 	onRemoveQueuedMessage?: (id: string) => void;
 	placeholder?: string;
-	customCommands?: string[]; // List of custom command names and aliases
+	customCommands?: CustomCommandCompletionSource[]; // Custom command names/aliases with descriptions
 	disabled?: boolean; // Disable input when AI is processing
 	isBusy?: boolean; // True when in-flight work is cancellable; Escape is owned by the global handler, so it must not clear the input
 	onToggleMode?: () => void; // Callback when user presses shift+tab to toggle development mode
@@ -97,6 +105,18 @@ export default function UserInput({
 	restoreSubmittedDraft = null,
 }: ChatProps) {
 	const {isFocused, focus} = useFocus({autoFocus: !disabled, id: 'user-input'});
+
+	// Track when busy state starts for the working indicator timer
+	const [workingStartTime, setWorkingStartTime] = useState<number | null>(null);
+
+	useEffect(() => {
+		if (isBusy && getShowWorkingIndicator()) {
+			setWorkingStartTime(Date.now());
+		} else {
+			setWorkingStartTime(null);
+		}
+	}, [isBusy]);
+
 	const effectiveFocus = forceFocus || isFocused;
 	const {colors} = useTheme();
 	const inputState = useInputState();
@@ -104,7 +124,10 @@ export default function UserInput({
 	const {boxWidth, isNarrow, actualWidth, truncate} = useResponsiveTerminal();
 	// Must match the wrapWidth passed to TextInput below — both sides use it to
 	// decide whether Up/Down means line navigation or history.
-	const inputWrapWidth = boxWidth - 3;
+	// Themes with a promptChar render a rounded, inset box and keep the "❯ "
+	// prefix visible while typing: side margins (2) + rounded border (2) +
+	// paddingX (2) + prefix (2). Classic style: left border (1) + padding (2).
+	const inputWrapWidth = boxWidth - (colors.promptChar ? 8 : 3);
 	const [textInputKey, setTextInputKey] = useState(0);
 	const completionJustSelectedRef = useRef(false);
 	// Store the full InputState draft when starting history navigation, so it can be restored
@@ -292,14 +315,22 @@ export default function UserInput({
 				// Include all when no prefix, otherwise filter by prefix
 				return (
 					!commandPrefix ||
-					cmd.toLowerCase().includes(commandPrefix.toLowerCase())
+					cmd.name.toLowerCase().includes(commandPrefix.toLowerCase())
 				);
 			})
-			.sort((a, b) => a.localeCompare(b));
+			.sort((a, b) => a.name.localeCompare(b.name));
 
 		return [
-			...builtInCompletions.map(cmd => ({name: cmd, isCustom: false})),
-			...customCompletions.map(cmd => ({name: cmd, isCustom: true})),
+			...builtInCompletions.map(cmd => ({
+				name: cmd,
+				isCustom: false,
+				description: commandRegistry.get(cmd)?.description,
+			})),
+			...customCompletions.map(cmd => ({
+				name: cmd.name,
+				isCustom: true,
+				description: cmd.description,
+			})),
 		] as Completion[];
 	}, [input, isCommandMode, isFileAutocompleteMode, customCommands]);
 
@@ -388,7 +419,8 @@ export default function UserInput({
 
 		let images = attachments;
 		let assembled = assemblePrompt(currentState);
-		let display = currentState.displayValue;
+		// Chat history shows the real pasted text, not the [Paste #N] placeholder
+		let display = expandPastePlaceholdersForDisplay(currentState);
 
 		// Image file paths the user typed, pasted, or dragged into the terminal
 		// (often quoted, mixed in with prose) become attachments and are stripped
@@ -861,6 +893,38 @@ export default function UserInput({
 		return {start, end, items: completions.slice(start, end)};
 	}, [completions, selectedCompletionIndex]);
 
+	// Shared name-column width so every visible row's description starts at
+	// the same offset, like openclaude's completion menu. Sized off the full
+	// completions list (not just the current window) so the column doesn't
+	// jump around as the user arrows through a scrolled list.
+	//
+	// The completion rows render INSIDE the input Box's content area, so the
+	// budget must match THAT box's interior width, not the raw terminal
+	// columns (actualWidth) — using actualWidth overestimates the available
+	// space by exactly the border/padding/margin overhead below, which is
+	// what let long rows wrap under icon themes. Mirrors the inputWrapWidth /
+	// user-message.tsx textWidth derivation, minus the "❯ " prefix term those
+	// use (completion rows have their own '▸ '/'/' marker instead):
+	//   promptChar: width={boxWidth - 2} (side margins already reserved) minus
+	//     rounded border (2) minus paddingX (2) = boxWidth - 6.
+	//   classic: width={boxWidth} minus left border only (1) minus paddingX
+	//     (2) = boxWidth - 3.
+	const completionInteriorWidth = (colors as Colors & {promptChar?: string})
+		.promptChar
+		? boxWidth - 6
+		: boxWidth - 3;
+	const commandCompletionAvailableWidth = Math.max(20, completionInteriorWidth);
+	const commandNameColumnWidth = useMemo(() => {
+		const longestName = completions.reduce(
+			(max, item) => Math.max(max, item.name.length),
+			0,
+		);
+		return Math.min(
+			longestName + 2,
+			Math.floor(commandCompletionAvailableWidth * 0.4),
+		);
+	}, [completions, commandCompletionAvailableWidth]);
+
 	// When disabled, show minimal UI to avoid cluttering the screen
 	if (disabled) {
 		return (
@@ -888,13 +952,60 @@ export default function UserInput({
 		);
 	}
 
+	// Queued-messages list. Icon themes (omnicode) render it ABOVE the input
+	// box; classic themes keep it inside the box below the input row.
+	const queuedBlock = queuedMessages.length > 0 && (
+		<Box flexDirection="column" marginTop={1}>
+			<Text color={colors.secondary}>
+				Queued messages (↑/↓ select, Enter edit, Del remove):
+			</Text>
+			{queuedMessages.map((message, index) => {
+				const isSelected = index === selectedQueuedIndex;
+				return (
+					<Text
+						key={message.id}
+						color={isSelected ? colors.info : colors.primary}
+						bold={isSelected}
+					>
+						{isSelected ? '▸ ' : '  '}
+						{formatQueuedMessage(message)}
+					</Text>
+				);
+			})}
+		</Box>
+	);
+
 	return (
 		<>
 			{!isBashMode ? (
 				<Box marginTop={1}>
-					<Text color={colors.primary} bold>
-						What would you like me to help with?
-					</Text>
+					{isBusy && getShowWorkingIndicator() ? (
+						<Box>
+							<Text color={colors.primary}>
+								<AnimatedGear />
+							</Text>
+							<Text color={colors.primary} bold>
+								{' Working'}
+							</Text>
+							<Text color={colors.primary}>
+								<Spinner type="simpleDots" />
+							</Text>
+							{workingStartTime && (
+								<ElapsedTimer startTime={workingStartTime} />
+							)}
+						</Box>
+					) : colors.assistantIcon ? (
+						<Text>
+							<Text color={colors.secondary}>{colors.assistantIcon} </Text>
+							<Text color={colors.primary}>
+								What would you like me to help with?
+							</Text>
+						</Text>
+					) : (
+						<Text color={colors.primary} bold>
+							What would you like me to help with?
+						</Text>
+					)}
 				</Box>
 			) : (
 				<Text color={colors.tool} bold>
@@ -902,23 +1013,55 @@ export default function UserInput({
 				</Text>
 			)}
 
+			{Boolean(colors.promptChar) && queuedBlock && (
+				<Box marginX={1} flexDirection="column">
+					{queuedBlock}
+				</Box>
+			)}
+
 			<Box
 				flexDirection="column"
-				marginTop={1}
-				backgroundColor={colors.base}
-				width={boxWidth}
-				padding={1}
-				borderStyle="bold"
+				marginTop={colors.promptChar ? 0 : 1}
+				backgroundColor={getTextboxBackground(colors)}
+				width={colors.promptChar ? boxWidth - 2 : boxWidth}
+				marginX={colors.promptChar ? 1 : 0}
+				paddingX={1}
+				paddingY={colors.promptChar ? 0 : 1}
+				borderStyle={colors.promptChar ? 'round' : 'bold'}
 				borderLeft={true}
-				borderRight={false}
-				borderTop={false}
-				borderBottom={false}
-				borderLeftColor={isBashMode ? colors.tool : colors.primary}
+				borderRight={Boolean(colors.promptChar)}
+				borderTop={Boolean(colors.promptChar)}
+				borderBottom={Boolean(colors.promptChar)}
+				borderColor={
+					colors.promptChar
+						? isBashMode
+							? colors.tool
+							: colors.secondary
+						: undefined
+				}
+				borderLeftColor={
+					colors.promptChar
+						? undefined
+						: isBashMode
+							? colors.tool
+							: colors.primary
+				}
 			>
 				{/* Input row */}
 				<Box>
-					{input.length === 0 && (
-						<Text color={isBashMode ? colors.tool : textColor}>{'>'} </Text>
+					{(input.length === 0 || Boolean(colors.promptChar)) && (
+						<Text
+							color={
+								isBashMode
+									? colors.tool
+									: colors.promptChar
+										? colors.primary
+										: textColor
+							}
+							bold={Boolean(colors.promptChar)}
+						>
+							{colors.promptChar ?? '>'}{' '}
+						</Text>
 					)}
 					<TextInput
 						key={textInputKey}
@@ -944,19 +1087,38 @@ export default function UserInput({
 						{commandCompletionWindow.items.map((completion, index) => {
 							const completionIndex = commandCompletionWindow.start + index;
 							const isSelected = completionIndex === selectedCompletionIndex;
+							const marker = isSelected ? '▸ ' : '  ';
+							const paddedName = completion.name.padEnd(commandNameColumnWidth);
+							// Never wraps to a second line: truncate the description to
+							// whatever width remains after the marker, '/', and name column.
+							const descriptionText =
+								!isNarrow && completion.description
+									? truncate(
+											completion.description,
+											Math.max(
+												0,
+												commandCompletionAvailableWidth -
+													marker.length -
+													1 -
+													paddedName.length -
+													1,
+											),
+										)
+									: '';
 							return (
 								<Text
 									key={`${completion.isCustom ? 'custom' : 'built-in'}-${completion.name}`}
-									color={
-										isSelected
-											? colors.info
-											: completion.isCustom
-												? colors.info
-												: colors.primary
-									}
-									bold={isSelected}
+									wrap="truncate"
 								>
-									{isSelected ? '▸ ' : '  '}/{completion.name}
+									<Text
+										color={isSelected ? colors.info : colors.secondary}
+										bold={isSelected}
+									>
+										{marker}/{paddedName}
+									</Text>
+									{descriptionText && (
+										<Text color={colors.secondary}> {descriptionText}</Text>
+									)}
 								</Text>
 							);
 						})}
@@ -987,26 +1149,7 @@ export default function UserInput({
 						))}
 					</Box>
 				)}
-				{queuedMessages.length > 0 && (
-					<Box flexDirection="column" marginTop={1}>
-						<Text color={colors.secondary}>
-							Queued messages (↑/↓ select, Enter edit, Del remove):
-						</Text>
-						{queuedMessages.map((message, index) => {
-							const isSelected = index === selectedQueuedIndex;
-							return (
-								<Text
-									key={message.id}
-									color={isSelected ? colors.info : colors.primary}
-									bold={isSelected}
-								>
-									{isSelected ? '▸ ' : '  '}
-									{formatQueuedMessage(message)}
-								</Text>
-							);
-						})}
-					</Box>
-				)}
+				{!colors.promptChar && queuedBlock}
 				{isBusy && (
 					<Box marginTop={1}>
 						<Text color={colors.secondary}>

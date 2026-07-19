@@ -7,12 +7,17 @@ import {StyledSelectInput} from '@/components/ui/styled-select-input';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
 import {
+	getCompactDiffMaxLines,
 	getCompactToolDisplay,
 	getNanocoderShape,
 	getNotificationsPreference,
 	getPasteThreshold,
 	getPrivacyPreference,
 	getReasoningExpanded,
+	getShowWorkingIndicator,
+	loadPreferences,
+	savePreferences,
+	updateCompactDiffMaxLines,
 	updateCompactToolDisplay,
 	updateNanocoderShape,
 	updateNotificationsPreference,
@@ -20,12 +25,14 @@ import {
 	updatePrivacyPreference,
 	updateReasoningExpanded,
 	updateSelectedTheme,
+	updateShowWorkingIndicator,
 } from '@/config/preferences';
-import {getThemeColors, themes} from '@/config/themes';
+import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
 import type {NotificationsConfig} from '@/types/config';
+import type {StatusLineConfig} from '@/types/statusline';
 import type {NanocoderShape, ThemePreset} from '@/types/ui';
 import {setNotificationsConfig} from '@/utils/notifications';
 import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
@@ -43,7 +50,8 @@ export type ManagedSettingsPanel =
 	| 'paste-threshold'
 	| 'notifications'
 	| 'display-settings'
-	| 'privacy';
+	| 'privacy'
+	| 'status-line';
 
 export interface SettingsSelectorProps {
 	onCancel: () => void;
@@ -56,7 +64,7 @@ function ThemePreviewMessage({
 	compact = false,
 }: {
 	accentColor: string;
-	baseColor: string;
+	baseColor: string | undefined;
 	children: ReactNode;
 	compact?: boolean;
 }) {
@@ -95,7 +103,7 @@ function ThemeMiniPreview({
 				</Box>
 				<ThemePreviewMessage
 					accentColor={colors.primary}
-					baseColor={colors.base}
+					baseColor={getTextboxBackground(colors)}
 					compact={compact}
 				>
 					<Text color={colors.text}>
@@ -113,7 +121,7 @@ function ThemeMiniPreview({
 
 				<ThemePreviewMessage
 					accentColor={colors.secondary}
-					baseColor={colors.base}
+					baseColor={getTextboxBackground(colors)}
 					compact={compact}
 				>
 					<Text color={colors.text}>
@@ -459,7 +467,8 @@ export function SettingsNanocoderShapePanel({
 
 	const shapeOptions: {label: string; value: NanocoderShape}[] = useMemo(
 		() => [
-			{label: 'Tiny (default)', value: 'tiny'},
+			{label: 'Fork (default)', value: 'fork'},
+			{label: 'Tiny', value: 'tiny'},
 			{label: 'Block', value: 'block'},
 			{label: 'Simple', value: 'simple'},
 			{label: 'Simple Block', value: 'simpleBlock'},
@@ -497,9 +506,20 @@ export function SettingsNanocoderShapePanel({
 	if (isNarrow) {
 		return (
 			<>
-				<Gradient colors={[colors.primary, colors.tool]}>
-					<BigText text={displayText} font={previewShape} />
-				</Gradient>
+				{previewShape === 'fork' ? (
+					<Box marginBottom={1}>
+						<Gradient colors={[colors.primary, colors.tool]}>
+							<Text>
+								▄█▀█▄ █▄░▄█ █▄░█ █ █▀▀ █▀█ █▀▄ █▀▀{'\n'}
+								▀█▄█▀ █░▀░█ █░▀█ █ █▄▄ █▄█ █▄▀ ██▄
+							</Text>
+						</Gradient>
+					</Box>
+				) : (
+					<Gradient colors={[colors.primary, colors.tool]}>
+						<BigText text={displayText} font={previewShape} />
+					</Gradient>
+				)}
 				<TitledBoxWithPreferences
 					title="Nanocoder Shape"
 					width="100%"
@@ -525,9 +545,18 @@ export function SettingsNanocoderShapePanel({
 	return (
 		<>
 			<Box marginBottom={1}>
-				<Gradient colors={[colors.primary, colors.tool]}>
-					<BigText text={displayText} font={previewShape} />
-				</Gradient>
+				{previewShape === 'fork' ? (
+					<Gradient colors={[colors.primary, colors.tool]}>
+						<Text>
+							▄█▀█▄ █▄░▄█ █▄░█ █ █▀▀ █▀█ █▀▄ █▀▀{'\n'}
+							▀█▄█▀ █░▀░█ █░▀█ █ █▄▄ █▄█ █▄▀ ██▄
+						</Text>
+					</Gradient>
+				) : (
+					<Gradient colors={[colors.primary, colors.tool]}>
+						<BigText text={displayText} font={previewShape} />
+					</Gradient>
+				)}
 			</Box>
 
 			<TitledBoxWithPreferences
@@ -776,6 +805,10 @@ export function SettingsDisplayPanel({
 
 	const currentReasoningExpanded = getReasoningExpanded();
 	const currentCompactToolDisplay = getCompactToolDisplay();
+	const currentShowWorkingIndicator = getShowWorkingIndicator();
+	const [currentCompactDiffMaxLines, setCurrentCompactDiffMaxLines] = useState(
+		getCompactDiffMaxLines(),
+	);
 
 	useInput((_, key) => {
 		if (key.escape) {
@@ -786,10 +819,22 @@ export function SettingsDisplayPanel({
 		}
 	});
 
-	type ToggleKey = 'reasoningExpanded' | 'compactToolDisplay';
+	// Cycled (not toggled) — Enter advances to the next preset. 0 means
+	// unlimited, shown last in the cycle.
+	const COMPACT_DIFF_MAX_LINES_OPTIONS = [10, 20, 30, 50, 100, 0];
+
+	type ToggleKey =
+		| 'reasoningExpanded'
+		| 'compactToolDisplay'
+		| 'showWorkingIndicator'
+		| 'compactDiffMaxLines';
 
 	const items: {label: string; value: ToggleKey}[] = useMemo(() => {
 		const isOn = (val: boolean | undefined) => (val ? 'ON' : 'OFF');
+		const diffMaxLinesLabel =
+			currentCompactDiffMaxLines === 0
+				? 'unlimited'
+				: String(currentCompactDiffMaxLines);
 		return [
 			{
 				label: `Show Thinking by default: ${isOn(currentReasoningExpanded)}`,
@@ -799,8 +844,21 @@ export function SettingsDisplayPanel({
 				label: `Expand Tool Results by default: ${isOn(currentCompactToolDisplay)}`,
 				value: 'compactToolDisplay' as ToggleKey,
 			},
+			{
+				label: `Show Working Indicator: ${isOn(currentShowWorkingIndicator)}`,
+				value: 'showWorkingIndicator' as ToggleKey,
+			},
+			{
+				label: `Compact diff max lines: ${diffMaxLinesLabel}`,
+				value: 'compactDiffMaxLines' as ToggleKey,
+			},
 		];
-	}, [currentReasoningExpanded, currentCompactToolDisplay]);
+	}, [
+		currentReasoningExpanded,
+		currentCompactToolDisplay,
+		currentShowWorkingIndicator,
+		currentCompactDiffMaxLines,
+	]);
 
 	const handleSelect = (item: {label: string; value: ToggleKey}) => {
 		if (item.value === 'reasoningExpanded') {
@@ -809,6 +867,20 @@ export function SettingsDisplayPanel({
 		} else if (item.value === 'compactToolDisplay') {
 			const newValue = !currentCompactToolDisplay;
 			updateCompactToolDisplay(newValue);
+		} else if (item.value === 'showWorkingIndicator') {
+			const newValue = !currentShowWorkingIndicator;
+			updateShowWorkingIndicator(newValue);
+		} else if (item.value === 'compactDiffMaxLines') {
+			const currentIndex = COMPACT_DIFF_MAX_LINES_OPTIONS.indexOf(
+				currentCompactDiffMaxLines,
+			);
+			const nextIndex =
+				(currentIndex === -1 ? 0 : currentIndex + 1) %
+				COMPACT_DIFF_MAX_LINES_OPTIONS.length;
+			const nextValue = COMPACT_DIFF_MAX_LINES_OPTIONS[nextIndex] ?? 20;
+			updateCompactDiffMaxLines(nextValue);
+			setCurrentCompactDiffMaxLines(nextValue);
+			return;
 		}
 		onBack();
 	};
@@ -904,6 +976,107 @@ export function SettingsPrivacyPanel({
 					Prompt Scrubbing removes sensitive identifiers before sending prompts
 					to cloud providers. This improves privacy but does not guarantee
 					semantic anonymity.
+				</Text>
+			</Box>
+
+			<StyledSelectInput items={items} onSelect={handleSelect} />
+
+			<Box marginTop={1}>
+				<Text color={colors.secondary}>Enter/Esc</Text>
+			</Box>
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Status Line settings panel
+export function SettingsStatusLinePanel({
+	onBack,
+	onCancel,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+
+	const preferences = loadPreferences();
+	const statusLine = preferences.statusLine ?? {enabled: false};
+	const [config, setConfig] = useState<StatusLineConfig>(statusLine);
+
+	useInput((_, key) => {
+		if (key.escape) {
+			onCancel();
+		}
+		if (key.shift && key.tab) {
+			onBack();
+		}
+	});
+
+	const updateConfig = (patch: Partial<StatusLineConfig>) => {
+		const next = {...config, ...patch};
+		setConfig(next);
+		preferences.statusLine = next;
+		savePreferences(preferences);
+	};
+
+	type ToggleKey = 'enabled';
+
+	const items: {label: string; value: ToggleKey | 'position' | 'command'}[] =
+		useMemo(() => {
+			const isOn = (val: boolean) => (val ? 'ON' : 'OFF');
+			return [
+				{
+					label: `Status Line: ${isOn(config.enabled)}`,
+					value: 'enabled',
+				},
+				{
+					label: `Position: ${config.position ?? 'bottom'}`,
+					value: 'position',
+				},
+				{
+					label: `Command: ${config.command ?? '(built-in)'}`,
+					value: 'command',
+				},
+			];
+		}, [config]);
+
+	const handleSelect = (item: {
+		label: string;
+		value: ToggleKey | 'position' | 'command';
+	}) => {
+		if (item.value === 'enabled') {
+			updateConfig({enabled: !config.enabled});
+		} else if (item.value === 'position') {
+			updateConfig({
+				position: config.position === 'top' ? 'bottom' : 'top',
+			});
+		}
+		// 'command' is read-only display here; use /statusline command to set
+	};
+
+	const title = isNarrow ? 'Status Line' : 'Status Line Settings';
+
+	return (
+		<TitledBoxWithPreferences
+			title={title}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{!isNarrow && (
+				<Box marginBottom={1}>
+					<Text color={colors.secondary}>
+						Toggle settings with Enter. Shift+Tab to go back, Esc to exit
+					</Text>
+				</Box>
+			)}
+
+			<Box marginBottom={1}>
+				<Text color={colors.secondary}>
+					Use /statusline command &lt;cmd&gt; to set a custom command.
 				</Text>
 			</Box>
 

@@ -408,6 +408,7 @@ export interface UserPreferences {
 		[key in string]?: string;
 	};
 	lastUpdateCheck?: number;
+	lastWelcomeShown?: number;
 	selectedTheme?: ThemePreset;
 	trustedDirectories?: string[];
 	titleShape?: TitleShape;
@@ -418,6 +419,8 @@ export interface UserPreferences {
 	reasoningExpanded?: boolean;
 	compactToolDisplay?: boolean;
 	enablePromptScrubbing?: boolean;
+	showWorkingIndicator?: boolean;
+	statusLine?: import('@/types/statusline').StatusLineConfig;
 	/**
 	 * Interactive TUI screen mode. true (default): fullscreen on the
 	 * alternate screen buffer with in-app scrolling (wheel / PgUp / PgDn).
@@ -427,4 +430,6 @@ export interface UserPreferences {
 	 * content. Also switchable per-run with the --no-alt-screen flag.
 	 */
 	alternateScreen?: boolean;
+	/** Max diff lines shown in compact-mode file results. 0 = unlimited. Default 20. */
+	compactDiffMaxLines?: number;
 }
