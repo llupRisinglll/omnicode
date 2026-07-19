@@ -20,6 +20,7 @@ import type {
 	ToolCall,
 	TuneConfig,
 } from '@/types';
+import type {CustomCommandCompletionSource} from '@/types/components';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
 import type {PendingQuestion} from '@/utils/question-queue';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
@@ -54,7 +55,7 @@ export interface ChatInputProps {
 	client: unknown | null;
 
 	// Input state
-	customCommands: string[];
+	customCommands: CustomCommandCompletionSource[];
 	inputDisabled: boolean;
 	onSubmittedDraft?: (draft: SubmittedInputDraft) => void;
 	restoreSubmittedDraft?: RestoredInputDraft | null;

@@ -422,7 +422,12 @@ export function InteractiveApp({
 								onQuestionAnswer={handleQuestionAnswer}
 								mcpInitialized={appState.mcpInitialized}
 								client={appState.client}
-								customCommands={Array.from(appState.customCommandCache.keys())}
+								customCommands={Array.from(
+									appState.customCommandCache.entries(),
+								).map(([name, command]) => ({
+									name,
+									description: command.metadata.description,
+								}))}
 								inputDisabled={false}
 								onSubmittedDraft={handleSubmittedDraft}
 								restoreSubmittedDraft={restoredDraft}
