@@ -15,6 +15,7 @@ import {
 import {CommandIntegration} from '@/custom-commands/command-integration';
 import {useTheme} from '@/hooks/useTheme';
 import {appendRelevantProjectContext} from '@/memory/project-context';
+import {SemanticMemoryManager} from '@/memory/semantic-memory-manager';
 import {generateKey} from '@/session/key-generator';
 import {formatAvailableSkillsForPrompt} from '@/skills/prompt';
 import {
@@ -189,9 +190,16 @@ export function useChatHandler({
 	subagentsReady,
 	privacySessionMapRef,
 	privacyEnabled,
+	memoryFinder,
+	projectContextOptions,
 }: UseChatHandlerProps): ChatHandlerReturn {
 	// Conversation state manager for enhanced context
 	const conversationStateManager = React.useRef(new ConversationStateManager());
+
+	const projectMemoryFinder = React.useMemo(
+		() => memoryFinder ?? new SemanticMemoryManager(),
+		[memoryFinder],
+	);
 
 	// Resolve the active fallback format when native tools are disabled. When
 	// native is on, this value is unused. The tune override takes priority over
@@ -675,7 +683,13 @@ export function useChatHandler({
 				}
 			}
 
-			systemPrompt = await appendRelevantProjectContext(systemPrompt, message);
+			systemPrompt = await appendRelevantProjectContext(
+				systemPrompt,
+				message,
+				projectMemoryFinder,
+				projectContextOptions,
+			);
+			setLastBuiltPrompt(systemPrompt);
 
 			// Create stream request
 			const systemMessage: Message = {
