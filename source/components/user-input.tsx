@@ -886,6 +886,13 @@ export default function UserInput({
 
 		return {start, end, items: completions.slice(start, end)};
 	}, [completions, selectedCompletionIndex]);
+	const slashCommandNames = useMemo(
+		() => [
+			...commandRegistry.getAll().map(command => command.name),
+			...customCommands,
+		],
+		[customCommands],
+	);
 
 	// When disabled, show minimal UI to avoid cluttering the screen
 	if (disabled) {
@@ -957,6 +964,8 @@ export default function UserInput({
 						focus={effectiveFocus}
 						wrapWidth={inputWrapWidth}
 						handleEnter={false}
+						slashCommandColor={colors.info}
+						slashCommandNames={slashCommandNames}
 					/>
 				</Box>
 

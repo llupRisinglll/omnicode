@@ -13,6 +13,8 @@ export type Props = {
 	readonly mask?: string;
 	readonly showCursor?: boolean;
 	readonly highlightPastedText?: boolean;
+	readonly slashCommandNames?: readonly string[];
+	readonly slashCommandColor?: string;
 	readonly value: string;
 	readonly onChange: (value: string) => void;
 	readonly onSubmit?: (value: string) => void;
@@ -22,12 +24,33 @@ export type Props = {
 	readonly onEdgeArrow?: (direction: 'up' | 'down') => void;
 };
 
+type TextHighlightRange = {
+	start: number;
+	end: number;
+	color: string;
+	bold?: boolean;
+};
+
+export function getSlashCommandRanges(
+	value: string,
+	validNames?: ReadonlySet<string>,
+): Array<{start: number; end: number}> {
+	const match = value.match(/^\/[A-Za-z0-9][A-Za-z0-9_-]*/);
+	if (!match) return [];
+	const token = match[0];
+	const name = token.slice(1);
+	if (validNames && !validNames.has(name)) return [];
+	return [{start: 0, end: token.length}];
+}
+
 function TextInput({
 	value: originalValue,
 	placeholder = '',
 	focus = true,
 	mask,
 	highlightPastedText = false,
+	slashCommandNames,
+	slashCommandColor,
 	showCursor = true,
 	onChange,
 	onSubmit,
@@ -88,7 +111,47 @@ function TextInput({
 
 	const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
 	const value = mask ? mask.repeat(originalValue.length) : originalValue;
-	let renderedValue = value;
+	const validSlashCommandNames =
+		slashCommandNames && slashCommandNames.length > 0
+			? new Set(slashCommandNames)
+			: undefined;
+	const slashCommandRanges =
+		!mask && slashCommandColor
+			? getSlashCommandRanges(originalValue, validSlashCommandNames)
+			: [];
+	const highlightRanges: TextHighlightRange[] = slashCommandRanges.map(
+		range => ({
+			...range,
+			color: slashCommandColor ?? '',
+			bold: true,
+		}),
+	);
+	const getHighlightRange = (offset: number) =>
+		highlightRanges.find(range => offset >= range.start && offset < range.end);
+	const styleInputChar = (char: string, offset: number, inverse = false) => {
+		let styled = char;
+		const highlightRange = getHighlightRange(offset);
+		if (highlightRange) {
+			styled = chalk.hex(highlightRange.color)(styled);
+			if (highlightRange.bold) styled = chalk.bold(styled);
+		}
+		if (inverse) {
+			styled = chalk.inverse(styled);
+		}
+		return styled;
+	};
+	const styleInputSpans = (text: string) => {
+		if (highlightRanges.length === 0) return text;
+		let styled = '';
+		let offset = 0;
+		for (const char of text) {
+			styled += styleInputChar(char, offset);
+			offset++;
+		}
+		return styled;
+	};
+
+	let renderedValue = styleInputSpans(value);
 	let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
 
 	if (showCursor && focus) {
@@ -104,9 +167,11 @@ function TextInput({
 		for (const char of value) {
 			if (i >= cursorOffset - cursorActualWidth && i <= cursorOffset) {
 				renderedValue +=
-					char === '\n' ? chalk.inverse(' ') + '\n' : chalk.inverse(char);
+					char === '\n'
+						? chalk.inverse(' ') + '\n'
+						: styleInputChar(char, i, true);
 			} else {
-				renderedValue += char;
+				renderedValue += styleInputChar(char, i);
 			}
 
 			i++;
