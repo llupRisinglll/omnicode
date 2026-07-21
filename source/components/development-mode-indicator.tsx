@@ -125,7 +125,7 @@ export const DevelopmentModeIndicator = React.memo(
 			const tuneSegment = tuneLabel ? ` · ${tuneLabel}` : '';
 			const ctxSegment =
 				contextPercentUsed !== null
-					? ` · ctx: ${ctxPrefix}${contextPercentUsed}%`
+					? ` · ctx: ${ctxPrefix}${contextBar(contextPercentUsed)} ${contextPercentUsed}%`
 					: '';
 			const sessionSeparator = sessionName ? ' · ' : '';
 			const editorSeparator = editorFileName ? ' · ' : '';
@@ -215,6 +215,17 @@ export const DevelopmentModeIndicator = React.memo(
 			};
 		})();
 
+		const identityLabel = (() => {
+			if (!statusInfo?.user && !statusInfo?.directory) return '';
+			const user = statusInfo.user
+				? statusInfo.host
+					? `${statusInfo.user}@${statusInfo.host}`
+					: statusInfo.user
+				: '';
+			const pieces = [user, statusInfo.directory].filter(Boolean);
+			return pieces.length > 0 ? `[${pieces.join(' ')}]` : '';
+		})();
+
 		return (
 			<Box flexDirection="column">
 				<Box>
@@ -254,12 +265,10 @@ export const DevelopmentModeIndicator = React.memo(
 					{contextPercentUsed !== null && (
 						<>
 							<Text color={colors.secondary}> · </Text>
-							<Text color={colors.secondary}>ctx: </Text>
 							<Text color={getContextColor(contextPercentUsed, colors)}>
-								{ctxPrefix}
-								{contextBar(contextPercentUsed)}
+								ctx: {ctxPrefix}
+								{contextBar(contextPercentUsed)} {contextPercentUsed}%
 							</Text>
-							<Text color={colors.secondary}> {contextPercentUsed}%</Text>
 						</>
 					)}
 					{editorLabel && (
@@ -269,30 +278,14 @@ export const DevelopmentModeIndicator = React.memo(
 						</>
 					)}
 				</Box>
-				{statusInfo && (
+				{(identityLabel || statusInfo?.git) && (
 					<Box>
-						<Text color={colors.secondary}>[</Text>
-						{statusInfo.user && (
-							<Text color={colors.info}>{statusInfo.user}</Text>
-						)}
-						{statusInfo.host && (
+						{identityLabel && <Text color={colors.info}>{identityLabel}</Text>}
+						{statusInfo?.git && (
 							<>
-								<Text color={colors.secondary}>@</Text>
-								<Text color={colors.info}>{statusInfo.host}</Text>
-							</>
-						)}
-						{statusInfo.directory && (
-							<>
-								<Text color={colors.secondary}> </Text>
-								<Text color={colors.info}>{statusInfo.directory}</Text>
-							</>
-						)}
-						<Text color={colors.secondary}>]</Text>
-						{statusInfo.git && (
-							<>
-								<Text color={colors.secondary}> git:(</Text>
-								<Text color={colors.error}>{statusInfo.git.branch}</Text>
-								<Text color={colors.secondary}>)</Text>
+								{identityLabel && <Text color={colors.secondary}> </Text>}
+								<Text color={colors.info}>git:</Text>
+								<Text color={colors.primary}>({statusInfo.git.branch})</Text>
 								{statusInfo.git.dirty && <Text color={colors.warning}> x</Text>}
 							</>
 						)}

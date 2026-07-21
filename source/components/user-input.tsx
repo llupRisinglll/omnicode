@@ -1,6 +1,13 @@
 import {Box, Text, useFocus, useInput} from 'ink';
 import Spinner from 'ink-spinner';
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
 import {commandRegistry} from '@/commands';
 import {AnimatedGear, ElapsedTimer} from '@/components/animated-gear-timer';
 import {
@@ -76,6 +83,7 @@ interface ChatProps {
 	tune?: TuneConfig; // Model mode configuration
 	currentModel?: string; // Active model id — resolves the 'auto' tune profile for display
 	statusInfo?: DevelopmentModeStatusInfo;
+	statusLineSlot?: ReactNode;
 	activeEditor?: ActiveEditorState | null; // VS Code active file + optional selection
 	onDismissActiveEditor?: () => void; // Dismiss the active editor pill on clear/escape
 	forceFocus?: boolean; // Force focus for testing (bypasses useFocus)
@@ -103,6 +111,7 @@ export default function UserInput({
 	tune,
 	currentModel,
 	statusInfo,
+	statusLineSlot,
 	activeEditor,
 	onDismissActiveEditor,
 	forceFocus = false,
@@ -954,6 +963,7 @@ export default function UserInput({
 					currentModel={currentModel}
 					statusInfo={statusInfo}
 				/>
+				{statusLineSlot}
 			</Box>
 		);
 	}
@@ -1183,17 +1193,19 @@ export default function UserInput({
 				</Box>
 			)}
 			{/* Development mode indicator - always visible */}
-			<DevelopmentModeIndicator
-				developmentMode={developmentMode}
-				colors={colors}
-				contextPercentUsed={contextPercentUsed ?? null}
-				contextSource={contextSource ?? null}
-				sessionName={sessionName}
-				tune={tune}
-				currentModel={currentModel}
-				statusInfo={statusInfo}
-				activeEditor={activeEditor}
-			/>
+			{statusLineSlot ?? (
+				<DevelopmentModeIndicator
+					developmentMode={developmentMode}
+					colors={colors}
+					contextPercentUsed={contextPercentUsed ?? null}
+					contextSource={contextSource ?? null}
+					sessionName={sessionName}
+					tune={tune}
+					currentModel={currentModel}
+					statusInfo={statusInfo}
+					activeEditor={activeEditor}
+				/>
+			)}
 		</>
 	);
 }
