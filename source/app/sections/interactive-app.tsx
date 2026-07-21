@@ -1,24 +1,35 @@
+import {userInfo} from 'node:os';
+import {basename} from 'node:path';
 import {Box, useInput} from 'ink';
-import React from 'react';
+import React, {useMemo} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
+import {StatusLine} from '@/components/StatusLine';
+import {loadPreferences} from '@/config/preferences';
 import type {useChatHandler} from '@/hooks/chat-handler';
 import type {AppHandlers} from '@/hooks/useAppHandlers';
 import type {useAppState} from '@/hooks/useAppState';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
-import {useTerminalRows} from '@/hooks/useTerminalWidth';
+import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {UIStateProvider} from '@/hooks/useUIState';
 import type {useUserMessageQueue} from '@/hooks/useUserMessageQueue';
 import type {useVSCodeServer} from '@/hooks/useVSCodeServer';
+import {getGitStatusSummarySync} from '@/tools/git/utils';
+import {isSingleToolProfile, resolveToolProfile} from '@/tools/tool-profiles';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
+import type {StatusLineData} from '@/types/statusline';
+import {clickEvents} from '@/utils/terminal-mouse';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
-import {displayCompactCountsSummary} from '@/utils/tool-result-display';
+import {
+	displayCompactCountsSummary,
+	getLiveCompactToolExpandHitboxColumns,
+} from '@/utils/tool-result-display';
 
 interface InteractiveAppProps {
 	appState: ReturnType<typeof useAppState>;
@@ -27,6 +38,7 @@ interface InteractiveAppProps {
 	appHandlers: AppHandlers;
 	vscodeServer: ReturnType<typeof useVSCodeServer>;
 	staticComponents: React.ReactNode[];
+	transientNoticeComponents?: React.ReactNode[];
 	liveComponent: React.ReactNode;
 	pendingSubagentApproval: PendingToolApproval | null;
 	handleSubagentToolApproval: (confirmed: boolean) => void;
@@ -62,6 +74,7 @@ export function InteractiveApp({
 	appHandlers,
 	vscodeServer,
 	staticComponents,
+	transientNoticeComponents = [],
 	liveComponent,
 	pendingSubagentApproval,
 	handleSubagentToolApproval,
@@ -80,7 +93,7 @@ export function InteractiveApp({
 	const [restoredDraft, setRestoredDraft] =
 		React.useState<RestoredInputDraft | null>(null);
 
-	const handleToggleCompactDisplay = () => {
+	const handleToggleCompactDisplay = React.useCallback(() => {
 		const expanding = appState.compactToolDisplay;
 		appState.setCompactToolDisplay(!expanding);
 
@@ -88,16 +101,45 @@ export function InteractiveApp({
 		if (expanding) {
 			const counts = appState.compactToolCountsRef.current;
 			if (Object.keys(counts).length > 0) {
-				displayCompactCountsSummary(counts, appState.addToChatQueue);
+				displayCompactCountsSummary(counts, appState.addToChatQueue, {
+					expanded: true,
+				});
 				appState.compactToolCountsRef.current = {};
 				appState.setCompactToolCounts(null);
 			}
 		}
-	};
+	}, [appState]);
 
 	const handleToggleReasoningExpanded = () => {
 		appState.setReasoningExpanded(!appState.reasoningExpanded);
 	};
+
+	React.useEffect(() => {
+		const hasCompactSummary =
+			appState.compactToolCounts &&
+			Object.keys(appState.compactToolCounts).length > 0;
+		if (!hasCompactSummary) return;
+
+		const hitbox = getLiveCompactToolExpandHitboxColumns(
+			appState.compactToolCounts ?? {},
+			!appState.compactToolDisplay,
+		);
+		if (!hitbox) return;
+
+		const onClick = ({x}: {x: number; y: number}) => {
+			if (x < hitbox.start || x > hitbox.end) return;
+			handleToggleCompactDisplay();
+		};
+
+		clickEvents.on('click', onClick);
+		return () => {
+			clickEvents.off('click', onClick);
+		};
+	}, [
+		appState.compactToolCounts,
+		appState.compactToolDisplay,
+		handleToggleCompactDisplay,
+	]);
 
 	const showModalSelectors =
 		(appState.activeMode !== null &&
@@ -247,12 +289,96 @@ export function InteractiveApp({
 		{isActive: cancellable},
 	);
 
+	const terminalRows = useTerminalRows();
+	const terminalWidth = useTerminalWidth();
+	const statusLineConfig = loadPreferences().statusLine;
+	const statusInfo = useMemo(() => {
+		let git:
+			| {
+					branch: string;
+					dirty: boolean;
+			  }
+			| undefined;
+		try {
+			const gs = getGitStatusSummarySync();
+			if (gs) {
+				git = {
+					branch: gs.branch,
+					dirty: gs.detached || gs.isDefault,
+				};
+			}
+		} catch {}
+
+		return {
+			user: userInfo().username,
+			directory: basename(process.cwd()),
+			git,
+		};
+	}, []);
+	const statusLineData = useMemo<StatusLineData | null>(() => {
+		if (!statusLineConfig?.enabled) return null;
+
+		let git: StatusLineData['git'];
+		try {
+			const gs = getGitStatusSummarySync();
+			if (gs) {
+				git = {
+					branch: gs.branch,
+					dirty: gs.detached || gs.isDefault,
+				};
+			}
+		} catch {}
+
+		return {
+			model: {
+				id: appState.currentModel,
+				display_name: appState.currentModel,
+			},
+			workspace: {
+				current_dir: process.cwd(),
+				project_dir: process.cwd(),
+			},
+			git,
+			context: {
+				used_percent: appState.contextPercentUsed,
+			},
+			tune: {
+				enabled: appState.tune.enabled,
+				profile: appState.tune.toolProfile,
+				resolved_profile: resolveToolProfile(
+					appState.tune.toolProfile,
+					appState.currentModel,
+				),
+				tool_mode: isSingleToolProfile(
+					appState.tune.toolProfile,
+					appState.currentModel,
+				)
+					? 'single'
+					: 'parallel',
+			},
+			version: '1.28.1',
+		};
+	}, [
+		statusLineConfig,
+		appState.currentModel,
+		appState.contextPercentUsed,
+		appState.tune,
+	]);
+	const statusLineSlot =
+		statusLineConfig?.enabled && statusLineConfig.command && statusLineData ? (
+			<StatusLine
+				command={statusLineConfig.command}
+				data={statusLineData}
+				terminalWidth={terminalWidth}
+				padding={statusLineConfig.padding ?? 0}
+			/>
+		) : null;
+
 	// Fullscreen layout if and only if cli.tsx put us on the alternate
 	// screen. Inline mode (--no-alt-screen / alternateScreen:false pref),
 	// test renderers, and piped stdout all use the classic flow layout
 	// with Static + native scrollback.
 	const fullscreen = altScreenActive;
-	const terminalRows = useTerminalRows();
 
 	return (
 		// Fullscreen layout on the alternate screen buffer: the root Box is
@@ -283,10 +409,16 @@ export function InteractiveApp({
 				}
 			/>
 
-			{/* Footer: modals, input. flexShrink=0 so the chat viewport above
-			    absorbs ALL vertical shrink — without it Yoga crushes the
-			    input box when the transcript is tall. */}
+			{/* Footer: modals, status line, input. flexShrink=0 so the chat
+			    viewport above absorbs ALL vertical shrink — without it Yoga
+			    crushes the input box when the transcript is tall. */}
 			<Box flexDirection="column" flexShrink={0}>
+				{transientNoticeComponents.length > 0 && (
+					<Box flexDirection="column" marginBottom={1}>
+						{transientNoticeComponents}
+					</Box>
+				)}
+
 				{appState.planReviewState?.show && (
 					<PlanReviewPrompt
 						onProceed={appHandlers.handlePlanProceed}
@@ -356,7 +488,12 @@ export function InteractiveApp({
 								onQuestionAnswer={handleQuestionAnswer}
 								mcpInitialized={appState.mcpInitialized}
 								client={appState.client}
-								customCommands={Array.from(appState.customCommandCache.keys())}
+								customCommands={Array.from(
+									appState.customCommandCache.entries(),
+								).map(([name, command]) => ({
+									name,
+									description: command.metadata.description,
+								}))}
 								inputDisabled={false}
 								onSubmittedDraft={handleSubmittedDraft}
 								restoreSubmittedDraft={restoredDraft}
@@ -368,7 +505,6 @@ export function InteractiveApp({
 								contextPercentUsed={appState.contextPercentUsed}
 								contextSource={appState.contextSource}
 								sessionName={appState.sessionName || undefined}
-								compactToolCounts={appState.compactToolCounts}
 								compactToolDisplay={appState.compactToolDisplay}
 								liveTaskList={appState.liveTaskList}
 								onToggleCompactDisplay={handleToggleCompactDisplay}
@@ -383,6 +519,8 @@ export function InteractiveApp({
 								onToggleReasoningExpanded={handleToggleReasoningExpanded}
 								tune={appState.tune}
 								currentModel={appState.currentModel}
+								statusInfo={statusInfo}
+								statusLineSlot={statusLineSlot}
 							/>
 						</UIStateProvider>
 					)}

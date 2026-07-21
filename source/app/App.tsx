@@ -1,6 +1,6 @@
 import {Box, Text, useApp, useInput} from 'ink';
 import Spinner from 'ink-spinner';
-import React, {useMemo} from 'react';
+import React, {useMemo, useRef} from 'react';
 import {createStaticComponents} from '@/app/components/app-container';
 import {NonInteractiveShell} from '@/app/components/non-interactive-shell';
 import {useAppLogging} from '@/app/hooks/useAppLogging';
@@ -48,6 +48,11 @@ import {createPinoLogger} from '@/utils/logging/pino-logger';
 import {setGlobalMessageQueue} from '@/utils/message-queue';
 import {setNotificationsConfig} from '@/utils/notifications';
 import {getShutdownManager} from '@/utils/shutdown';
+import {pointerEvents} from '@/utils/terminal-mouse';
+import {
+	getLiveCompactToolExpandHitboxColumns,
+	LiveCompactCounts,
+} from '@/utils/tool-result-display';
 import {isExtensionInstalled} from '@/vscode/extension-installer';
 
 export default function App({
@@ -60,6 +65,8 @@ export default function App({
 	cliMode,
 	trustDirectory = false,
 	altScreenActive = false,
+	initialSession,
+	openSessionSelectorOnStart = false,
 }: AppProps) {
 	// Resolve the initial development mode with this precedence:
 	// 1. --mode CLI flag (highest priority)
@@ -79,6 +86,8 @@ export default function App({
 
 	// Use extracted hooks
 	const appState = useAppState(initialDevelopmentMode);
+	const [compactExpandHintHovered, setCompactExpandHintHovered] =
+		React.useState(false);
 	const userMessageQueue = useUserMessageQueue();
 	const queuedUserSubmitRef = React.useRef<
 		| ((
@@ -111,6 +120,41 @@ export default function App({
 
 	// Track whether we should show welcome (reset on /clear to clear banner)
 	const [showWelcome, setShowWelcome] = React.useState(true);
+	const [transientNoticeComponents, setTransientNoticeComponents] =
+		React.useState<React.ReactNode[]>([]);
+	const userSubmittedSinceStartupRef = React.useRef(false);
+
+	const addTransientNotice = React.useCallback((component: React.ReactNode) => {
+		let componentWithKey = component;
+		if (React.isValidElement(component) && !component.key) {
+			componentWithKey = React.cloneElement(component, {
+				key: generateKey('transient-notice'),
+			});
+		}
+		const nextMessage =
+			React.isValidElement(componentWithKey) &&
+			typeof componentWithKey.props === 'object' &&
+			componentWithKey.props !== null &&
+			'message' in componentWithKey.props
+				? componentWithKey.props.message
+				: undefined;
+		setTransientNoticeComponents(prev => {
+			if (typeof nextMessage !== 'string') {
+				return [...prev, componentWithKey];
+			}
+			return [
+				...prev.filter(
+					existing =>
+						!React.isValidElement(existing) ||
+						typeof existing.props !== 'object' ||
+						existing.props === null ||
+						!('message' in existing.props) ||
+						existing.props.message !== nextMessage,
+				),
+				componentWithKey,
+			];
+		});
+	}, []);
 
 	// Exit WITHOUT unmounting Ink first: the shutdown manager's
 	// 'tui-exit-render' handler (cli.tsx) erases the live region and prints
@@ -176,12 +220,18 @@ export default function App({
 
 	// Initialize global message queue on component mount
 	React.useEffect(() => {
-		setGlobalMessageQueue(appState.addToChatQueue);
+		setGlobalMessageQueue(component => {
+			if (!userSubmittedSinceStartupRef.current) {
+				addTransientNotice(component);
+				return;
+			}
+			appState.addToChatQueue(component);
+		});
 
 		logger.debug('Global message queue initialized', {
 			chatQueueFunction: 'addToChatQueue',
 		});
-	}, [appState.addToChatQueue, logger]);
+	}, [appState.addToChatQueue, addTransientNotice, logger]);
 
 	// Question + subagent tool approval queues plumbed through global handlers.
 	const {
@@ -243,6 +293,7 @@ export default function App({
 		currentModel: appState.currentModel,
 		setIsCancelling: appState.setIsCancelling,
 		addToChatQueue: appState.addToChatQueue,
+		addTransientNotice,
 		abortController: appState.abortController,
 		setAbortController: appState.setAbortController,
 		developmentMode: appState.developmentMode,
@@ -261,6 +312,7 @@ export default function App({
 			appState.setPlanTurnCompleted(true);
 		},
 		reasoningExpandedRef: appState.reasoningExpandedRef,
+		iconThemeRef: appState.iconThemeRef,
 		compactToolDisplayRef: appState.compactToolDisplayRef,
 		onSetCompactToolCounts: appState.setCompactToolCounts,
 		compactToolCountsRef: appState.compactToolCountsRef,
@@ -306,6 +358,21 @@ export default function App({
 		developmentMode: appState.developmentMode,
 		tune: appState.tune,
 	});
+
+	// Track reasoning start time (single value for current turn)
+	const reasoningStartTimeRef = useRef<number | null>(null);
+
+	// Record start time when reasoning begins (boolean flag avoids string comparison issues)
+	const hasReasoning = Boolean(chatHandler.streamingReasoning);
+	const hadReasoning = useRef(false);
+
+	if (hasReasoning && !hadReasoning.current) {
+		// Reasoning just started
+		reasoningStartTimeRef.current = Date.now();
+	}
+	hadReasoning.current = hasReasoning;
+	// Don't clear here — AssistantReasoning renders after isGenerating goes false.
+	// The ref is overwritten on next reasoning start, so no memory leak.
 
 	// All app-level structured logging lives in this hook so the orchestrator
 	// stays focused on render/state composition.
@@ -471,6 +538,7 @@ export default function App({
 		setPlanReviewState: appState.setPlanReviewState,
 		setPendingPlanProceed: appState.setPendingPlanProceed,
 		addToChatQueue: appState.addToChatQueue,
+		addTransientNotice,
 		setChatComponents: appState.setChatComponents,
 		setLiveComponent: appState.setLiveComponent,
 		client: appState.client,
@@ -488,6 +556,25 @@ export default function App({
 		dismissActiveEditor: vscodeServer.dismissActiveEditor,
 	});
 
+	// Apply a session resolved by cli.tsx from --continue/--resume <id> (or open
+	// the picker for a bare --resume), once on mount. Reuses the exact same
+	// applySession path as the in-app /resume command so messages, provider,
+	// model, sessionId, key-generator reseed, and scrollback replay all stay
+	// in sync. Guarded by a ref (not an empty dep array) so a re-render before
+	// the effect fires — e.g. from the vscode-prompt-dispatcher bind above —
+	// can't apply it twice.
+	const startupSessionAppliedRef = React.useRef(false);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: startup-only effect, guarded by the ref above
+	React.useEffect(() => {
+		if (startupSessionAppliedRef.current) return;
+		startupSessionAppliedRef.current = true;
+		if (initialSession) {
+			appHandlers.applySession(initialSession);
+		} else if (openSessionSelectorOnStart) {
+			appState.setActiveMode('sessionSelector');
+		}
+	}, []);
+
 	// Bind the chat-input submit handler into the VS Code prompt dispatcher
 	// now that appHandlers exists. The dispatcher was created earlier (before
 	// appHandlers) because useVSCodeServer needs `onPrompt` immediately.
@@ -498,10 +585,24 @@ export default function App({
 	// Wraps the user's typed message with the VS Code active-editor pill.
 	// File-focused-only sends just the filename hint; an active selection
 	// inlines the code too.
-	const handleUserSubmit = useUserSubmit({
+	const submitUserMessage = useUserSubmit({
 		handleMessageSubmit: appHandlers.handleMessageSubmit,
 		activeEditor: vscodeServer.activeEditor,
 	});
+	const handleUserSubmit = React.useCallback(
+		async (
+			message: string,
+			displayValue: string,
+			images?: ImageAttachment[],
+		) => {
+			setTransientNoticeComponents([]);
+			if (!userSubmittedSinceStartupRef.current) {
+				userSubmittedSinceStartupRef.current = true;
+			}
+			await submitUserMessage(message, displayValue, images);
+		},
+		[submitUserMessage],
+	);
 
 	React.useEffect(() => {
 		queuedUserSubmitRef.current = handleUserSubmit;
@@ -634,22 +735,66 @@ export default function App({
 		);
 	}
 
-	const liveComponent =
-		appState.liveComponent ??
-		(chatHandler.isGenerating &&
+	const showAssistantReasoning =
+		chatHandler.streamingReasoning && chatHandler.streamingContent;
+
+	const liveCompactCounts =
+		appState.compactToolCounts &&
+		Object.keys(appState.compactToolCounts).length > 0 ? (
+			<LiveCompactCounts
+				counts={appState.compactToolCounts}
+				expanded={!appState.compactToolDisplay}
+				expandHintHovered={compactExpandHintHovered}
+			/>
+		) : null;
+
+	React.useEffect(() => {
+		const counts = appState.compactToolCounts;
+		if (!altScreenActive || !counts || Object.keys(counts).length === 0) {
+			setCompactExpandHintHovered(false);
+			return;
+		}
+
+		const hitbox = getLiveCompactToolExpandHitboxColumns(
+			counts,
+			!appState.compactToolDisplay,
+		);
+		if (!hitbox) return;
+
+		const onPointer = ({x}: {x: number; y: number}) => {
+			// Stock Ink does not expose rendered row coordinates. This keeps the
+			// affordance precise horizontally and leaves ctrl-o as the exact
+			// keyboard fallback in non-mouse terminals.
+			setCompactExpandHintHovered(x >= hitbox.start && x <= hitbox.end);
+		};
+
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [
+		altScreenActive,
+		appState.compactToolCounts,
+		appState.compactToolDisplay,
+	]);
+
+	const streamingLiveComponent =
+		chatHandler.isGenerating &&
 		(chatHandler.streamingContent || chatHandler.streamingReasoning) ? (
 			<>
 				{chatHandler.streamingReasoning && !chatHandler.streamingContent && (
 					<StreamingReasoning
 						reasoning={chatHandler.streamingReasoning}
 						expand={appState.reasoningExpanded}
+						startTime={reasoningStartTimeRef.current ?? Date.now()}
 					/>
 				)}
 				{/* Reasoning stream is complete when text streaming begins */}
-				{chatHandler.streamingReasoning && chatHandler.streamingContent && (
+				{showAssistantReasoning && (
 					<AssistantReasoning
 						reasoning={chatHandler.streamingReasoning}
 						expand={appState.reasoningExpanded}
+						startTime={reasoningStartTimeRef.current ?? undefined}
 					/>
 				)}
 				{chatHandler.streamingContent && (
@@ -659,7 +804,16 @@ export default function App({
 					/>
 				)}
 			</>
-		) : null);
+		) : null;
+
+	const liveComponent =
+		liveCompactCounts || appState.liveComponent || streamingLiveComponent ? (
+			<>
+				{liveCompactCounts}
+				{!liveCompactCounts && appState.liveComponent}
+				{streamingLiveComponent}
+			</>
+		) : null;
 
 	// Non-interactive render tree — minimal transcript + one status line,
 	// no interactive affordances.
@@ -699,6 +853,7 @@ export default function App({
 						appHandlers={appHandlers}
 						vscodeServer={vscodeServer}
 						staticComponents={staticComponents}
+						transientNoticeComponents={transientNoticeComponents}
 						clearKey={conversationId}
 						liveComponent={liveComponent}
 						pendingSubagentApproval={pendingSubagentApproval}

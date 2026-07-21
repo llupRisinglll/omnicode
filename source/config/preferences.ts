@@ -90,6 +90,33 @@ export function getNanocoderShape(): NanocoderShape | undefined {
 	return preferences.nanocoderShape;
 }
 
+/**
+ * Check if the welcome tips should be shown.
+ * Tips are shown on first run or if it's been more than 12 hours since last shown.
+ */
+export function shouldShowWelcomeTips(): boolean {
+	const preferences = loadPreferences();
+	const lastShown = preferences.lastWelcomeShown;
+
+	// First time - show tips
+	if (!lastShown) {
+		return true;
+	}
+
+	// Show tips if more than 12 hours have passed
+	const twelveHoursInMs = 12 * 60 * 60 * 1000;
+	return Date.now() - lastShown > twelveHoursInMs;
+}
+
+/**
+ * Update the last welcome shown timestamp.
+ */
+export function updateLastWelcomeShown(): void {
+	const preferences = loadPreferences();
+	preferences.lastWelcomeShown = Date.now();
+	savePreferences(preferences);
+}
+
 export function saveTune(config: TuneConfig): void {
 	const preferences = loadPreferences();
 	preferences.tune = config;
@@ -177,6 +204,33 @@ export function updateCompactToolDisplay(value: boolean): void {
 }
 
 /**
+ * Default cap for compact-mode file-diff line counts. 20 covers most
+ * single edits without flooding the transcript; 0 means unlimited.
+ */
+export const DEFAULT_COMPACT_DIFF_MAX_LINES = 20;
+
+/**
+ * Get the compact-mode diff line cap from preferences. 0 means unlimited.
+ */
+export function getCompactDiffMaxLines(): number {
+	const preferences = loadPreferences();
+	const value = preferences.compactDiffMaxLines;
+	if (typeof value === 'number' && value >= 0) {
+		return Math.round(value);
+	}
+	return DEFAULT_COMPACT_DIFF_MAX_LINES;
+}
+
+/**
+ * Save the compact-mode diff line cap preference. 0 means unlimited.
+ */
+export function updateCompactDiffMaxLines(value: number): void {
+	const preferences = loadPreferences();
+	preferences.compactDiffMaxLines = Math.max(0, Math.round(value));
+	savePreferences(preferences);
+}
+
+/**
  * Get the privacy scrubbing preference from preferences
  */
 export function getPrivacyPreference(): boolean {
@@ -190,6 +244,23 @@ export function getPrivacyPreference(): boolean {
 export function updatePrivacyPreference(value: boolean): void {
 	const preferences = loadPreferences();
 	preferences.enablePromptScrubbing = value;
+	savePreferences(preferences);
+}
+
+/**
+ * Get the show-working-indicator preference from preferences
+ */
+export function getShowWorkingIndicator(): boolean {
+	const preferences = loadPreferences();
+	return preferences.showWorkingIndicator ?? false;
+}
+
+/**
+ * Save the show-working-indicator preference
+ */
+export function updateShowWorkingIndicator(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.showWorkingIndicator = value;
 	savePreferences(preferences);
 }
 

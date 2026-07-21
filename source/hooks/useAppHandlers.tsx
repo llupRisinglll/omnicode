@@ -97,6 +97,7 @@ interface UseAppHandlersProps {
 
 	// Callbacks
 	addToChatQueue: (component: React.ReactNode) => void;
+	addTransientNotice?: (component: React.ReactNode) => void;
 	setChatComponents: (components: React.ReactNode[]) => void;
 	setLiveComponent: (component: React.ReactNode) => void;
 	client: LLMClient | null;
@@ -137,6 +138,7 @@ export interface AppHandlers {
 	) => Promise<void>;
 	handleCheckpointCancel: () => void;
 	enterSessionSelectorMode: (showAll?: boolean) => void;
+	applySession: (session: Session) => void;
 	handleSessionSelect: (sessionId: string) => Promise<void>;
 	handleSessionCancel: () => void;
 	enterCheckpointLoadMode: (
@@ -540,10 +542,11 @@ export function useAppHandlers(props: UseAppHandlersProps): AppHandlers {
 			)) {
 				props.addToChatQueue(component);
 			}
-			props.addToChatQueue(
+			const addResumeNotice = props.addTransientNotice ?? props.addToChatQueue;
+			addResumeNotice(
 				<SuccessMessage
 					key={generateKey('resume-success')}
-					message={`Resumed session: ${session.title}`}
+					message={`Resumed session: ${session.id} (${session.title})`}
 					hideBox={true}
 				/>,
 			);
@@ -556,6 +559,7 @@ export function useAppHandlers(props: UseAppHandlersProps): AppHandlers {
 			props.setCurrentSessionId,
 			props.setActiveMode,
 			props.addToChatQueue,
+			props.addTransientNotice,
 			props,
 		],
 	);
@@ -746,6 +750,7 @@ export function useAppHandlers(props: UseAppHandlersProps): AppHandlers {
 		handleCheckpointCancel,
 		enterCheckpointLoadMode,
 		enterSessionSelectorMode,
+		applySession,
 		handleSessionSelect,
 		handleSessionCancel,
 		handleMessageSubmit,

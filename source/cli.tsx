@@ -71,7 +71,6 @@ Commands:
 Options:
   -v, --version       Show version number
   -h, --help          Show help
-  --web, --gui        Start local browser-based web mode
   --vscode            Run in VS Code mode
   --vscode-port       Specify VS Code port
   --provider          Specify AI provider (must be configured in agents.config.json)
@@ -94,42 +93,26 @@ Options:
   --output-format     Specify stdout format ('text' or 'json'). Synonym for --json.
   --acp               Run as an ACP (Agent Client Protocol) server for editor integration.
                       Communicates via JSON-RPC over stdin/stdout.
+  -c, --continue      Resume the most recent session for the current directory, silently.
+                      Starts a fresh session if none exists. Interactive mode only.
+  -r, --resume [id]   Resume a session by id or 1-based list index (e.g. "last", "2",
+                      or a session uuid). With no id, opens the session picker at
+                      startup. Mutually exclusive with --continue. Interactive mode only.
   run                 Run in non-interactive mode
 
 Examples:
   nanocoder --provider openrouter --model google/gemini-3.1-flash run "analyze src/app.ts"
   nanocoder --provider ollama --model llama3.1 --context-max 128k
-  nanocoder --web
-  nanocoder --gui
   nanocoder --mode yolo run "refactor database module"
   nanocoder --mode plan
   nanocoder --trust-directory run "analyze src/app.ts"
   nanocoder --plain run "summarize README.md"
   nanocoder --plain --json run "summarize README.md" | jq .finalText
+  nanocoder --continue
+  nanocoder --resume last
+  nanocoder --resume
   `);
 	process.exit(0);
-}
-
-if (args.includes('--web') || args.includes('--gui')) {
-	const {startLocalWebServer} = await import('@/web/server');
-	const webServer = await startLocalWebServer();
-
-	console.log('Nanocoder web mode started.');
-	console.log(`Local URL: ${webServer.url}`);
-	console.log('Press Ctrl+C to stop.');
-
-	const shutdown = async () => {
-		await webServer.close();
-		process.exit(0);
-	};
-	process.once('SIGINT', () => {
-		void shutdown();
-	});
-	process.once('SIGTERM', () => {
-		void shutdown();
-	});
-
-	await new Promise<void>(() => {});
 }
 
 // Validate output format value to prevent injection
@@ -305,8 +288,6 @@ async function main(): Promise<void> {
 				continue; // skip this flag
 			} else if (arg === '--no-alt-screen' || arg === '--alt-screen') {
 				continue; // skip this flag
-			} else if (arg === '--web' || arg === '--gui') {
-				continue; // skip this flag
 			} else {
 				promptArgs.push(arg);
 			}
@@ -315,6 +296,36 @@ async function main(): Promise<void> {
 	}
 
 	const nonInteractiveMode = runCommandIndex !== -1;
+
+	// --continue/-c and --resume/-r: session resume flags for the interactive
+	// TUI only (mirrors Claude Code's -c/-r). Mutually exclusive.
+	const continueRequested = args.includes('--continue') || args.includes('-c');
+	const resumeFlagIndex = args.findIndex(
+		arg => arg === '--resume' || arg === '-r',
+	);
+	const resumeRequested = resumeFlagIndex !== -1;
+
+	if (continueRequested && resumeRequested) {
+		console.error('Cannot pass both --continue and --resume.');
+		process.exit(1);
+	}
+
+	// A bare --resume (no id) opens the session picker at startup. Only treat
+	// the next token as an id/index if it isn't another flag or `run`.
+	let resumeArg: string | undefined;
+	if (resumeRequested) {
+		const next = args[resumeFlagIndex + 1];
+		if (next && !next.startsWith('-') && next !== 'run') {
+			resumeArg = next;
+		}
+	}
+
+	if ((continueRequested || resumeRequested) && nonInteractiveMode) {
+		console.error(
+			'--continue/-c and --resume/-r are only supported for the interactive session (not with `run`).',
+		);
+		process.exit(1);
+	}
 
 	// Validate execution constraints for --json rules
 	if (outputFormat === 'json' && !nonInteractiveMode) {
@@ -454,6 +465,45 @@ async function main(): Promise<void> {
 		const {installPerfBufferGuard} = await import('@/utils/perf-buffer');
 		installPerfBufferGuard();
 
+		// Resolve --continue/--resume <id> into a Session BEFORE rendering, so
+		// the app can apply it on first mount (see App's initialSession prop).
+		// A bare --resume (no id) instead opens the picker at startup — no
+		// resolution needed here.
+		let initialSession: import('@/session/session-manager').Session | undefined;
+		const openSessionSelectorOnStart = resumeRequested && !resumeArg;
+		if (continueRequested || resumeRequested) {
+			const {sessionManager} = await import('@/session/session-manager');
+			try {
+				await sessionManager.initialize();
+			} catch (error) {
+				console.error(
+					`Failed to initialize sessions: ${error instanceof Error ? error.message : error}`,
+				);
+				process.exit(1);
+			}
+		}
+		if (continueRequested || (resumeRequested && resumeArg)) {
+			const {resolveSession} = await import('@/session/resolve-session');
+
+			if (continueRequested) {
+				const outcome = await resolveSession('last', process.cwd());
+				if (outcome.ok) {
+					initialSession = outcome.session;
+				} else {
+					console.log(
+						'No previous session found for this directory — starting fresh.',
+					);
+				}
+			} else {
+				const outcome = await resolveSession(resumeArg, process.cwd());
+				if (!outcome.ok) {
+					console.error(outcome.message);
+					process.exit(1);
+				}
+				initialSession = outcome.session;
+			}
+		}
+
 		// Switch to alternate screen buffer (like vim/less/htop) for the
 		// interactive TUI only. Run mode (`nanocoder run …`) prints a
 		// transcript the user needs to keep after exit — the alt screen
@@ -478,7 +528,7 @@ async function main(): Promise<void> {
 			// screen has no native scrollback, so the terminal's own wheel /
 			// scrollbar can't work — the app must receive wheel events itself.
 			// (Text selection needs Shift+drag while mouse reporting is on.)
-			process.stdout.write('\x1B[?1000h\x1B[?1006h');
+			process.stdout.write('\x1B[?1000h\x1B[?1003h\x1B[?1006h');
 
 			// Wipe the screen on resize BEFORE Ink repaints (this listener is
 			// registered first, so it runs first). When the terminal GROWS,
@@ -494,9 +544,8 @@ async function main(): Promise<void> {
 			// filtered proxy stream: mouse reports are stripped, wheel ticks
 			// are re-emitted on the wheelEvents bus for the chat viewport.
 			const {PassThrough} = await import('node:stream');
-			const {stripMouseSequences, wheelEvents} = await import(
-				'@/utils/terminal-mouse'
-			);
+			const {clickEvents, pointerEvents, stripMouseSequences, wheelEvents} =
+				await import('@/utils/terminal-mouse');
 			const filtered = new PassThrough();
 			let carry = '';
 			const forwardInput = (chunk: Buffer | string) => {
@@ -505,6 +554,12 @@ async function main(): Promise<void> {
 				carry = result.carry;
 				for (const direction of result.wheel) {
 					wheelEvents.emit('wheel', direction);
+				}
+				for (const click of result.clicks) {
+					clickEvents.emit('click', click);
+				}
+				for (const pointer of result.pointers) {
+					pointerEvents.emit('pointer', pointer);
 				}
 				if (result.clean) {
 					filtered.write(result.clean);
@@ -539,6 +594,8 @@ async function main(): Promise<void> {
 				cliMode={cliMode}
 				trustDirectory={trustDirectory}
 				altScreenActive={useAltScreen}
+				initialSession={initialSession}
+				openSessionSelectorOnStart={openSessionSelectorOnStart}
 			/>,
 			{
 				// Ctrl+C is handled inside App (routed through the shutdown
@@ -556,7 +613,7 @@ async function main(): Promise<void> {
 			stopInputForwarding?.();
 			if (useAltScreen) {
 				// Mouse reporting off, then back to the main screen buffer.
-				process.stdout.write('\x1B[?1006l\x1B[?1000l\x1B[?1049l');
+				process.stdout.write('\x1B[?1006l\x1B[?1003l\x1B[?1000l\x1B[?1049l');
 			}
 		};
 

@@ -9,6 +9,7 @@ import {
 	getNotificationsPreference,
 	getPasteThreshold,
 	getPrivacyPreference,
+	loadPreferences,
 	updateAlternateScreen,
 } from '@/config/preferences';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
@@ -26,6 +27,7 @@ import {
 	SettingsNotificationsPanel,
 	SettingsPasteThresholdPanel,
 	SettingsPrivacyPanel,
+	SettingsStatusLinePanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
 } from './settings-selector';
@@ -83,6 +85,7 @@ function buildRowsForTab(
 ): SettingRow[] {
 	switch (tabId) {
 		case 'appearance': {
+			const statusLine = loadPreferences().statusLine;
 			return [
 				{
 					kind: 'managed',
@@ -104,6 +107,13 @@ function buildRowsForTab(
 					label: 'Nanocoder Shape',
 					value: getNanocoderShape() ?? 'tiny',
 					panel: 'nanocoder-shape',
+				},
+				{
+					kind: 'managed',
+					id: 'status-line',
+					label: 'Status Line',
+					value: statusLine?.enabled ? 'on' : 'off',
+					panel: 'status-line',
 				},
 				{
 					kind: 'boolean',
@@ -252,6 +262,8 @@ function renderManagedPanel(
 			return <SettingsDisplayPanel onBack={onBack} onCancel={onBack} />;
 		case 'privacy':
 			return <SettingsPrivacyPanel onBack={onBack} onCancel={onBack} />;
+		case 'status-line':
+			return <SettingsStatusLinePanel onBack={onBack} onCancel={onBack} />;
 	}
 }
 
