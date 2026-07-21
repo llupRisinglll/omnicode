@@ -95,7 +95,7 @@ export const StatusLine = memo(function StatusLine({
 
 	if (error) {
 		return (
-			<Box justifyContent="flex-end">
+			<Box>
 				<Text color={colors.error} dimColor>
 					statusline: {error}
 				</Text>
@@ -108,7 +108,7 @@ export const StatusLine = memo(function StatusLine({
 	}
 
 	return (
-		<Box paddingLeft={padding} paddingRight={padding} justifyContent="flex-end">
+		<Box paddingLeft={padding} paddingRight={padding}>
 			<Text>{output}</Text>
 		</Box>
 	);

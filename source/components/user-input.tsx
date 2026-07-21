@@ -938,6 +938,10 @@ export default function UserInput({
 			Math.floor(commandCompletionAvailableWidth * 0.4),
 		);
 	}, [completions, commandCompletionAvailableWidth]);
+	const modelInputBadge =
+		colors.promptChar && currentModel
+			? truncate(currentModel, Math.max(8, inputWrapWidth - 4))
+			: '';
 
 	// When disabled, show minimal UI to avoid cluttering the screen
 	if (disabled) {
@@ -1181,6 +1185,20 @@ export default function UserInput({
 					</Box>
 				)}
 			</Box>
+			{modelInputBadge && (
+				<Box
+					justifyContent="flex-end"
+					marginTop={-1}
+					marginX={1}
+					paddingRight={2}
+					width={boxWidth - 2}
+				>
+					<Text color={colors.info} bold>
+						{' '}
+						{modelInputBadge}{' '}
+					</Text>
+				</Box>
+			)}
 
 			{attachments.length > 0 && (
 				<Box marginTop={1}>

@@ -593,6 +593,45 @@ test('executeToolsDirectly - compact display calls onCompactToolCount instead of
 	t.deepEqual(compactCounts, ['tool1', 'tool1', 'tool2']);
 });
 
+test('executeToolsDirectly - compact display tallies failures instead of queueing each one', async t => {
+	const toolCalls: ToolCall[] = [
+		{id: 'call_1', function: {name: 'failing_tool', arguments: '{}'}},
+		{id: 'call_2', function: {name: 'failing_tool', arguments: '{}'}},
+	];
+
+	const conversationStateManager = createMockConversationStateManager();
+	const addToChatQueueCalls: unknown[] = [];
+	const addToChatQueue = (component: unknown) => {
+		addToChatQueueCalls.push(component);
+	};
+	const toolManager = createMockToolManager({
+		validatorResult: undefined,
+		shouldFail: false,
+	});
+
+	const compactCounts: Array<{toolName: string; failed?: boolean}> = [];
+
+	const results = await executeToolsDirectly(
+		toolCalls,
+		toolManager,
+		conversationStateManager as any,
+		addToChatQueue,
+		{
+			compactDisplay: true,
+			onCompactToolCount: (toolName, _detail, failed) => {
+				compactCounts.push({toolName, failed});
+			},
+		},
+	);
+
+	t.is(results.length, 2);
+	t.is(addToChatQueueCalls.length, 0);
+	t.deepEqual(compactCounts, [
+		{toolName: 'failing_tool', failed: true},
+		{toolName: 'failing_tool', failed: true},
+	]);
+});
+
 test('executeToolsDirectly - non-interactive compact mode pushes one-liner per tool and skips onCompactToolCount', async t => {
 	const toolCalls: ToolCall[] = [
 		{id: 'call_1', function: {name: 'tool1', arguments: '{}'}},
@@ -905,7 +944,7 @@ test.serial(
 	},
 );
 
-test('executeToolsDirectly - compact mode renders errors instead of counting them', async t => {
+test('executeToolsDirectly - compact mode counts errors instead of queueing them', async t => {
 	const toolCalls: ToolCall[] = [
 		{id: 'call_1', function: {name: 'failing_tool', arguments: '{}'}},
 	];
@@ -920,7 +959,7 @@ test('executeToolsDirectly - compact mode renders errors instead of counting the
 		shouldFail: true,
 	});
 
-	const compactCounts: string[] = [];
+	const compactCounts: Array<{toolName: string; failed?: boolean}> = [];
 
 	const results = await executeToolsDirectly(
 		toolCalls,
@@ -929,17 +968,16 @@ test('executeToolsDirectly - compact mode renders errors instead of counting the
 		addToChatQueue,
 		{
 			compactDisplay: true,
-			onCompactToolCount: (toolName) => {
-				compactCounts.push(toolName);
+			onCompactToolCount: (toolName, _detail, failed) => {
+				compactCounts.push({toolName, failed});
 			},
 		},
 	);
 
 	t.is(results.length, 1);
 	t.true(results[0].content.includes('Error:'));
-	// Error results render as a condensed one-liner (added to chat queue), not counted
-	t.true(addToChatQueueCalls.length > 0);
-	t.is(compactCounts.length, 0);
+	t.is(addToChatQueueCalls.length, 0);
+	t.deepEqual(compactCounts, [{toolName: 'failing_tool', failed: true}]);
 });
 
 test('executeToolsDirectly passes privacy options to rehydrate tools', async t => {

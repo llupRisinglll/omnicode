@@ -244,12 +244,6 @@ export const DevelopmentModeIndicator = React.memo(
 						<Text bold>{modeLabel}</Text>
 						{showShiftHint && <Text> (Shift+Tab to cycle)</Text>}
 					</Text>
-					{currentModel && (
-						<>
-							<Text color={colors.secondary}> · </Text>
-							<Text color={colors.primary}>{currentModel}</Text>
-						</>
-					)}
 					{sessionLabel && (
 						<>
 							<Text color={colors.secondary}> · </Text>
