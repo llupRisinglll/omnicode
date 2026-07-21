@@ -4,6 +4,7 @@ import React from 'react';
 import {computeDiffLines} from '@/components/diff-view/compute';
 import DiffView from '@/components/diff-view/DiffView';
 import {ErrorMessage} from '@/components/message-box';
+import {ToolCallHeader} from '@/components/simple-tool-formatter';
 import ToolMessage from '@/components/tool-message';
 import {getCompactDiffMaxLines} from '@/config/preferences';
 import {DEFAULT_TERMINAL_COLUMNS} from '@/constants';
@@ -298,8 +299,8 @@ function flattenToOneLine(value: string): string {
 
 /**
  * Extract the primary detail for omnicode's detailed compact tool lines:
- * "⚒ <tool_name> <detail>" (e.g. "⚒ git_diff git diff --staged",
- * "⚒ fetch_url https://…"). Returns null for tools with no meaningful single
+ * "⚒ <tool_name>(<detail>)" (e.g. "⚒ git_diff(git diff --staged)",
+ * "⚒ fetch_url(https://…)"). Returns null for tools with no meaningful single
  * detail — those keep the count tally.
  */
 export function getCompactToolDetail(
@@ -368,6 +369,20 @@ export function getCompactToolDetail(
 			const question = str(args.question);
 			return question ? {detail: question} : null;
 		}
+		case 'agent': {
+			const subagent = str(args.subagent_type);
+			const description = str(args.description);
+			if (subagent && description)
+				return {detail: `${subagent}: ${description}`};
+			return subagent || description
+				? {detail: subagent ?? description ?? ''}
+				: null;
+		}
+		case 'skill':
+		case 'check_skill': {
+			const name = str(args.name);
+			return name ? {detail: name} : null;
+		}
 		case 'lsp_get_diagnostics': {
 			const path = str(args.path) ?? str(args.file_path);
 			return path ? {detail: path} : null;
@@ -428,15 +443,10 @@ function CompactDetailResult({
 
 	return (
 		<Box flexDirection="column" width={boxWidth}>
-			<Text wrap="truncate-end">
-				<ToolGlyph />
-				<Text color={colors.primary}>
-					{getCompactDisplayToolName(toolName)}
-				</Text>
-				<Text color={colors.secondary}>(</Text>
-				<Text color={colors.text}>{flatDetail}</Text>
-				<Text color={colors.secondary}>)</Text>
-			</Text>
+			<ToolCallHeader
+				toolName={getCompactDisplayToolName(toolName)}
+				detail={flatDetail}
+			/>
 			{previewLines.map((line, i) => (
 				<Box key={`preview-${i}-${line.slice(0, 16)}`}>
 					<Text color={colors.secondary}>{i === 0 ? ' ⎿ ' : '   '}</Text>

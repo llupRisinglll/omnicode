@@ -208,6 +208,27 @@ test('CompactToolCountsLine renders completed failed summaries as ran', t => {
 	unmount();
 });
 
+test('displayToolResult - omnicode compact agent renders subagent detail in parentheses', async t => {
+	const toolCall = createMockToolCall('call-agent', 'agent', {
+		subagent_type: 'explore',
+		description: 'inspect auth flow',
+	});
+	const result = createMockToolResult('call-agent', 'agent', 'done');
+	const {addToChatQueue, queue} = createMockAddToChatQueue();
+
+	await displayToolResult(toolCall, result, null, addToChatQueue, true, {
+		iconTheme: true,
+	});
+
+	t.is(queue.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(
+		queue[0] as React.ReactElement,
+	);
+	const output = lastFrame();
+	t.regex(output!, /Task\(explore: inspect auth flow\)/);
+	unmount();
+});
+
 test('displayToolResult - non-compact error still shows full message', async t => {
 	const toolCall = createMockToolCall('call-1', 'write_file');
 	const result = createMockToolResult(
