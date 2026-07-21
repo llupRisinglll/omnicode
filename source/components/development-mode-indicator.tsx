@@ -240,27 +240,34 @@ export const DevelopmentModeIndicator = React.memo(
 										? colors.info
 										: colors.warning
 						}
+						bold={developmentMode !== 'normal'}
 					>
-						<Text bold>{modeLabel}</Text>
-						{showShiftHint && <Text> (Shift+Tab to cycle)</Text>}
+						{modeLabel}
 					</Text>
+					{showShiftHint && (
+						<Text color={colors.secondary}> (Shift+Tab to cycle)</Text>
+					)}
 					{sessionLabel && (
 						<>
 							<Text color={colors.secondary}> · </Text>
-							<Text color={colors.primary}>{sessionLabel}</Text>
+							<Text color={colors.info}>{sessionLabel}</Text>
 						</>
 					)}
 					{tuneLabel && (
 						<>
 							<Text color={colors.secondary}> · </Text>
-							<Text color={colors.info}>{tuneLabel}</Text>
+							<Text color={colors.secondary}>tune: </Text>
+							<Text color={colors.info}>
+								{tuneLabel.replace(/^tune:\s*/, '')}
+							</Text>
 						</>
 					)}
 					{contextPercentUsed !== null && (
 						<>
 							<Text color={colors.secondary}> · </Text>
+							<Text color={colors.secondary}>ctx: </Text>
 							<Text color={getContextColor(contextPercentUsed, colors)}>
-								ctx: {ctxPrefix}
+								{ctxPrefix}
 								{contextBar(contextPercentUsed)} {contextPercentUsed}%
 							</Text>
 						</>
@@ -274,12 +281,16 @@ export const DevelopmentModeIndicator = React.memo(
 				</Box>
 				{(identityLabel || statusInfo?.git) && (
 					<Box>
-						{identityLabel && <Text color={colors.info}>{identityLabel}</Text>}
+						{identityLabel && (
+							<Text color={colors.secondary}>{identityLabel}</Text>
+						)}
 						{statusInfo?.git && (
 							<>
 								{identityLabel && <Text color={colors.secondary}> </Text>}
 								<Text color={colors.info}>git:</Text>
-								<Text color={colors.primary}>({statusInfo.git.branch})</Text>
+								<Text color={colors.secondary}>(</Text>
+								<Text color={colors.error}>{statusInfo.git.branch}</Text>
+								<Text color={colors.secondary}>)</Text>
 								{statusInfo.git.dirty && <Text color={colors.warning}> x</Text>}
 							</>
 						)}
