@@ -1,4 +1,4 @@
-import {hostname, userInfo} from 'node:os';
+import {userInfo} from 'node:os';
 import {basename} from 'node:path';
 import {Box, useInput} from 'ink';
 import React, {useMemo} from 'react';
@@ -8,17 +8,21 @@ import {ModalSelectors} from '@/app/components/modal-selectors';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
+import {StatusLine} from '@/components/StatusLine';
+import {loadPreferences} from '@/config/preferences';
 import type {useChatHandler} from '@/hooks/chat-handler';
 import type {AppHandlers} from '@/hooks/useAppHandlers';
 import type {useAppState} from '@/hooks/useAppState';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
-import {useTerminalRows} from '@/hooks/useTerminalWidth';
+import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {UIStateProvider} from '@/hooks/useUIState';
 import type {useUserMessageQueue} from '@/hooks/useUserMessageQueue';
 import type {useVSCodeServer} from '@/hooks/useVSCodeServer';
 import {getGitStatusSummarySync} from '@/tools/git/utils';
+import {isSingleToolProfile, resolveToolProfile} from '@/tools/tool-profiles';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
+import type {StatusLineData} from '@/types/statusline';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
 import {displayCompactCountsSummary} from '@/utils/tool-result-display';
@@ -253,6 +257,8 @@ export function InteractiveApp({
 	);
 
 	const terminalRows = useTerminalRows();
+	const terminalWidth = useTerminalWidth();
+	const statusLineConfig = loadPreferences().statusLine;
 	const statusInfo = useMemo(() => {
 		let git:
 			| {
@@ -272,11 +278,68 @@ export function InteractiveApp({
 
 		return {
 			user: userInfo().username,
-			host: hostname().split('.')[0],
 			directory: basename(process.cwd()),
 			git,
 		};
 	}, []);
+	const statusLineData = useMemo<StatusLineData | null>(() => {
+		if (!statusLineConfig?.enabled) return null;
+
+		let git: StatusLineData['git'];
+		try {
+			const gs = getGitStatusSummarySync();
+			if (gs) {
+				git = {
+					branch: gs.branch,
+					dirty: gs.detached || gs.isDefault,
+				};
+			}
+		} catch {}
+
+		return {
+			model: {
+				id: appState.currentModel,
+				display_name: appState.currentModel,
+			},
+			workspace: {
+				current_dir: process.cwd(),
+				project_dir: process.cwd(),
+			},
+			git,
+			context: {
+				used_percent: appState.contextPercentUsed,
+			},
+			tune: {
+				enabled: appState.tune.enabled,
+				profile: appState.tune.toolProfile,
+				resolved_profile: resolveToolProfile(
+					appState.tune.toolProfile,
+					appState.currentModel,
+				),
+				tool_mode: isSingleToolProfile(
+					appState.tune.toolProfile,
+					appState.currentModel,
+				)
+					? 'single'
+					: 'parallel',
+			},
+			version: '1.28.1',
+		};
+	}, [
+		statusLineConfig,
+		appState.currentModel,
+		appState.contextPercentUsed,
+		appState.tune,
+	]);
+	const statusLineSlot =
+		statusLineConfig?.enabled && statusLineConfig.command && statusLineData ? (
+			<StatusLine
+				command={statusLineConfig.command}
+				data={statusLineData}
+				terminalWidth={terminalWidth}
+				padding={statusLineConfig.padding ?? 0}
+			/>
+		) : null;
 
 	// Fullscreen layout if and only if cli.tsx put us on the alternate
 	// screen. Inline mode (--no-alt-screen / alternateScreen:false pref),
@@ -425,6 +488,7 @@ export function InteractiveApp({
 								tune={appState.tune}
 								currentModel={appState.currentModel}
 								statusInfo={statusInfo}
+								statusLineSlot={statusLineSlot}
 							/>
 						</UIStateProvider>
 					)}

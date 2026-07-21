@@ -91,6 +91,7 @@ export interface ChatInputProps {
 	tune?: TuneConfig;
 	currentModel?: string;
 	statusInfo?: DevelopmentModeStatusInfo;
+	statusLineSlot?: React.ReactNode;
 
 	// VS Code active editor pushed from the extension (filename + optional selection)
 	activeEditor?: ActiveEditorState | null;
@@ -144,6 +145,7 @@ export function ChatInput({
 	tune,
 	currentModel,
 	statusInfo,
+	statusLineSlot,
 	activeEditor,
 	onDismissActiveEditor,
 }: ChatInputProps): React.ReactElement {
@@ -223,6 +225,7 @@ export function ChatInput({
 						tune={tune}
 						currentModel={currentModel}
 						statusInfo={statusInfo}
+						statusLineSlot={statusLineSlot}
 						activeEditor={activeEditor}
 						onDismissActiveEditor={onDismissActiveEditor}
 					/>
