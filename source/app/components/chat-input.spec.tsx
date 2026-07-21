@@ -195,7 +195,7 @@ test('ChatInput shows live compact counts when compactToolCounts provided', t =>
 	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Ran Read ×5 and Grep ×2/);
+	t.regex(output!, /Running Read ×5 and Grep ×2/);
 	unmount();
 });
 

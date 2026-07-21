@@ -825,15 +825,21 @@ export const processAssistantResponse = async (
 		// tool renders identically however it was approved.
 		const displayOptions = {
 			compactDisplay: compactToolDisplayRef?.current,
-			onCompactToolCount: (toolName: string, detail?: string) => {
+			onCompactToolCount: (
+				toolName: string,
+				detail?: string,
+				failed?: boolean,
+			) => {
 				if (compactToolCountsRef) {
 					const counts = compactToolCountsRef.current;
-					const current = counts[toolName] ?? {count: 0};
+					const key = failed ? `${toolName}:failed` : toolName;
+					const current = counts[key] ?? {count: 0, failed};
 					const currentActivity =
 						typeof current === 'number' ? {count: current} : current;
-					counts[toolName] = {
+					counts[key] = {
 						count: currentActivity.count + 1,
 						detail: detail ?? currentActivity.detail,
+						failed: failed ?? currentActivity.failed,
 					};
 					onSetCompactToolCounts?.({...counts});
 				}

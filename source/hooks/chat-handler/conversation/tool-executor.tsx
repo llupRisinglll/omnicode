@@ -80,7 +80,11 @@ const executeBashStreaming = async (
 /** Display + conversation-state options shared by every executed tool. */
 export interface ToolDisplayOptions {
 	compactDisplay?: boolean;
-	onCompactToolCount?: (toolName: string, detail?: string) => void;
+	onCompactToolCount?: (
+		toolName: string,
+		detail?: string,
+		failed?: boolean,
+	) => void;
 	onLiveTaskUpdate?: () => void;
 	nonInteractiveMode?: boolean;
 	/**
@@ -204,15 +208,20 @@ export const displayExecutedTool = async (
 		};
 
 		if (isError) {
-			// Condense failures to a short red one-liner in compact mode.
-			await displayToolResult(
-				toolCall,
-				result,
-				toolManager,
-				addToChatQueue,
-				true,
-				iconDisplay,
-			);
+			if (options.nonInteractiveMode) {
+				// Non-interactive mode has no live tally renderer, so keep
+				// one-line failures in chronological order.
+				await displayToolResult(
+					toolCall,
+					result,
+					toolManager,
+					addToChatQueue,
+					true,
+					iconDisplay,
+				);
+			} else {
+				options.onCompactToolCount?.(result.name, undefined, true);
+			}
 		} else if (options.nonInteractiveMode) {
 			await displayToolResult(
 				toolCall,
@@ -320,7 +329,11 @@ const executeAgentBatch = async (
 	addToChatQueue: (component: React.ReactNode) => void,
 	compactDisplay?: boolean,
 	setLiveComponent?: (component: React.ReactNode) => void,
-	onCompactToolCount?: (toolName: string, detail?: string) => void,
+	onCompactToolCount?: (
+		toolName: string,
+		detail?: string,
+		failed?: boolean,
+	) => void,
 	nonInteractiveMode?: boolean,
 	signal?: AbortSignal,
 ): Promise<
@@ -449,12 +462,17 @@ const executeAgentBatch = async (
 		if (compactDisplay) {
 			const isError = result.content.startsWith('Error: ');
 			if (isError) {
-				await displayToolResult(
-					e.toolCall,
-					result,
-					toolManager,
-					addToChatQueue,
-				);
+				if (nonInteractiveMode) {
+					await displayToolResult(
+						e.toolCall,
+						result,
+						toolManager,
+						addToChatQueue,
+						true,
+					);
+				} else {
+					onCompactToolCount?.(result.name, undefined, true);
+				}
 			} else if (nonInteractiveMode) {
 				await displayToolResult(
 					e.toolCall,
@@ -516,7 +534,11 @@ export const executeToolsDirectly = async (
 	addToChatQueue: (component: React.ReactNode) => void,
 	options?: {
 		compactDisplay?: boolean;
-		onCompactToolCount?: (toolName: string, detail?: string) => void;
+		onCompactToolCount?: (
+			toolName: string,
+			detail?: string,
+			failed?: boolean,
+		) => void;
 		onLiveTaskUpdate?: () => void;
 		setLiveComponent?: (component: React.ReactNode) => void;
 		/**

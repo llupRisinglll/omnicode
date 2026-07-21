@@ -31,6 +31,7 @@ export const LIVE_TASK_TOOLS = new Set(['write_tasks']);
 export interface CompactToolActivity {
 	count: number;
 	detail?: string;
+	failed?: boolean;
 }
 
 export type CompactToolActivityMap = Record<
@@ -44,7 +45,9 @@ function normalizeCompactToolEntries(
 	counts: CompactToolCountsInput,
 ): Array<[string, CompactToolActivity]> {
 	return Object.entries(counts).map(([toolName, value]) => [
-		toolName,
+		toolName.endsWith(':failed')
+			? toolName.slice(0, -':failed'.length)
+			: toolName,
 		typeof value === 'number' ? {count: value} : value,
 	]);
 }
@@ -53,11 +56,11 @@ function getCompactDisplayToolName(toolName: string): string {
 	return displayForFormat(toolName, 'claude-code');
 }
 
-function ToolGlyph() {
+function ToolGlyph({running = false}: {running?: boolean}) {
 	const {colors} = useTheme();
 	return (
 		<>
-			<Text color={colors.primary}>{'\u2692'} </Text>
+			<Text color={running ? colors.text : colors.primary}>{'\u2692'} </Text>
 			<Text> </Text>
 		</>
 	);
@@ -67,9 +70,11 @@ function ToolGlyph() {
 function CompactToolResult({
 	toolName,
 	count = 1,
+	failed = false,
 }: {
 	toolName: string;
 	count?: number;
+	failed?: boolean;
 }) {
 	const {colors} = useTheme();
 	return (
@@ -77,6 +82,7 @@ function CompactToolResult({
 			<ToolGlyph />
 			<Text color={colors.primary}>{getCompactDisplayToolName(toolName)}</Text>
 			{count > 1 && <Text color={colors.text}> ×{count}</Text>}
+			{failed && <Text color={colors.error}> failed</Text>}
 		</Text>
 	);
 }
@@ -94,7 +100,11 @@ function formatGroupedToolEntries(
 		nodes.push(
 			<React.Fragment key={toolName}>
 				{separator && <Text color={textColor}>{separator}</Text>}
-				<ToolNameWithCount toolName={toolName} count={activity.count} />
+				<ToolNameWithCount
+					toolName={toolName}
+					count={activity.count}
+					failed={activity.failed}
+				/>
 			</React.Fragment>,
 		);
 	}
@@ -104,15 +114,18 @@ function formatGroupedToolEntries(
 function ToolNameWithCount({
 	toolName,
 	count,
+	failed,
 }: {
 	toolName: string;
 	count: number;
+	failed?: boolean;
 }) {
 	const {colors} = useTheme();
 	return (
 		<>
 			<Text color={colors.primary}>{getCompactDisplayToolName(toolName)}</Text>
 			{count > 1 && <Text color={colors.text}> ×{count}</Text>}
+			{failed && <Text color={colors.error}> failed</Text>}
 		</>
 	);
 }
@@ -120,8 +133,10 @@ function ToolNameWithCount({
 /** Compact grouped tool display - shows "⚒ toolA ×N, toolB ×N". */
 export function CompactToolCountsLine({
 	entries,
+	running = false,
 }: {
 	entries: Array<[string, number | CompactToolActivity]>;
+	running?: boolean;
 }) {
 	const {colors} = useTheme();
 	const normalizedEntries = entries.map(([toolName, value]) => [
@@ -135,12 +150,13 @@ export function CompactToolCountsLine({
 
 	return (
 		<Text>
-			<ToolGlyph />
+			<ToolGlyph running={running} />
 			{singleInline ? (
 				<>
 					<ToolNameWithCount
 						toolName={normalizedEntries[0][0]}
 						count={normalizedEntries[0][1].count}
+						failed={normalizedEntries[0][1].failed}
 					/>
 					<Text color={colors.secondary}>(</Text>
 					<Text color={colors.text}>
@@ -150,7 +166,7 @@ export function CompactToolCountsLine({
 				</>
 			) : (
 				<>
-					<Text color={colors.text}>Ran </Text>
+					<Text color={colors.text}>{running ? 'Running ' : 'Ran '}</Text>
 					{formatGroupedToolEntries(normalizedEntries, colors.text)}
 				</>
 			)}
@@ -170,14 +186,7 @@ function truncateDetail(value: string, max = 80): string {
  * so this only trims what the user sees.
  */
 function CompactToolError({toolName}: {toolName: string}) {
-	const {colors} = useTheme();
-	return (
-		<Text>
-			<ToolGlyph />
-			<Text color={colors.primary}>{getCompactDisplayToolName(toolName)}</Text>
-			<Text color={colors.error}> failed</Text>
-		</Text>
-	);
+	return <CompactToolResult toolName={toolName} failed={true} />;
 }
 
 interface CompactFileResultProps {
@@ -468,7 +477,9 @@ export function LiveCompactCounts({counts}: {counts: CompactToolCountsInput}) {
 
 	return (
 		<Box flexDirection="column" marginBottom={1}>
-			{entries.length > 0 && <CompactToolCountsLine entries={entries} />}
+			{entries.length > 0 && (
+				<CompactToolCountsLine entries={entries} running={true} />
+			)}
 		</Box>
 	);
 }

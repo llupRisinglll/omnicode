@@ -1147,6 +1147,20 @@ const PromptCharThemeProvider = ({children}: {children: React.ReactNode}) => {
 	);
 };
 
+test('promptChar input renders current model as a bottom-right badge', t => {
+	const {lastFrame, unmount} = render(
+		<PromptCharThemeProvider>
+			<UserInput currentModel="mimo-v2.5" />
+		</PromptCharThemeProvider>,
+	);
+
+	const output = stripAnsi(lastFrame() ?? '');
+	t.regex(output, /mimo-v2\.5/);
+	t.regex(output, /normal mode on/);
+	t.true(output.indexOf('mimo-v2.5') < output.indexOf('normal mode on'));
+	unmount();
+});
+
 test.serial(
 	'completion rows with realistic long descriptions do not wrap under a promptChar theme',
 	async t => {
@@ -1228,4 +1242,3 @@ test.serial(
 		}
 	},
 );
-

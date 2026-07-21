@@ -6,6 +6,7 @@ import type {ToolManager} from '../tools/tool-manager.js';
 import type {ToolCall, ToolResult} from '../types/core.js';
 import {renderWithTheme} from '../test-utils/render-with-theme.js';
 import {
+	CompactToolCountsLine,
 	LiveCompactCounts,
 	displayCompactCountsSummary,
 	displayToolResult,
@@ -176,6 +177,34 @@ test('displayToolResult - compact mode condenses a validation failure too', asyn
 	const output = lastFrame();
 	t.regex(output!, /Write failed/);
 	t.notRegex(output!, /Invalid file path/);
+	unmount();
+});
+
+test('LiveCompactCounts renders running state and groups failed tools', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				fetch_url: {count: 10, failed: true},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /^⚒\s+Running WebFetch ×10 failed/);
+	t.notRegex(output, /Ran WebFetch/);
+	unmount();
+});
+
+test('CompactToolCountsLine renders completed failed summaries as ran', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<CompactToolCountsLine
+			entries={[['fetch_url', {count: 10, failed: true}]]}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /^⚒\s+Ran WebFetch ×10 failed/);
+	t.notRegex(output, /^ ⚒/);
 	unmount();
 });
 
@@ -635,7 +664,7 @@ test('LiveCompactCounts - renders tool counts', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Ran Read ×3 and Grep ×2/);
+	t.regex(output!, /Running Read ×3 and Grep ×2/);
 	unmount();
 });
 
@@ -684,7 +713,7 @@ test('LiveCompactCounts - renders a single hammer for grouped entries', t => {
 	t.truthy(output);
 	const hammerCount = (output!.match(/\u2692/g) || []).length;
 	t.is(hammerCount, 1);
-	t.regex(output!, /Ran Read and Bash ×2/);
+	t.regex(output!, /Running Read and Bash ×2/);
 	unmount();
 });
 

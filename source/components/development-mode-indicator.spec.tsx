@@ -356,7 +356,7 @@ test('DevelopmentModeIndicator has correct structure', t => {
 	t.regex(output!, /ctx: ~?▰▰▰▱▱▱▱▱▱▱ 25%/);
 });
 
-test('DevelopmentModeIndicator renders model and workspace status rows', t => {
+test('DevelopmentModeIndicator renders workspace status rows without duplicating model', t => {
 	const {lastFrame} = render(
 		<DevelopmentModeIndicator
 			developmentMode="yolo"
@@ -372,7 +372,8 @@ test('DevelopmentModeIndicator renders model and workspace status rows', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /yolo mode on · mimo-v2\.5 · ctx: ~▰▱▱▱▱▱▱▱▱▱ 6%/);
+	t.regex(output, /yolo mode on · ctx: ~▰▱▱▱▱▱▱▱▱▱ 6%/);
+	t.notRegex(output, /mimo-v2\.5/);
 	t.regex(output, /\[engr_luis Hilinga\]\sgit:\(main\) x/);
 });
 
