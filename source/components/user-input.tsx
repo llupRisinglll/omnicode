@@ -356,8 +356,15 @@ export default function UserInput({
 		}
 		if (commandCompletions.length > 0) {
 			setCompletions(commandCompletions);
-			setShowCompletions(true);
-			setSelectedCompletionIndex(0);
+			if (showCompletions) {
+				setSelectedCompletionIndex(prev =>
+					prev >= commandCompletions.length
+						? commandCompletions.length - 1
+						: prev < 0
+							? 0
+							: prev,
+				);
+			}
 		} else if (showCompletions) {
 			setCompletions([]);
 			setShowCompletions(false);
@@ -437,9 +444,13 @@ export default function UserInput({
 		let display = expandPastePlaceholdersForDisplay(currentState);
 
 		// Image file paths the user typed, pasted, or dragged into the terminal
-		// (often quoted, mixed in with prose) become attachments and are stripped
-		// from the message text rather than sent as literal paths.
-		const {text: cleanedAssembled, paths} = extractImageReferences(assembled);
+		// (often quoted, mixed in with prose) become attachments; the literal
+		// path in the message text is replaced with an `[Image #N]` placeholder,
+		// numbered after any attachments already added via Ctrl+V.
+		const {text: cleanedAssembled, paths} = extractImageReferences(
+			assembled,
+			attachments.length,
+		);
 		if (paths.length > 0) {
 			const dropped = paths
 				.map(readImageFile)
@@ -447,7 +458,7 @@ export default function UserInput({
 			if (dropped.length > 0) {
 				images = [...attachments, ...dropped];
 				assembled = cleanedAssembled;
-				display = extractImageReferences(display).text;
+				display = extractImageReferences(display, attachments.length).text;
 			}
 		}
 
@@ -502,6 +513,16 @@ export default function UserInput({
 
 	// Handle escape key logic
 	const handleEscape = useCallback(() => {
+		if (showCompletions) {
+			setShowCompletions(false);
+			setSelectedCompletionIndex(-1);
+			return;
+		}
+		if (isFileAutocompleteMode) {
+			setIsFileAutocompleteMode(false);
+			setFileCompletions([]);
+			return;
+		}
 		if (showClearMessage) {
 			resetInput();
 			resetUIState();
@@ -512,7 +533,11 @@ export default function UserInput({
 			setShowClearMessage(true);
 		}
 	}, [
+		showCompletions,
+		isFileAutocompleteMode,
 		showClearMessage,
+		setShowCompletions,
+		setSelectedCompletionIndex,
 		resetInput,
 		resetUIState,
 		onDismissActiveEditor,
@@ -761,6 +786,7 @@ export default function UserInput({
 					// Show completions when there are multiple matches
 					setCompletions(commandCompletions);
 					setShowCompletions(true);
+					setSelectedCompletionIndex(0);
 				}
 				return;
 			}

@@ -266,11 +266,6 @@ export default function QuestionPrompt({
 				borderBottom={false}
 				borderLeftColor={colors.secondary}
 			>
-				{question.questionType && (
-					<Text color={colors.secondary}>
-						{TYPE_BADGE[question.questionType]}{' '}
-					</Text>
-				)}
 				<Text color={colors.text}>{ensureString(question.question)}</Text>
 			</Box>
 
