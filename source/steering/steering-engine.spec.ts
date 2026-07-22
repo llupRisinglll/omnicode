@@ -216,6 +216,72 @@ test('evaluate: after maxFires real injections, escalate to stop', async t => {
 	t.is(innerdaemonCalls, 0, 'must not call InnerDaemon after maxFires');
 });
 
+// --- escalation ladder on relapse (finding #9) -----------------------------
+
+test('evaluate: relapse escalation — inject → firm → block, with escalationLevel threaded to InnerDaemon', async t => {
+	// maxFires 5 so the ladder can climb past the block rung (level 3) before the
+	// maxFires stop backstop. cooldown 1 so each later turn can re-fire.
+	const rule: SteeringRule = {
+		...worktreeRule,
+		maxFires: 5,
+		cooldownTurns: 1,
+	};
+	const seenLevels: number[] = [];
+	const engine = new SteeringEngine({
+		rules: [rule],
+		modelId: MIMO,
+		criterionChecker: neverMet,
+		innerdaemon: async req => {
+			seenLevels.push(req.situation.escalationLevel ?? -1);
+			return {action: 'inject', message: 'nudge', urgency: 'light'};
+		},
+	});
+	const factsUpTo = (n: number): TurnFact[] =>
+		Array.from({length: n + 1}, (_, i) => worktreeFact(i));
+
+	// Fire 1 (turn 2, level 0): byte-identical first nudge — inject, light.
+	let action = await engine.evaluate(factsUpTo(2));
+	t.is(action?.type, 'inject');
+	t.is((action as {urgency?: string}).urgency, 'light', 'first fire stays light');
+
+	// Fire 2 (turn 4, level 1): firmer re-nudge — inject, firm.
+	action = await engine.evaluate(factsUpTo(4));
+	t.is(action?.type, 'inject');
+	t.is((action as {urgency?: string}).urgency, 'firm', 'second fire is firm');
+
+	// Fire 3 (turn 6, level 2): still a firm inject.
+	action = await engine.evaluate(factsUpTo(6));
+	t.is(action?.type, 'inject');
+	t.is((action as {urgency?: string}).urgency, 'firm');
+
+	// Fire 4 (turn 8, level 3): persistent relapse → the repeat inject upgrades
+	// to a block.
+	action = await engine.evaluate(factsUpTo(8));
+	t.is(action?.type, 'block', 'level ≥ 3 upgrades a repeated inject to block');
+
+	// escalationLevel rose across the fires and was handed to InnerDaemon.
+	t.deepEqual(seenLevels, [0, 1, 2, 3], 'escalationLevel climbs with each fire');
+});
+
+test('evaluate: maxFires stop backstop still terminal above the block rung', async t => {
+	// maxFires 5: after five real injections the sixth candidate is a hard stop,
+	// regardless of the escalation ladder.
+	const rule: SteeringRule = {...worktreeRule, maxFires: 5, cooldownTurns: 1};
+	const engine = engineWith([rule], {
+		action: 'inject',
+		message: 'nudge',
+		urgency: 'light',
+	});
+	const factsUpTo = (n: number): TurnFact[] =>
+		Array.from({length: n + 1}, (_, i) => worktreeFact(i));
+	// Fires at turns 2,4,6,8,10 (5 fires), then turn 12 → count 5 ≥ maxFires 5.
+	for (const turn of [2, 4, 6, 8, 10]) {
+		await engine.evaluate(factsUpTo(turn));
+	}
+	const action = await engine.evaluate(factsUpTo(12));
+	t.is(action?.type, 'stop', 'maxFires reached → stop backstop');
+});
+
 // --- cooldown --------------------------------------------------------------
 
 test('evaluate: rule in cooldown is skipped, next candidate tried', async t => {

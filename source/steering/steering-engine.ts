@@ -69,6 +69,41 @@ export interface EvaluateOptions {
 	onDiagnostic?: (diagnostic: SteeringDiagnostic) => void;
 }
 
+/**
+ * Escalation ladder (finding #9 — "no escalation on relapse"). Repeated firing
+ * of the SAME rule without its success criterion being met is a RELAPSE; each
+ * successive fire should get firmer instead of re-nudging identically. The
+ * level is the rule's PRIOR fire count ({@link RuleFireState.count} before this
+ * fire is recorded):
+ *
+ *   level 0 (first fire):        inject, urgency 'light'  — byte-identical.
+ *   level 1 (second fire):       inject, urgency 'firm'   — firmer re-nudge.
+ *   level 2 (third fire):        inject, urgency 'firm'   — still a firm nudge.
+ *   level ≥ {@link ESCALATE_BLOCK_LEVEL} (persistent relapse):
+ *                                upgrade inject → block   — stop re-nudging.
+ *
+ * The `maxFires → stop` backstop is UNCHANGED and is consulted BEFORE this
+ * ladder: once `count ≥ maxFires` the candidate is a hard `stop`. So a rule
+ * with the default maxFires (3) climbs nudge → firm → firm → stop, and only
+ * rules with a larger maxFires reach the block rung — which keeps the existing
+ * maxFires-backstop behavior (three injects then stop) intact. A non-`inject`
+ * action (a native InnerDaemon block/stop) is already terminal and passes
+ * through unescalated. `escalationLevel` is ALSO threaded into the InnerDaemon
+ * request so InnerDaemon can raise its OWN message firmness independently.
+ */
+const ESCALATE_BLOCK_LEVEL = 3;
+
+function escalateAction(action: SteeringAction, level: number): SteeringAction {
+	if (action.type !== 'inject') return action;
+	if (level >= ESCALATE_BLOCK_LEVEL) {
+		return {type: 'block', message: action.message, urgency: 'firm'};
+	}
+	if (level >= 1) {
+		return {...action, urgency: 'firm'};
+	}
+	return action;
+}
+
 /** Map a real {@link SteeringAction} type to its diagnostic decision label. */
 function mapDecision(
 	type: 'inject' | 'block' | 'stop',
@@ -263,6 +298,12 @@ export class SteeringEngine {
 			lastFireTurn: -Infinity,
 		};
 
+		// Relapse-escalation level = how many times this rule has ALREADY fired
+		// without progress (0 on the first fire → byte-identical nudge). Threaded
+		// into the InnerDaemon request AND used to upgrade a repeated inject at
+		// the top level (see escalateAction).
+		const escalationLevel = st.count;
+
 		// Escalation: rule already fired maxFires times → hard stop.
 		if (st.count >= maxFires) {
 			logger.info('steering: maxFires exceeded → stop', {
@@ -283,15 +324,18 @@ export class SteeringEngine {
 		// detector-only rules act directly (no InnerDaemon call).
 		if (rule.mode === 'detector-only') {
 			this.recordFire(rule.id, candidate.turnIndex);
-			return {
-				type: 'inject',
-				message: this.detectorOnlyMessage(rule, candidate),
-				urgency: 'light',
-			};
+			return escalateAction(
+				{
+					type: 'inject',
+					message: this.detectorOnlyMessage(rule, candidate),
+					urgency: 'light',
+				},
+				escalationLevel,
+			);
 		}
 
 		// innerdaemon rules delegate to the secondary thinker.
-		const req = this.buildRequest(rule, candidate, facts);
+		const req = this.buildRequest(rule, candidate, facts, escalationLevel);
 		const response = await this.innerdaemon(req, signal);
 		const action = innerdaemonResponseToAction(response);
 
@@ -299,6 +343,10 @@ export class SteeringEngine {
 		// a fire slot — a false alarm shouldn't burn the escalation budget).
 		if (action.type !== 'noop') {
 			this.recordFire(rule.id, candidate.turnIndex);
+			// Relapse upgrade: a repeated inject gets firmer / becomes a block as
+			// the escalation level climbs (the maxFires stop backstop already
+			// handled the terminal rung above).
+			return escalateAction(action, escalationLevel);
 		}
 		return action;
 	}
@@ -317,6 +365,7 @@ export class SteeringEngine {
 		rule: SteeringRule,
 		candidate: SteeringCandidate,
 		facts: TurnFact[],
+		escalationLevel: number,
 	): InnerDaemonRequest {
 		const latest = facts[facts.length - 1];
 		const criterion = rule.watch?.successCriterion;
@@ -334,6 +383,7 @@ export class SteeringEngine {
 				triggerReason: candidate.reason,
 				successCriterion: criterion,
 				criterionMet,
+				escalationLevel,
 			},
 		};
 	}

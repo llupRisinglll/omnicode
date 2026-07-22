@@ -82,6 +82,11 @@ export function buildInnerDaemonPrompt(req: InnerDaemonRequest): string {
 			`- Observable success criterion: ${s.successCriterion} — ${s.criterionMet ? 'MET (probably a false alarm — prefer noop)' : 'NOT YET MET'}`,
 		);
 	}
+	if (typeof s.escalationLevel === 'number' && s.escalationLevel > 0) {
+		lines.push(
+			`- Escalation level: ${s.escalationLevel} — this rule has ALREADY fired ${s.escalationLevel} time(s) without the criterion being met (a RELAPSE). Make your message firmer and more directive than a first nudge; at higher levels the engine will upgrade a repeat inject toward a block.`,
+		);
+	}
 	lines.push('', '## Recent turns (oldest → newest):');
 	lines.push(renderRecentTurns(s.recentTurns));
 	lines.push(

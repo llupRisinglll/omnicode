@@ -128,6 +128,22 @@ export interface SteeringRuleWatch {
 	successCriterion?: SuccessCriterion;
 	/** Max consecutive turns in-scope without the criterion being met. */
 	maxTurnsWithoutSuccess?: number;
+	/**
+	 * Time/effort-aware budget (finding #9): max WALL-CLOCK milliseconds elapsed
+	 * across the SAME consecutive in-scope window ({@link maxTurnsWithoutSuccess}
+	 * measures) without the criterion being met. The rule becomes a candidate
+	 * when EITHER the turn budget is exhausted OR — if this is set — the elapsed
+	 * in-scope wall-clock (latest `TurnFact.wallClockMs` − the window's first
+	 * `wallClockMs`) reaches this. Catches the slow-spiral case (few turns, many
+	 * minutes) that a pure turn count misses. A met success criterion resets this
+	 * window exactly as it resets the turn counter (they share one reset). When
+	 * unset, budget behavior is byte-identical to the turn-count-only path.
+	 *
+	 * Evaluated at the TURN BOUNDARY (retroactive — "the last window took too
+	 * long"); true within-turn interruption is deferred (see the code comment in
+	 * `detector.ts` and finding #9 in `docs/innerdaemon-steering-findings.md`).
+	 */
+	maxWallClockMsWithoutSuccess?: number;
 	/** Hard constraints that fire instantly (detector-only, no budget). */
 	alsoBlock?: SteeringToolConstraint[];
 	/**
@@ -264,6 +280,15 @@ export interface InnerDaemonRequest {
 		successCriterion?: SuccessCriterion;
 		/** Result of checking the criterion this turn. */
 		criterionMet?: boolean;
+		/**
+		 * Relapse-escalation level (finding #9), derived from how many times this
+		 * rule has ALREADY fired without the criterion being met: 0 = first nudge,
+		 * 1 = firmer re-nudge, ≥2 = persistent relapse. InnerDaemon reads this to
+		 * raise its own message firmness; the engine also uses it at the top level
+		 * to upgrade a repeated `inject` toward `block`/`stop`. Absent/0 means a
+		 * first fire — behave exactly as before.
+		 */
+		escalationLevel?: number;
 	};
 }
 

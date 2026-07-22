@@ -501,3 +501,95 @@ test('evaluateRules: countRepeatedLatestCall counts turns with the identical pro
 		"two turns issued the latest turn's probe",
 	);
 });
+
+// --- evaluateRules: time/effort-aware budget (maxWallClockMsWithoutSuccess) ---
+// finding #9: a slow spiral (few turns, many minutes) must trip on wall-clock
+// even though the turn count is far below `maxTurnsWithoutSuccess`.
+
+// A worktree-creation turn stamped at a specific wall-clock (ms since loop start).
+const timedWorktreeFact = (turnIndex: number, wallClockMs: number): TurnFact =>
+	makeFact({
+		turnIndex,
+		wallClockMs,
+		intentClass: 'worktree-creation',
+		toolCalls: [
+			toolCall('a', 'execute_bash', {command: 'git worktree add x'}),
+		],
+		toolResults: [toolResult('a', 'execute_bash')],
+	});
+
+// A rule whose turn budget is deliberately huge (99) so the ONLY thing that can
+// trip it is the wall-clock budget — proving the time gate fires independently.
+const slowSpiralRule = (maxMs: number): SteeringRule => ({
+	id: 'slow-spiral',
+	mode: 'innerdaemon',
+	condition: {intentClass: 'worktree-creation'},
+	watch: {
+		successCriterion: 'worktreeDirExists',
+		maxTurnsWithoutSuccess: 99,
+		maxWallClockMsWithoutSuccess: maxMs,
+	},
+});
+
+test('evaluateRules: elapsed in-scope wall-clock ≥ budget → candidate (turn count far below turn budget)', t => {
+	// 3 turns spanning 6 minutes; turn budget is 99 so turns cannot trip it.
+	const facts = [
+		timedWorktreeFact(0, 0),
+		timedWorktreeFact(1, 120_000),
+		timedWorktreeFact(2, 360_000),
+	];
+	const cands = evaluateRules(
+		facts,
+		[slowSpiralRule(300_000)], // 5-minute wall-clock budget
+		MIMO,
+		alwaysFalseChecker,
+	);
+	t.is(cands.length, 1, 'elapsed 6min ≥ 5min budget → fires on wall-clock');
+	t.is(cands[0].rule.id, 'slow-spiral');
+});
+
+test('evaluateRules: elapsed wall-clock UNDER budget → no candidate', t => {
+	// Same 3 turns but only 2 seconds elapsed — under the 5-minute budget.
+	const facts = [
+		timedWorktreeFact(0, 0),
+		timedWorktreeFact(1, 1_000),
+		timedWorktreeFact(2, 2_000),
+	];
+	const cands = evaluateRules(
+		facts,
+		[slowSpiralRule(300_000)],
+		MIMO,
+		alwaysFalseChecker,
+	);
+	t.is(cands.length, 0, 'elapsed 2s < 5min budget and turns < 99 → no candidate');
+});
+
+test('evaluateRules: a met success criterion resets the wall-clock window', t => {
+	// The whole window spans 10 minutes, but the criterion is met each turn →
+	// the in-scope window is empty, so no elapsed time accrues.
+	const facts = [
+		timedWorktreeFact(0, 0),
+		timedWorktreeFact(1, 300_000),
+		timedWorktreeFact(2, 600_000),
+	];
+	const cands = evaluateRules(
+		facts,
+		[slowSpiralRule(60_000)],
+		MIMO,
+		alwaysTrueChecker,
+	);
+	t.is(cands.length, 0, 'criterion met resets the window → wall-clock does not accrue');
+});
+
+test('evaluateRules: unpopulated wall-clock (0) is no time signal → byte-identical to turn-only', t => {
+	// All turns at wallClockMs 0 (no instrumentation). With the turn budget high,
+	// neither gate trips — exactly as the turn-count-only path behaved.
+	const facts = [0, 1, 2].map(i => timedWorktreeFact(i, 0));
+	const cands = evaluateRules(
+		facts,
+		[slowSpiralRule(1)], // even a 1ms budget must NOT fire without a real clock
+		MIMO,
+		alwaysFalseChecker,
+	);
+	t.is(cands.length, 0, 'wallClockMs 0 → treated as no time signal');
+});

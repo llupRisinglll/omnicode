@@ -214,10 +214,49 @@ export function evaluateRules(
 		if (watch) {
 			const budget =
 				watch.maxTurnsWithoutSuccess ?? DEFAULT_STEERING_BUDGET_TURNS;
-			const budgetExhausted =
-				consecutiveInScopeCount(facts, rule, checker) >= budget;
+			const inScopeCount = consecutiveInScopeCount(facts, rule, checker);
+			const budgetExhausted = inScopeCount >= budget;
+
+			// Time/effort-aware budget (finding #9): in addition to counting
+			// in-scope TURNS, spend the budget by WALL-CLOCK across the SAME
+			// in-scope window. The window is exactly the consecutive in-scope
+			// streak `consecutiveInScopeCount` measured — its first turn is
+			// `facts[facts.length - inScopeCount]` — so a met success criterion,
+			// which breaks that streak, resets the elapsed clock in lockstep with
+			// the turn counter (one shared reset). Elapsed = latest.wallClockMs −
+			// windowStart.wallClockMs; the rule becomes a candidate when EITHER
+			// budget is exhausted. This catches the slow-spiral case (few turns,
+			// many minutes) that a pure turn count misses.
+			//
+			// DEFERRED (finding #9): this fires at the TURN BOUNDARY, so it is
+			// retroactive — it catches "the window that just ended took too long."
+			// True mid-turn interruption (aborting a turn WHILE it burns past a
+			// time budget) needs a watchdog/timer in the streaming conversation
+			// loop OUTSIDE this turn-boundary `evaluate()`, which is out of scope
+			// here. See finding #9 in docs/innerdaemon-steering-findings.md.
+			let wallClockExhausted = false;
+			if (
+				watch.maxWallClockMsWithoutSuccess !== undefined &&
+				inScopeCount > 0
+			) {
+				const windowStart = facts[facts.length - inScopeCount];
+				const startMs = windowStart.wallClockMs;
+				const latestMs = latest.wallClockMs;
+				// Guard: an unpopulated wall-clock (0 on the latest turn) is treated
+				// as NO time signal, so histories without wall-clock instrumentation
+				// behave exactly as the turn-count-only path did.
+				if (latestMs > 0 && latestMs >= startMs) {
+					wallClockExhausted =
+						latestMs - startMs >= watch.maxWallClockMsWithoutSuccess;
+				}
+			}
+
 			let repeatTripped = false;
-			if (!budgetExhausted && watch.repeatThreshold !== undefined) {
+			if (
+				!budgetExhausted &&
+				!wallClockExhausted &&
+				watch.repeatThreshold !== undefined
+			) {
 				// Suppress the repeat trigger when the goal is already met (a
 				// confirming probe of a live port is fine — draft's noop case).
 				const met =
@@ -229,7 +268,7 @@ export function evaluateRules(
 						countRepeatedLatestCall(facts, watch) >= watch.repeatThreshold;
 				}
 			}
-			if (!budgetExhausted && !repeatTripped) continue;
+			if (!budgetExhausted && !wallClockExhausted && !repeatTripped) continue;
 		}
 
 		candidates.push({
