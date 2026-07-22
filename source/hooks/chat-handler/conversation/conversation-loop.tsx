@@ -23,6 +23,7 @@ import {generateKey} from '@/session/key-generator';
 import {classifyIntent} from '@/steering/intent-classifier';
 import type {SteeringEngine} from '@/steering/steering-engine';
 import type {SteeringDiagnostic, TurnFact} from '@/steering/types';
+import {recoverAndRecord} from '@/tool-call-recovery-host/recover-and-record';
 import {
 	parseToolCalls,
 	stripEmbeddedToolCallText,
@@ -168,6 +169,17 @@ let hasShownFallbackNotice = false;
 export const resetFallbackNotice = () => {
 	hasShownFallbackNotice = false;
 };
+
+/**
+ * Cheap guard: does this text look like it CONTAINS a (possibly malformed) tool
+ * call? Runs on every no-executable-call turn before the heavier recovery, so we
+ * don't pay recovery cost on ordinary prose answers.
+ */
+function looksLikeToolCallText(text: string): boolean {
+	return /<tool_call|<function=|<\|tool|```tool_call|"(tool|name)"\s*:\s*"[^"]+"[\s\S]*"(arguments|parameters)"\s*:/i.test(
+		text,
+	);
+}
 
 // Tracks whether the most recently emitted turn contained reasoning. Used by
 // the next flushCompactCounts call to decide whether the summary should be
@@ -482,6 +494,53 @@ export const processAssistantResponse = async (
 				hideBox={true}
 			/>,
 		);
+	}
+
+	// --- Auto-recover malformed / leaked tool calls -------------------------
+	// When the model emitted tool-call-shaped text that produced NO executable
+	// call (a malformed parse, or an unrecognized leak on the native path — the
+	// weak/Chinese-model failure mode), record it to the dataset file and run the
+	// tiered recovery (deterministic → learned → LLM agent). On success, splice
+	// the recovered calls into `parseResult` so the normal execution path runs
+	// them and the conversation AUTO-RESUMES instead of stopping. Every event is
+	// logged to the dataset regardless of outcome — that data grows the recovery.
+	const noExecutableCalls =
+		!hasNativeToolCalls &&
+		(!parseResult.success || parseResult.toolCalls.length === 0);
+	if (noExecutableCalls && toolManager && looksLikeToolCallText(fullContent)) {
+		try {
+			const rec = await recoverAndRecord({
+				rawText: fullContent,
+				toolNames: toolManager.getAvailableToolNames(
+					tune,
+					developmentModeRef?.current ?? developmentMode,
+					undefined,
+					currentModel,
+				),
+				client,
+				model: currentModel,
+				error: parseResult.success ? undefined : parseResult.error,
+				makeId: () => generateKey('recovered-tool'),
+			});
+			if (rec.recovered.length > 0) {
+				addToChatQueue(
+					<InfoMessage
+						key={generateKey('tool-recovered')}
+						message={`Auto-recovered ${rec.recovered.length} malformed tool call(s) [${rec.recovered
+							.map(r => r.confidence)
+							.join(', ')}] and resumed.`}
+						hideBox={true}
+					/>,
+				);
+				parseResult = {
+					success: true,
+					toolCalls: rec.recovered.map(r => r.toolCall),
+					cleanedContent: rec.strippedText,
+				};
+			}
+		} catch {
+			// Recovery is best-effort; fall through to the existing handling.
+		}
 	}
 
 	// Check for malformed tool calls and send error back to model for self-correction
