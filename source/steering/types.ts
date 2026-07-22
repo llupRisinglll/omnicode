@@ -281,6 +281,16 @@ export interface InnerDaemonRequest {
 		/** Result of checking the criterion this turn. */
 		criterionMet?: boolean;
 		/**
+		 * ANTI-criterion ordering signal (tdd-discipline, finding #8): true when,
+		 * in THIS task, an implementation (non-`.spec`/`.test`) source file was
+		 * written BEFORE any test file. Computed INDEPENDENTLY of the rule's own
+		 * {@link successCriterion} (so a rule watching `newTestFileExists` can still
+		 * observe the ordering violation) and surfaced in the InnerDaemon prompt.
+		 * Unlike {@link criterionMet} (a positive goal), `true` here is a VIOLATION
+		 * the daemon reads to decide a test-first nudge; absent/false = no violation.
+		 */
+		implEditedBeforeTest?: boolean;
+		/**
 		 * Relapse-escalation level (finding #9), derived from how many times this
 		 * rule has ALREADY fired without the criterion being met: 0 = first nudge,
 		 * 1 = firmer re-nudge, ≥2 = persistent relapse. InnerDaemon reads this to

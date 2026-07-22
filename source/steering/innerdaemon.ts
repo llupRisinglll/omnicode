@@ -87,6 +87,11 @@ export function buildInnerDaemonPrompt(req: InnerDaemonRequest): string {
 			`- Escalation level: ${s.escalationLevel} — this rule has ALREADY fired ${s.escalationLevel} time(s) without the criterion being met (a RELAPSE). Make your message firmer and more directive than a first nudge; at higher levels the engine will upgrade a repeat inject toward a block.`,
 		);
 	}
+	if (s.implEditedBeforeTest) {
+		lines.push(
+			'- Ordering signal: implEditedBeforeTest = TRUE — an implementation (non-test) source file was written in THIS task BEFORE any regression test existed. If this rule enforces test-first (TDD) discipline, this confirms the impl-first violation: nudge the model to write the failing regression test first, run it, and watch it fail before editing implementation. If this rule is unrelated to test ordering, ignore this signal.',
+		);
+	}
 	lines.push('', '## Recent turns (oldest → newest):');
 	lines.push(renderRecentTurns(s.recentTurns));
 	lines.push(

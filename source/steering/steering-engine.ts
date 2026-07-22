@@ -373,6 +373,17 @@ export class SteeringEngine {
 			criterion && criterion !== 'none'
 				? this.checker(criterion, latest, facts)
 				: undefined;
+		// Surface the loop-stateful impl-before-test ordering VIOLATION to
+		// InnerDaemon independently of this rule's own successCriterion. This is
+		// what lets `tdd-discipline` (which watches `newTestFileExists` for its
+		// budget gate) hand InnerDaemon the anti-criterion it actually decides on —
+		// see docs/innerdaemon-steering-findings.md finding #8. Cheap loop scan; a
+		// non-tdd rule simply never reads the surfaced signal in its prompt.
+		const implEditedBeforeTest = this.checker(
+			'implEditedBeforeTest',
+			latest,
+			facts,
+		);
 		return {
 			ruleId: rule.id,
 			ruleBody: rule.body ?? '',
@@ -383,6 +394,7 @@ export class SteeringEngine {
 				triggerReason: candidate.reason,
 				successCriterion: criterion,
 				criterionMet,
+				implEditedBeforeTest,
 				escalationLevel,
 			},
 		};

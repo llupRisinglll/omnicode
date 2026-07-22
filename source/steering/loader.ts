@@ -106,6 +106,21 @@ function parseWatch(raw: unknown): SteeringRuleWatch | undefined {
 	if (sc) watch.successCriterion = sc;
 	if (o.maxTurnsWithoutSuccess !== undefined)
 		watch.maxTurnsWithoutSuccess = asNumber(o.maxTurnsWithoutSuccess, 0);
+	// Time/effort-aware budget (finding #9) — the detector already honors this
+	// field; the loader must parse it so a rule can declare it in frontmatter.
+	if (o.maxWallClockMsWithoutSuccess !== undefined)
+		watch.maxWallClockMsWithoutSuccess = asNumber(
+			o.maxWallClockMsWithoutSuccess,
+			0,
+		);
+	// Windowed repeat-detection trigger (runtime-setup-loop). Parsed here so the
+	// detector's `countRepeatedLatestCall` gate can be armed from frontmatter.
+	if (o.repeatThreshold !== undefined)
+		watch.repeatThreshold = asNumber(o.repeatThreshold, 0);
+	if (o.repeatToolMatches) {
+		const arr = asStringArray(o.repeatToolMatches);
+		if (arr) watch.repeatToolMatches = arr;
+	}
 	if (Array.isArray(o.alsoBlock)) {
 		const blocks = o.alsoBlock
 			.map(parseConstraint)
