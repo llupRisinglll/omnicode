@@ -180,6 +180,7 @@ export default function UserInput({
 		resetInput,
 		deletePlaceholder: _deletePlaceholder,
 		currentState,
+		currentStateRef,
 		setInputState,
 	} = inputState;
 
@@ -842,13 +843,15 @@ export default function UserInput({
 			(key.ctrl && inputChar === 'j') ||
 			(inputChar === '\n' && !key.return)
 		) {
-			updateInput(input + '\n');
+			// Build from the ref, not render-time `input` — within one coalesced
+			// stdin chunk `input` is stale and would drop same-chunk characters.
+			updateInput(currentStateRef.current.displayValue + '\n');
 			return;
 		}
 
 		// Support Shift+Enter if the terminal sends it properly
 		if (key.return && key.shift) {
-			updateInput(input + '\n');
+			updateInput(currentStateRef.current.displayValue + '\n');
 			return;
 		}
 

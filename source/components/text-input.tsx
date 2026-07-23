@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import {Text, useInput} from 'ink';
-import {useEffect, useRef, useState} from 'react';
+import {useLayoutEffect, useRef, useState} from 'react';
 import {useOptionalTheme} from '@/hooks/useTheme';
 import {
 	findSpanForBackspace,
@@ -73,30 +73,58 @@ function TextInput({
 
 	const {cursorOffset, cursorWidth} = state;
 
-	// Refs so useInput handlers always read the latest values (avoids stale closures)
+	// Refs so useInput handlers always read the latest values (avoids stale
+	// closures). Both are the source of truth DURING a synchronous keypress batch
+	// (advanced per-event in the handler below, since Ink doesn't re-render
+	// between events). They are reconciled with the controlled prop only through
+	// the gated-adoption effect below — never clobbered on every render, which
+	// dragged the cursor backward mid-burst because the prop lags the handler.
 	const cursorOffsetRef = useRef(cursorOffset);
 	const originalValueRef = useRef(originalValue);
-	cursorOffsetRef.current = cursorOffset;
-	originalValueRef.current = originalValue;
+	// The value we last handed to onChange, and the last prop we reconciled.
+	// Together they tell an external value change (parent edited the value) apart
+	// from a late echo of our own typing (React's flush after an Ink keypress is
+	// scheduler-deferred, so the controlled prop trails our refs by a render).
+	const lastEmittedRef = useRef(originalValue);
+	const lastSeenPropRef = useRef(originalValue);
 
-	useEffect(() => {
-		setState(previousState => {
-			if (!focus || !showCursor) {
-				return previousState;
-			}
-
-			const newValue = originalValue || '';
-
-			if (previousState.cursorOffset > newValue.length - 1) {
-				return {
-					cursorOffset: newValue.length,
-					cursorWidth: 0,
-				};
-			}
-
-			return previousState;
-		});
-	}, [originalValue, focus, showCursor]);
+	// Gated adoption of external value changes. Runs before paint so a reconciled
+	// cursor never flickers. Two cases the controlled `value` prop can change for:
+	//   (a) a late echo of a value WE emitted — refs already reflect it, ignore.
+	//   (b) the parent changed the value itself (Ctrl+J appends '\n', history
+	//       restore, paste-merge transform, clear) — adopt it AND reconcile the
+	//       cursor. The old code adopted the value on every render but never moved
+	//       the cursor, so an external append left the cursor 1-2 chars behind and
+	//       the next keystrokes landed in the wrong place ("pointer drifts
+	//       backward while typing").
+	useLayoutEffect(() => {
+		if (originalValue === lastSeenPropRef.current) {
+			return; // prop unchanged since we last reconciled
+		}
+		lastSeenPropRef.current = originalValue;
+		if (originalValue === lastEmittedRef.current) {
+			return; // our own echo — refs already reflect it
+		}
+		const previousValue = originalValueRef.current;
+		originalValueRef.current = originalValue;
+		lastEmittedRef.current = originalValue;
+		const nextOffset = originalValue.startsWith(previousValue)
+			? // Pure append (e.g. Ctrl+J adds a trailing '\n'): advance the cursor
+				// past the appended text so it stays at the true end.
+				cursorOffsetRef.current + (originalValue.length - previousValue.length)
+			: // Replacement / shrink / clear: clamp into bounds and off a placeholder.
+				snapOutOfPlaceholder(
+					originalValue,
+					Math.min(cursorOffsetRef.current, originalValue.length),
+					'right',
+				);
+		cursorOffsetRef.current = nextOffset;
+		setState(previous =>
+			previous.cursorOffset === nextOffset
+				? previous
+				: {cursorOffset: nextOffset, cursorWidth: 0},
+		);
+	}, [originalValue]);
 
 	// Word-jump helpers (whitespace-delimited, like readline Alt+B/F)
 	// Newlines are treated as whitespace — Ctrl+Left/Right cross line boundaries.
@@ -205,6 +233,14 @@ function TextInput({
 			if ((key.ctrl && input === 'c') || key.tab || (key.shift && key.tab)) {
 				return;
 			}
+
+			// Use the synchronously-updated cursor ref, NOT the render-time
+			// `cursorOffset` destructured from state above. Ink fires every keypress
+			// in one stdin chunk synchronously with no re-render between, so a
+			// coalesced fast-typing burst's 2nd+ event would otherwise insert/delete
+			// at the STALE render-time cursor (the "cursor jumps back while typing
+			// fast" bug). The ref is advanced at the end of each event below.
+			const cursorOffset = cursorOffsetRef.current;
 
 			// Multiline: Up/Down navigate between visual lines instead of history.
 			// Visual lines include soft-wrapped rows — a single long line with no
@@ -395,6 +431,52 @@ function TextInput({
 					}
 				}
 			} else {
+				// A coalesced burst can carry chars AND Enter as ONE event: key.return
+				// is false and a literal \r sits inside `input` (e.g. "hello\r"). Split
+				// on CR boundaries and replay so Enter still submits instead of a stray
+				// CR landing in the buffer. (LF/\n is left intact for multiline.)
+				const parts = input.split(/\r\n|\r(?!\n)/);
+				if (parts.length > 1) {
+					const submit = handleEnter ? (onEnter ?? onSubmit) : undefined;
+					let curValue = originalValueRef.current;
+					let curOffset = cursorOffsetRef.current;
+
+					const commit = (width: number) => {
+						cursorOffsetRef.current = curOffset;
+						setState({cursorOffset: curOffset, cursorWidth: width});
+						if (curValue !== originalValueRef.current) {
+							originalValueRef.current = curValue;
+							lastEmittedRef.current = curValue;
+							onChange(curValue);
+						}
+					};
+
+					for (let p = 0; p < parts.length; p++) {
+						if (p > 0) {
+							// The CR between segments is an Enter: flush the pending value,
+							// then fire the submit/enter handler with the ref value.
+							commit(0);
+							submit?.(originalValueRef.current);
+							// Parent may have reset the value on submit; resync from the ref.
+							curValue = originalValueRef.current;
+							curOffset = cursorOffsetRef.current;
+						}
+
+						const segment = parts[p];
+						if (segment.length === 0) continue;
+						const insertAt = snapOutOfPlaceholder(curValue, curOffset, 'right');
+						curValue =
+							curValue.slice(0, insertAt) + segment + curValue.slice(insertAt);
+						curOffset = insertAt + segment.length;
+					}
+
+					// Flush any trailing segment typed after the last Enter.
+					commit(0);
+					return;
+				}
+
+				// Single segment: strip any lone CR defensively, then insert.
+				const cleanInput = input.replace(/\r/g, '');
 				// Defensive: never splice typed text into the middle of a placeholder
 				const insertAt = snapOutOfPlaceholder(
 					originalValueRef.current,
@@ -403,15 +485,15 @@ function TextInput({
 				);
 				nextValue =
 					originalValueRef.current.slice(0, insertAt) +
-					input +
+					cleanInput +
 					originalValueRef.current.slice(
 						insertAt,
 						originalValueRef.current.length,
 					);
-				nextCursorOffset = insertAt + input.length;
+				nextCursorOffset = insertAt + cleanInput.length;
 
-				if (input.length > 1) {
-					nextCursorWidth = input.length;
+				if (cleanInput.length > 1) {
+					nextCursorWidth = cleanInput.length;
 				}
 			}
 
@@ -433,6 +515,7 @@ function TextInput({
 
 			if (nextValue !== originalValueRef.current) {
 				originalValueRef.current = nextValue;
+				lastEmittedRef.current = nextValue;
 				onChange(nextValue);
 			}
 		},
