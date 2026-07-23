@@ -558,13 +558,7 @@ test('Enter on the Theme managed row opens the sub-panel, Esc returns to the lis
 	unmount();
 });
 
-// On this branch the Appearance tab (the tab with the most rows) has exactly
-// MAX_VISIBLE_ROWS (4) entries — Status Line lives on a separate, not-yet-
-// upstream fork feature and is out of scope for this branch, so no tab
-// currently overflows the visible window and the indicator can't be
-// organically triggered here. Skipped rather than deleted: restore once any
-// tab exceeds 4 rows (e.g. when Status Line lands on main).
-test.skip('scroll indicator appears when items exceed the visible window', async t => {
+test('scroll indicator appears when items exceed the visible window', async t => {
 	const {lastFrame, unmount} = renderWithTheme(
 		<SettingsSelector onCancel={() => {}} />,
 	);
@@ -718,8 +712,8 @@ test('Ctrl+U in search focus clears the whole query', async t => {
 	const plain = stripAnsi(output!);
 	t.falsy(plain.includes('theme'));
 	t.truthy(plain.includes('Search settings…'));
-	// Back to an empty query: every Appearance row is visible again.
-	t.truthy(plain.includes('Alternate Screen'));
+	// Back to an empty query: the top Appearance rows are visible again.
+	t.truthy(plain.includes('Status Line'));
 
 	unmount();
 });

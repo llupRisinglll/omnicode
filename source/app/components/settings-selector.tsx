@@ -13,6 +13,8 @@ import {
 	getPasteThreshold,
 	getPrivacyPreference,
 	getReasoningExpanded,
+	loadPreferences,
+	savePreferences,
 	updateCompactToolDisplay,
 	updateNanocoderShape,
 	updateNotificationsPreference,
@@ -26,6 +28,7 @@ import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
 import type {NotificationsConfig} from '@/types/config';
+import type {StatusLineConfig} from '@/types/statusline';
 import type {NanocoderShape, ThemePreset} from '@/types/ui';
 import {setNotificationsConfig} from '@/utils/notifications';
 import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
@@ -43,7 +46,8 @@ export type ManagedSettingsPanel =
 	| 'paste-threshold'
 	| 'notifications'
 	| 'display-settings'
-	| 'privacy';
+	| 'privacy'
+	| 'status-line';
 
 export interface SettingsSelectorProps {
 	onCancel: () => void;
@@ -904,6 +908,106 @@ export function SettingsPrivacyPanel({
 					Prompt Scrubbing removes sensitive identifiers before sending prompts
 					to cloud providers. This improves privacy but does not guarantee
 					semantic anonymity.
+				</Text>
+			</Box>
+
+			<StyledSelectInput items={items} onSelect={handleSelect} />
+
+			<Box marginTop={1}>
+				<Text color={colors.secondary}>Enter/Esc</Text>
+			</Box>
+		</TitledBoxWithPreferences>
+	);
+}
+
+export function SettingsStatusLinePanel({
+	onBack,
+	onCancel,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+
+	const preferences = loadPreferences();
+	const statusLine = preferences.statusLine ?? {enabled: false};
+	const [config, setConfig] = useState<StatusLineConfig>(statusLine);
+
+	useInput((_, key) => {
+		if (key.escape) {
+			onCancel();
+		}
+		if (key.shift && key.tab) {
+			onBack();
+		}
+	});
+
+	const updateConfig = (patch: Partial<StatusLineConfig>) => {
+		const next = {...config, ...patch};
+		setConfig(next);
+		preferences.statusLine = next;
+		savePreferences(preferences);
+	};
+
+	type ToggleKey = 'enabled';
+
+	const items: {label: string; value: ToggleKey | 'position' | 'command'}[] =
+		useMemo(() => {
+			const isOn = (val: boolean) => (val ? 'ON' : 'OFF');
+			return [
+				{
+					label: `Status Line: ${isOn(config.enabled)}`,
+					value: 'enabled',
+				},
+				{
+					label: `Position: ${config.position ?? 'bottom'}`,
+					value: 'position',
+				},
+				{
+					label: `Command: ${config.command ?? '(built-in)'}`,
+					value: 'command',
+				},
+			];
+		}, [config]);
+
+	const handleSelect = (item: {
+		label: string;
+		value: ToggleKey | 'position' | 'command';
+	}) => {
+		if (item.value === 'enabled') {
+			updateConfig({enabled: !config.enabled});
+		} else if (item.value === 'position') {
+			updateConfig({
+				position: config.position === 'top' ? 'bottom' : 'top',
+			});
+		}
+		// 'command' is read-only display here; use /statusline command to set
+	};
+
+	const title = isNarrow ? 'Status Line' : 'Status Line Settings';
+
+	return (
+		<TitledBoxWithPreferences
+			title={title}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{!isNarrow && (
+				<Box marginBottom={1}>
+					<Text color={colors.secondary}>
+						Toggle settings with Enter. Shift+Tab to go back, Esc to exit
+					</Text>
+				</Box>
+			)}
+
+			<Box marginBottom={1}>
+				<Text color={colors.secondary}>
+					Use /statusline command &lt;cmd&gt; to set a custom command.
 				</Text>
 			</Box>
 

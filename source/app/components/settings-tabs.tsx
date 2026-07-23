@@ -9,6 +9,7 @@ import {
 	getNotificationsPreference,
 	getPasteThreshold,
 	getPrivacyPreference,
+	loadPreferences,
 	updateAlternateScreen,
 } from '@/config/preferences';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
@@ -26,6 +27,7 @@ import {
 	SettingsNotificationsPanel,
 	SettingsPasteThresholdPanel,
 	SettingsPrivacyPanel,
+	SettingsStatusLinePanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
 } from './settings-selector';
@@ -104,6 +106,13 @@ function buildRowsForTab(
 					label: 'Nanocoder Shape',
 					value: getNanocoderShape() ?? 'tiny',
 					panel: 'nanocoder-shape',
+				},
+				{
+					kind: 'managed',
+					id: 'status-line',
+					label: 'Status Line',
+					value: loadPreferences().statusLine?.enabled ? 'on' : 'off',
+					panel: 'status-line',
 				},
 				{
 					kind: 'boolean',
@@ -244,6 +253,8 @@ function renderManagedPanel(
 			return <SettingsTitleShapePanel onBack={onBack} onCancel={onBack} />;
 		case 'nanocoder-shape':
 			return <SettingsNanocoderShapePanel onBack={onBack} onCancel={onBack} />;
+		case 'status-line':
+			return <SettingsStatusLinePanel onBack={onBack} onCancel={onBack} />;
 		case 'paste-threshold':
 			return <SettingsPasteThresholdPanel onBack={onBack} onCancel={onBack} />;
 		case 'notifications':
