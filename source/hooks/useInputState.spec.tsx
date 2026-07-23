@@ -790,6 +790,53 @@ test('rapid paste events are detected', t => {
 	t.truthy(currentHook!.input);
 });
 
+// Regression: a large paste immediately followed by fast typing in the SAME
+// stdin chunk. TextInput fires each onChange synchronously with no re-render
+// between, so updateInput's closure `currentState` is stale for every call
+// after the first. The stale chunked-paste branch used to slice/merge the typed
+// characters into the paste content (wrong expectedLength) — the chars vanished
+// and the paste char-count inflated. The ref-mirror must keep them literal.
+test('paste followed by same-chunk fast typing keeps typed chars literal', t => {
+	const {hook, instance} = setupTest();
+
+	// >800 chars so it is placeholdered (single-line pastes below that insert
+	// verbatim); this is the case the chunked-continuation branch guards.
+	const paste = 'x'.repeat(1000);
+	hook.updateInput(paste);
+	instance.rerender(<TestComponent />);
+
+	const placeholder = currentHook!.input;
+	t.regex(placeholder, /^\[Paste #1: 1000 chars\]$/);
+
+	// Fast typing burst delivered as multiple updateInput calls with NO rerender
+	// between them — exactly what one coalesced stdin chunk produces. Each call
+	// passes TextInput's cumulative value (placeholder + typed-so-far).
+	currentHook!.updateInput(placeholder + 'a');
+	currentHook!.updateInput(placeholder + 'ab');
+	currentHook!.updateInput(placeholder + 'abc');
+	currentHook!.updateInput(placeholder + 'abcd');
+	currentHook!.updateInput(placeholder + 'abcde');
+	currentHook!.updateInput(placeholder + 'abcdef');
+	instance.rerender(<TestComponent />);
+
+	t.is(currentHook!.input, `${placeholder}abcdef`);
+	// The paste content must be untouched — the typed chars were NOT merged in.
+	const pasteEntry = currentHook!.currentState.placeholderContent['1'];
+	t.is(pasteEntry?.content.length, 1000);
+});
+
+// Regression: a coalesced 12-char typing burst must stay literal and never turn
+// into a paste placeholder (the sub-16-char classification floor).
+test('a 12-char typing burst is literal, not a paste placeholder', t => {
+	const {hook, instance} = setupTest();
+
+	hook.updateInput('abcdefghijkl');
+	instance.rerender(<TestComponent />);
+
+	t.is(currentHook!.input, 'abcdefghijkl');
+	t.deepEqual(currentHook!.currentState.placeholderContent, {});
+});
+
 // Test useEffect cleanup on unmount
 test('cleanup function is defined', t => {
 	const {instance} = setupTest();

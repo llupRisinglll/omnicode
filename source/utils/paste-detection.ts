@@ -64,8 +64,17 @@ export class PasteDetector {
 			linesAdded,
 		};
 
+		// Guard against coalesced fast typing being misread as a paste. Ink delivers
+		// a burst of keypresses as ONE onChange with a multi-char `input`; under heavy
+		// render load bursts grow and cross the rate/size thresholds. Real pastes that
+		// get placeholdered are long (>=150 chars) or genuinely multi-line, so require
+		// a meaningful floor before the rate/size heuristics may fire.
+		const newlinesAdded = (addedText.match(/\r\n|\r|\n/g) ?? []).length;
+		const meetsPasteFloor = addedText.length >= 16 || newlinesAdded >= 2;
+
 		// Method 1: Rate-based detection (fast input)
 		if (
+			meetsPasteFloor &&
 			timeElapsed < options.timeThreshold &&
 			charsAdded > options.charThreshold
 		) {
@@ -78,7 +87,7 @@ export class PasteDetector {
 		}
 
 		// Method 2: Size-based detection (large single input)
-		if (charsAdded > options.charThreshold * 2) {
+		if (meetsPasteFloor && charsAdded > options.charThreshold * 2) {
 			return {
 				isPaste: true,
 				method: 'size',
