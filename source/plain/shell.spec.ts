@@ -1,3 +1,4 @@
+import path from "node:path";
 import test from "ava";
 import type { ToolManager } from "@/tools/tool-manager";
 import type { LLMClient } from "@/types/core";
@@ -223,27 +224,34 @@ test.serial(
 						toolCalls: [
 							{
 								name: "write_to_file",
-								arguments: { path: "/repo/a.ts" },
+								arguments: { path: path.join(process.cwd(), "a.ts") },
 								result: "ok",
 								error: null,
 							},
 							{
 								// Same path written twice — should be deduped.
 								name: "edit_file",
-								arguments: { path: "/repo/a.ts" },
+								arguments: { path: path.join(process.cwd(), "a.ts") },
 								result: "ok",
 								error: null,
 							},
 							{
 								name: "create_file",
-								arguments: { file_path: "/repo/b.ts" },
+								arguments: { file_path: path.join(process.cwd(), "b.ts") },
+								result: "ok",
+								error: null,
+							},
+							{
+								// Out-of-project absolute path: excluded by containment.
+								name: "write_to_file",
+								arguments: { path: "/etc/evil.ts" },
 								result: "ok",
 								error: null,
 							},
 							{
 								// Non-mutating tool: should not contribute a path.
 								name: "read_file",
-								arguments: { path: "/repo/c.ts" },
+								arguments: { path: path.join(process.cwd(), "c.ts") },
 								result: "contents",
 								error: null,
 							},
@@ -254,7 +262,7 @@ test.serial(
 								// for this assertion (failure handling is covered by
 								// the isError tests in conversation.spec.ts).
 								name: "string_replace",
-								arguments: { path: "/repo/d.ts" },
+								arguments: { path: path.join(process.cwd(), "d.ts") },
 								result: null,
 								error: "failed to apply patch",
 							},
@@ -271,9 +279,17 @@ test.serial(
 		t.is(report.kind, "success");
 		t.deepEqual(
 			new Set(report.filesChanged),
-			new Set(["/repo/a.ts", "/repo/b.ts", "/repo/d.ts"]),
+			new Set([
+				path.join(process.cwd(), "a.ts"),
+				path.join(process.cwd(), "b.ts"),
+				path.join(process.cwd(), "d.ts"),
+			]),
 		);
 		t.is(report.filesChanged.length, 3);
+		t.false(
+			report.filesChanged.includes("/etc/evil.ts"),
+			"out-of-project paths are excluded",
+		);
 
 		const failedCall = report.toolCalls.find(
 			(tc: { name: string }) => tc.name === "string_replace",
