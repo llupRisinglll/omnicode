@@ -55,10 +55,24 @@ export type ManagedSettingsPanel =
 	| 'display-settings'
 	| 'privacy'
 	| 'status-line'
-	| 'innerdaemon-model';
+	| 'innerdaemon-model'
+	| 'json-config'
+	| 'web-search'
+	| 'providers-config'
+	| 'mcp-config'
+	| 'default-mode'
+	| 'reasoning-traces'
+	| 'auto-compact'
+	| 'sessions'
+	| 'tool-approval'
+	| 'environment';
 
 export interface SettingsSelectorProps {
 	onCancel: () => void;
+	/** Close settings and launch the tune wizard (app-level mode switch). */
+	onLaunchTune?: () => void;
+	/** Close settings and launch the IDE-connection wizard. */
+	onLaunchIde?: () => void;
 }
 
 function ThemePreviewMessage({
