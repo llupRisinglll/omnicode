@@ -12,9 +12,11 @@ import {
 	writeLine,
 	writeStatus,
 } from '@/plain/writer';
+import {getProjectRoot} from '@/services/session-cwd';
 import {getTuneToolMode} from '@/types/config';
 import type {DevelopmentMode, Message} from '@/types/core';
 import {formatError} from '@/utils/error-formatter';
+import {isValidFilePath} from '@/utils/path-validation';
 import {buildSystemPrompt, setLastBuiltPrompt} from '@/utils/prompt-builder';
 import {getShutdownManager} from '@/utils/shutdown';
 
@@ -202,8 +204,12 @@ export async function runPlainShell(
 		const formattedToolCalls = (outcome.toolCalls || []).map(tc => {
 			if (mutatingTools.includes(tc.name)) {
 				const filePath = tc.arguments?.path || tc.arguments?.file_path;
-				// Only include file paths that are strings (type-safe extraction)
-				if (typeof filePath === 'string' && isValidFilePath(filePath)) {
+				// Only include in-project file paths (shared validation, project-root
+				// containment) — same rule the file tools enforce.
+				if (
+					typeof filePath === 'string' &&
+					isValidFilePath(filePath, getProjectRoot())
+				) {
 					filesChangedSet.add(filePath);
 				}
 			}
@@ -291,29 +297,6 @@ function ensureDirectoryTrust(
  * Allows absolute paths and relative paths, but rejects null bytes and
  * excessive path traversal patterns.
  */
-function isValidFilePath(filePath: string): boolean {
-	// Reject null bytes
-	if (filePath.includes('\0')) {
-		return false;
-	}
-	// Allow absolute paths and relative paths, but reject paths with
-	// excessive parent directory references (e.g., "../../../../../../etc/passwd")
-	const parts = filePath.split('/');
-	let depth = 0;
-	for (const part of parts) {
-		if (part === '..') {
-			depth--;
-			// Reject if we go above the root
-			if (depth < 0) {
-				return false;
-			}
-		} else if (part !== '.' && part !== '') {
-			depth++;
-		}
-	}
-	return true;
-}
-
 /**
  * Sanitize string output to prevent injection attacks in JSON.
  * Ensures the string doesn't contain unescaped control characters or
