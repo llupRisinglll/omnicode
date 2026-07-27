@@ -25,6 +25,11 @@
 #   new-rc <name>                Create and push a clean rc/<name> branch
 #                              from upstream/main.
 #
+#   sync-pr                   Open (or update) a PR on the fork that merges
+#                              upstream/main into main. Conflicts in paths
+#                              owned by an already-merged upstream PR resolve
+#                              to upstream automatically.
+#
 #   sync-main                    Merge upstream/main into fork main, push,
 #                              pull, and rebuild.
 #
@@ -86,6 +91,10 @@ FORK_REPO="llupRisinglll/omnicode"
 UPSTREAM_REPO="Nano-Collective/nanocoder"
 FORK_HEAD_PREFIX="llupRisinglll"
 
+# Paths whose fork-side copy is superseded by a now-merged upstream PR.
+# Populated by `merged`; consumed by the upstream merge in `sync-main`.
+SUPERSEDE_PATHS=()
+
 cd "$REPO_ROOT"
 
 # ---------------------------------------------------------------------------
@@ -102,7 +111,7 @@ die() {
 }
 
 usage_line() {
-	echo "Usage: $0 [status|ship|upstream|dogfood|new-rc|sync-main|refresh|merged|depend|undepend|help] [args] [--dry-run] [--no-build] [--body-file <f>]"
+	echo "Usage: $0 [status|ship|upstream|dogfood|new-rc|sync-main|sync-pr|refresh|merged|depend|undepend|help] [args] [--dry-run] [--no-build] [--body-file <f>]"
 }
 
 # Usage error -> exit 2.
@@ -246,6 +255,25 @@ print_help() {
 			update-fork-branches.sh runs with --no-verify.
 			EOF
 			;;
+		sync-pr)
+			cat <<-'EOF'
+			fork-flow.sh sync-pr [--dry-run]
+
+			Bring upstream into the fork as a reviewable PR instead of a local
+			merge:
+			  1. fetch origin + upstream
+			  2. build 'chore/upstream-sync' from origin/main and merge
+			     upstream/main into it
+			  3. conflicts in paths owned by a pr-<num>-merged upstream PR are
+			     resolved to upstream (our copy is the pre-review one); any
+			     other conflict stops the run and is listed
+			  4. push and open (or update) the PR on the fork
+
+			Merge that PR on GitHub, then run `sync-main` to pull + rebuild.
+
+			Example:  scripts/fork-flow.sh sync-pr --dry-run
+			EOF
+			;;
 		merged)
 			cat <<-'EOF'
 			fork-flow.sh merged <pr-num> [--no-build] [--dry-run]
@@ -368,6 +396,14 @@ require_tooling() {
 		|| die "remote 'origin' missing -- run: git remote add origin https://github.com/$FORK_REPO"
 	git remote get-url upstream >/dev/null 2>&1 \
 		|| die "remote 'upstream' missing -- run: git remote add upstream https://github.com/$UPSTREAM_REPO"
+
+	# Long-lived rc/* and fork/* branches get rebased onto a moving upstream over
+	# and over; without rerere every rebase re-resolves conflicts we already
+	# solved once. Opt in locally (it is per-clone config, never committed).
+	if [ "$(git config --get rerere.enabled || echo false)" != "true" ]; then
+		git config rerere.enabled true
+		echo "    Enabled git rerere (records conflict resolutions for reuse)."
+	fi
 }
 
 # Only tracked modifications block (merge safety); untracked files -- including
@@ -476,6 +512,38 @@ open_upstream_pr() {
 # ---------------------------------------------------------------------------
 
 TEMP_WORKTREE=""
+# Files an upstream PR touched. Once that PR is MERGED, fork main is still
+# carrying our pre-review copy of the same feature while upstream now has the
+# reviewed one, so every one of these paths conflicts on the next upstream
+# merge. Upstream's version supersedes ours by definition.
+upstream_pr_paths() {
+	local pr_num="$1"
+	gh pr view "$pr_num" -R "$UPSTREAM_REPO" --json files --jq '.files[].path' 2>/dev/null || true
+}
+
+# Take upstream's side for conflicts inside SUPERSEDE_PATHS. Anything else is a
+# real conflict and is left for a human. Returns 0 only if nothing is left.
+resolve_superseded_conflicts() {
+	local wt="$1"
+	[ "${#SUPERSEDE_PATHS[@]}" -eq 0 ] && return 1
+
+	local path s resolved=0
+	while IFS= read -r path; do
+		[ -n "$path" ] || continue
+		for s in "${SUPERSEDE_PATHS[@]}"; do
+			if [ "$path" = "$s" ]; then
+				git -C "$wt" checkout --theirs -- "$path" >/dev/null 2>&1 || break
+				git -C "$wt" add -- "$path"
+				resolved=$((resolved + 1))
+				break
+			fi
+		done
+	done < <(git -C "$wt" diff --name-only --diff-filter=U)
+
+	echo "    Superseded by upstream (took theirs): $resolved file(s)."
+	[ -z "$(git -C "$wt" diff --name-only --diff-filter=U)" ]
+}
+
 cleanup_temp_worktree() {
 	if [ -n "$TEMP_WORKTREE" ]; then
 		git worktree remove --force "$TEMP_WORKTREE" 2>/dev/null || true
@@ -978,8 +1046,18 @@ cmd_sync_main() {
 		git worktree add --force "$TEMP_WORKTREE" main >/dev/null 2>&1 \
 			|| die "failed to create worktree for 'main'."
 		if ! git -C "$TEMP_WORKTREE" merge --no-edit upstream/main >/dev/null 2>&1; then
-			git -C "$TEMP_WORKTREE" merge --abort >/dev/null 2>&1 || true
-			die "merge conflict bringing upstream/main into main -- resolve manually in a worktree on 'main', do not let this script guess."
+			if resolve_superseded_conflicts "$TEMP_WORKTREE"; then
+				git -C "$TEMP_WORKTREE" commit --no-edit >/dev/null 2>&1 \
+					|| die "could not commit the superseded-path merge resolution."
+			else
+				local remaining
+				remaining=$(git -C "$TEMP_WORKTREE" diff --name-only --diff-filter=U | sed 's/^/      /')
+				git -C "$TEMP_WORKTREE" merge --abort >/dev/null 2>&1 || true
+				cleanup_temp_worktree
+				die "merge conflict bringing upstream/main into main -- resolve manually in a worktree on 'main', do not let this script guess.
+    Conflicts needing a human:
+$remaining"
+			fi
 		fi
 		git -C "$TEMP_WORKTREE" push origin main
 	fi
@@ -1250,11 +1328,19 @@ cmd_merged() {
 		echo "    Tagged '$new_tag' (kept '$old_tag') and pushed."
 	fi
 
+	# Our copy of this feature is now the stale one: load the PR's file list so
+	# the upstream merge below resolves those paths to upstream instead of
+	# stopping on a conflict per file.
+	mapfile -t SUPERSEDE_PATHS < <(upstream_pr_paths "$pr_num")
+	echo "    PR #$pr_num touched ${#SUPERSEDE_PATHS[@]} path(s); conflicts there will take upstream's side."
+
 	FORK_FLOW_YES=1 cmd_sync_main
+	SUPERSEDE_PATHS=()
 
 	echo ""
 	echo "REMINDER: drop the README differences-table row for this feature"
-	echo "(docs PR to main + cherry-pick onto fork/omnicode-identity)."
+	echo "(docs PR to main + cherry-pick onto the branch that owns the table,"
+	echo "currently fork/readme-sync -- fork/omnicode-identity does not carry it)."
 }
 
 # ---------------------------------------------------------------------------
@@ -1308,6 +1394,104 @@ cmd_undepend() {
 }
 
 # ---------------------------------------------------------------------------
+# sync-pr
+# ---------------------------------------------------------------------------
+
+cmd_sync_pr() {
+	require_tooling
+
+	log "Fetching origin and upstream"
+	run git fetch origin --quiet
+	run git fetch upstream --quiet
+
+	if tag_reaches "upstream/main" "origin/main"; then
+		echo "    origin/main already contains upstream/main -- nothing to sync."
+		return 0
+	fi
+
+	local branch ahead
+	branch="chore/upstream-sync"
+	ahead=$(git rev-list --count origin/main..upstream/main)
+	echo "    upstream/main is $ahead commit(s) ahead of fork main."
+
+	# Every pr-<num>-merged tag is a feature upstream has now merged, so fork
+	# main is carrying our stale copy of it. Supersede those paths automatically
+	# instead of hand-resolving them one file at a time.
+	local tag num
+	SUPERSEDE_PATHS=()
+	for tag in $(git for-each-ref --format='%(refname:short)' 'refs/tags/pr-*-merged'); do
+		num="${tag#pr-}"; num="${num%-merged}"
+		mapfile -t -O "${#SUPERSEDE_PATHS[@]}" SUPERSEDE_PATHS < <(upstream_pr_paths "$num")
+	done
+	echo "    ${#SUPERSEDE_PATHS[@]} path(s) superseded by already-merged upstream PRs."
+
+	confirm "Build '$branch' from origin/main + upstream/main and open a PR on the fork?" || {
+		echo "Aborted -- nothing changed."
+		SUPERSEDE_PATHS=()
+		return 0
+	}
+
+	if [ "$DRY_RUN" -eq 1 ]; then
+		echo "[dry-run] git worktree add --force <tmp> -B $branch origin/main"
+		echo "[dry-run] (cd <tmp> && git merge upstream/main)   # superseded paths auto-resolved"
+		echo "[dry-run] git -C <tmp> push --force-with-lease origin $branch"
+		echo "[dry-run] gh pr create -R $FORK_REPO --base main --head $branch"
+		SUPERSEDE_PATHS=()
+		return 0
+	fi
+
+	TEMP_WORKTREE="$(mktemp -d)"
+	git worktree add --force "$TEMP_WORKTREE" -B "$branch" origin/main >/dev/null 2>&1 \
+		|| die "failed to create worktree for '$branch'."
+
+	local conflicted=""
+	if ! git -C "$TEMP_WORKTREE" merge --no-edit upstream/main >/dev/null 2>&1; then
+		if resolve_superseded_conflicts "$TEMP_WORKTREE"; then
+			git -C "$TEMP_WORKTREE" commit --no-edit >/dev/null 2>&1 \
+				|| die "could not commit the superseded-path merge resolution."
+		else
+			conflicted=$(git -C "$TEMP_WORKTREE" diff --name-only --diff-filter=U)
+			git -C "$TEMP_WORKTREE" merge --abort >/dev/null 2>&1 || true
+		fi
+	fi
+	SUPERSEDE_PATHS=()
+
+	if [ -n "$conflicted" ]; then
+		cleanup_temp_worktree
+		die "upstream merge needs a human. Conflicts:
+$(echo "$conflicted" | sed 's/^/      /')
+
+    Resolve on a worktree over 'main' (or '$branch'), then re-run.
+    Superseded-path auto-resolution already handled anything owned by a
+    pr-<num>-merged upstream PR, so what is left is genuine."
+	fi
+
+	git -C "$TEMP_WORKTREE" push --force-with-lease origin "HEAD:refs/heads/$branch" \
+		|| die "failed to push '$branch'."
+	cleanup_temp_worktree
+
+	local existing
+	existing=$(gh pr list -R "$FORK_REPO" --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+	if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+		echo "    Updated existing sync PR: https://github.com/$FORK_REPO/pull/$existing"
+		return 0
+	fi
+
+	gh pr create -R "$FORK_REPO" --base main --head "$branch" \
+		--title "chore: sync upstream/main into fork main" \
+		--body "Brings \`upstream/main\` into fork \`main\` ($ahead commit(s)).
+
+Conflicts in paths owned by an already-merged upstream PR were resolved to
+upstream automatically; our copy of those features is the pre-review one.
+
+Review the diff, let CI run, then merge. Afterwards run:
+\`\`\`
+scripts/fork-flow.sh sync-main
+\`\`\`
+to pull and rebuild the main checkout."
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -1333,6 +1517,9 @@ case "$CMD" in
 		;;
 	sync-main)
 		cmd_sync_main
+		;;
+	sync-pr)
+		cmd_sync_pr
 		;;
 	refresh)
 		cmd_refresh

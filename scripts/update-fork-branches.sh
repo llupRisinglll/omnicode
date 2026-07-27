@@ -160,6 +160,10 @@ for i in "${!BRANCH_NAMES[@]}"; do
 	echo ""
 	echo "==> Processing '$branch' (base: $base)"
 
+	# Tip before we touch anything: a rebase rewrites history, and this is the
+	# only way to tell afterwards which pr-* tags belonged to this branch.
+	pre_rebase_sha="$(git rev-parse --verify --quiet "refs/heads/$branch" || true)"
+
 	if ! git show-ref --verify --quiet "refs/heads/$branch"; then
 		echo "    Local branch '$branch' does not exist, skipping."
 		record "$branch" "skipped-missing" "-"
@@ -200,7 +204,29 @@ for i in "${!BRANCH_NAMES[@]}"; do
 	checks_ok=1
 
 	# Always clean up the worktree, no matter how this iteration ends.
-	cleanup_worktree() {
+	# A rebase rewrites the branch, so a pr-<num> tag still points at the old,
+# now-unreachable commit and `fork-flow.sh status` reports the open PR as
+# untagged. Move tags that were on the old tip's history onto the new tip.
+# pr-<num>-merged is historical and is deliberately left where it is.
+repoint_pr_tags() {
+	local old_sha="$1" new_tip="$2" tag
+	[ -n "$old_sha" ] || return 0
+
+	for tag in $(git for-each-ref --format='%(refname:short)' 'refs/tags/pr-*'); do
+		case "$tag" in *-merged) continue ;; esac
+		# Already carried over by the rebase -- nothing to do.
+		git merge-base --is-ancestor "$tag^{commit}" "$new_tip" 2>/dev/null && continue
+		# Only ours if it described the branch we just rewrote.
+		git merge-base --is-ancestor "$tag^{commit}" "$old_sha" 2>/dev/null || continue
+
+		echo "    Re-pointing tag '$tag' onto the rebased tip."
+		git tag -f "$tag" "$new_tip" >/dev/null
+		git push -f origin "refs/tags/$tag" >/dev/null 2>&1 \
+			|| echo "    WARN: could not push moved tag '$tag'."
+	done
+}
+
+cleanup_worktree() {
 		git worktree remove --force "$worktree_dir" 2>/dev/null || true
 		rm -rf "$worktree_dir"
 	}
@@ -250,6 +276,7 @@ for i in "${!BRANCH_NAMES[@]}"; do
 		echo "    Pushing '$branch' to origin with --force-with-lease."
 		if git -C "$worktree_dir" push --force-with-lease origin "HEAD:refs/heads/$branch"; then
 			record "$branch" "updated" "$new_sha"
+			repoint_pr_tags "$pre_rebase_sha" "$(git -C "$worktree_dir" rev-parse HEAD)"
 		else
 			record "$branch" "needs-manual (push-failed)" "$new_sha"
 		fi
