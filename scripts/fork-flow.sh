@@ -137,7 +137,7 @@ print_help() {
 			      (b) pr-<num>-merged tags vs upstream/main (squash-aware:
 			          SHA-ancestry failure with a MERGED PR is an INFO note,
 			          because upstream squash-merges)
-			      (c) README differences-table rows vs branch reality
+			      (c) docs/fork-differences.md rows vs branch reality
 			      (d) origin/main contains every rc/*+fork/* change set
 			      (e) fork/omnicode-identity README drift (best-effort)
 			      (f) fork main not behind upstream/main (ships of
@@ -754,7 +754,7 @@ cmd_status() {
 	# (c) README differences-table rows vs reality.
 	local ok_c=1
 	local readme_table
-	readme_table=$(git show origin/main:README.md 2>/dev/null | awk '
+	readme_table=$(git show origin/main:docs/fork-differences.md 2>/dev/null | awk '
 		/^\| *Feature *\| *Upstream status *\|$/ { found=1 }
 		found { print }
 		found && NF==0 { exit }
@@ -769,11 +769,11 @@ cmd_status() {
 			local rc_branch="${BASH_REMATCH[1]}"
 			referenced_branches="${referenced_branches:+$referenced_branches }$rc_branch"
 			if [[ ! "$row" =~ Incubating\ on\ \`$rc_branch\` ]]; then
-				echo "WARN (c): README row for '$rc_branch' must say 'Incubating on \`$rc_branch\`' -- rc/* rows stay incubating until merged upstream."
+				echo "WARN (c): docs/fork-differences.md row for '$rc_branch' must say 'Incubating on \`$rc_branch\`' -- rc/* rows stay incubating until merged upstream."
 				ok_c=0
 			fi
 			if branch_exists "$rc_branch" && [ "$(git rev-list --count "upstream/main..$rc_branch" 2>/dev/null || echo 0)" -eq 0 ]; then
-				echo "WARN (c): README row for '$rc_branch' looks stale (no unique commits vs upstream/main) -- drop it if the work is merged upstream."
+				echo "WARN (c): docs/fork-differences.md row for '$rc_branch' looks stale (no unique commits vs upstream/main) -- drop it if the work is merged upstream."
 				ok_c=0
 			fi
 		fi
@@ -783,7 +783,7 @@ cmd_status() {
 		case "$branch" in rc/*) ;; *) continue ;; esac
 		if [ "${B_AHEAD_MAIN[$i]}" != "?" ] && [ "${B_AHEAD_MAIN[$i]}" -gt 0 ]; then
 			if [[ " $referenced_branches " != *" $branch "* ]]; then
-				echo "WARN (c): $branch has ${B_AHEAD_MAIN[$i]} commit(s) not in main and no README differences-table row."
+				echo "WARN (c): $branch has ${B_AHEAD_MAIN[$i]} commit(s) not in main and no docs/fork-differences.md row."
 				ok_c=0
 			fi
 		fi
@@ -1352,7 +1352,7 @@ cmd_merged() {
 	SUPERSEDE_PATHS=()
 
 	echo ""
-	echo "REMINDER: drop the README differences-table row for this feature"
+	echo "REMINDER: drop the docs/fork-differences.md row for this feature"
 	echo "(docs PR to main + cherry-pick onto the branch that owns the table,"
 	echo "currently fork/readme-sync -- fork/omnicode-identity does not carry it)."
 }
