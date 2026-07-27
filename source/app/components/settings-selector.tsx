@@ -6,36 +6,26 @@ import {type ReactNode, useMemo, useState} from 'react';
 import {StyledSelectInput} from '@/components/ui/styled-select-input';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
-import {loadAllProviderConfigs} from '@/config/mcp-config-loader';
 import {
-	getCompactDiffMaxLines,
 	getCompactToolDisplay,
-	getInnerDaemonModel,
 	getNanocoderShape,
 	getNotificationsPreference,
 	getPasteThreshold,
 	getPrivacyPreference,
 	getReasoningExpanded,
-	getShowWorkingIndicator,
-	loadPreferences,
-	savePreferences,
-	updateCompactDiffMaxLines,
 	updateCompactToolDisplay,
-	updateInnerDaemonModel,
 	updateNanocoderShape,
 	updateNotificationsPreference,
 	updatePasteThreshold,
 	updatePrivacyPreference,
 	updateReasoningExpanded,
 	updateSelectedTheme,
-	updateShowWorkingIndicator,
 } from '@/config/preferences';
-import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
+import {getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
 import type {NotificationsConfig} from '@/types/config';
-import type {StatusLineConfig} from '@/types/statusline';
 import type {NanocoderShape, ThemePreset} from '@/types/ui';
 import {setNotificationsConfig} from '@/utils/notifications';
 import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
@@ -54,8 +44,6 @@ export type ManagedSettingsPanel =
 	| 'notifications'
 	| 'display-settings'
 	| 'privacy'
-	| 'status-line'
-	| 'innerdaemon-model'
 	| 'json-config'
 	| 'web-search'
 	| 'providers-config'
@@ -87,7 +75,7 @@ function ThemePreviewMessage({
 	compact = false,
 }: {
 	accentColor: string;
-	baseColor: string | undefined;
+	baseColor: string;
 	children: ReactNode;
 	compact?: boolean;
 }) {
@@ -126,7 +114,7 @@ function ThemeMiniPreview({
 				</Box>
 				<ThemePreviewMessage
 					accentColor={colors.primary}
-					baseColor={getTextboxBackground(colors)}
+					baseColor={colors.base}
 					compact={compact}
 				>
 					<Text color={colors.text}>
@@ -144,7 +132,7 @@ function ThemeMiniPreview({
 
 				<ThemePreviewMessage
 					accentColor={colors.secondary}
-					baseColor={getTextboxBackground(colors)}
+					baseColor={colors.base}
 					compact={compact}
 				>
 					<Text color={colors.text}>
@@ -490,8 +478,7 @@ export function SettingsNanocoderShapePanel({
 
 	const shapeOptions: {label: string; value: NanocoderShape}[] = useMemo(
 		() => [
-			{label: 'Fork (default)', value: 'fork'},
-			{label: 'Tiny', value: 'tiny'},
+			{label: 'Tiny (default)', value: 'tiny'},
 			{label: 'Block', value: 'block'},
 			{label: 'Simple', value: 'simple'},
 			{label: 'Simple Block', value: 'simpleBlock'},
@@ -529,20 +516,9 @@ export function SettingsNanocoderShapePanel({
 	if (isNarrow) {
 		return (
 			<>
-				{previewShape === 'fork' ? (
-					<Box marginBottom={1}>
-						<Gradient colors={[colors.primary, colors.tool]}>
-							<Text>
-								▄█▀█▄ █▄░▄█ █▄░█ █ █▀▀ █▀█ █▀▄ █▀▀{'\n'}
-								▀█▄█▀ █░▀░█ █░▀█ █ █▄▄ █▄█ █▄▀ ██▄
-							</Text>
-						</Gradient>
-					</Box>
-				) : (
-					<Gradient colors={[colors.primary, colors.tool]}>
-						<BigText text={displayText} font={previewShape} />
-					</Gradient>
-				)}
+				<Gradient colors={[colors.primary, colors.tool]}>
+					<BigText text={displayText} font={previewShape} />
+				</Gradient>
 				<TitledBoxWithPreferences
 					title="Nanocoder Shape"
 					width="100%"
@@ -568,18 +544,9 @@ export function SettingsNanocoderShapePanel({
 	return (
 		<>
 			<Box marginBottom={1}>
-				{previewShape === 'fork' ? (
-					<Gradient colors={[colors.primary, colors.tool]}>
-						<Text>
-							▄█▀█▄ █▄░▄█ █▄░█ █ █▀▀ █▀█ █▀▄ █▀▀{'\n'}
-							▀█▄█▀ █░▀░█ █░▀█ █ █▄▄ █▄█ █▄▀ ██▄
-						</Text>
-					</Gradient>
-				) : (
-					<Gradient colors={[colors.primary, colors.tool]}>
-						<BigText text={displayText} font={previewShape} />
-					</Gradient>
-				)}
+				<Gradient colors={[colors.primary, colors.tool]}>
+					<BigText text={displayText} font={previewShape} />
+				</Gradient>
 			</Box>
 
 			<TitledBoxWithPreferences
@@ -828,10 +795,6 @@ export function SettingsDisplayPanel({
 
 	const currentReasoningExpanded = getReasoningExpanded();
 	const currentCompactToolDisplay = getCompactToolDisplay();
-	const currentShowWorkingIndicator = getShowWorkingIndicator();
-	const [currentCompactDiffMaxLines, setCurrentCompactDiffMaxLines] = useState(
-		getCompactDiffMaxLines(),
-	);
 
 	useInput((_, key) => {
 		if (key.escape) {
@@ -842,22 +805,10 @@ export function SettingsDisplayPanel({
 		}
 	});
 
-	// Cycled (not toggled) — Enter advances to the next preset. 0 means
-	// unlimited, shown last in the cycle.
-	const COMPACT_DIFF_MAX_LINES_OPTIONS = [10, 20, 30, 50, 100, 0];
-
-	type ToggleKey =
-		| 'reasoningExpanded'
-		| 'compactToolDisplay'
-		| 'showWorkingIndicator'
-		| 'compactDiffMaxLines';
+	type ToggleKey = 'reasoningExpanded' | 'compactToolDisplay';
 
 	const items: {label: string; value: ToggleKey}[] = useMemo(() => {
 		const isOn = (val: boolean | undefined) => (val ? 'ON' : 'OFF');
-		const diffMaxLinesLabel =
-			currentCompactDiffMaxLines === 0
-				? 'unlimited'
-				: String(currentCompactDiffMaxLines);
 		return [
 			{
 				label: `Show Thinking by default: ${isOn(currentReasoningExpanded)}`,
@@ -867,21 +818,8 @@ export function SettingsDisplayPanel({
 				label: `Expand Tool Results by default: ${isOn(currentCompactToolDisplay)}`,
 				value: 'compactToolDisplay' as ToggleKey,
 			},
-			{
-				label: `Show Working Indicator: ${isOn(currentShowWorkingIndicator)}`,
-				value: 'showWorkingIndicator' as ToggleKey,
-			},
-			{
-				label: `Compact diff max lines: ${diffMaxLinesLabel}`,
-				value: 'compactDiffMaxLines' as ToggleKey,
-			},
 		];
-	}, [
-		currentReasoningExpanded,
-		currentCompactToolDisplay,
-		currentShowWorkingIndicator,
-		currentCompactDiffMaxLines,
-	]);
+	}, [currentReasoningExpanded, currentCompactToolDisplay]);
 
 	const handleSelect = (item: {label: string; value: ToggleKey}) => {
 		if (item.value === 'reasoningExpanded') {
@@ -890,20 +828,6 @@ export function SettingsDisplayPanel({
 		} else if (item.value === 'compactToolDisplay') {
 			const newValue = !currentCompactToolDisplay;
 			updateCompactToolDisplay(newValue);
-		} else if (item.value === 'showWorkingIndicator') {
-			const newValue = !currentShowWorkingIndicator;
-			updateShowWorkingIndicator(newValue);
-		} else if (item.value === 'compactDiffMaxLines') {
-			const currentIndex = COMPACT_DIFF_MAX_LINES_OPTIONS.indexOf(
-				currentCompactDiffMaxLines,
-			);
-			const nextIndex =
-				(currentIndex === -1 ? 0 : currentIndex + 1) %
-				COMPACT_DIFF_MAX_LINES_OPTIONS.length;
-			const nextValue = COMPACT_DIFF_MAX_LINES_OPTIONS[nextIndex] ?? 20;
-			updateCompactDiffMaxLines(nextValue);
-			setCurrentCompactDiffMaxLines(nextValue);
-			return;
 		}
 		onBack();
 	};
@@ -999,221 +923,6 @@ export function SettingsPrivacyPanel({
 					Prompt Scrubbing removes sensitive identifiers before sending prompts
 					to cloud providers. This improves privacy but does not guarantee
 					semantic anonymity.
-				</Text>
-			</Box>
-
-			<StyledSelectInput items={items} onSelect={handleSelect} />
-
-			<Box marginTop={1}>
-				<Text color={colors.secondary}>Enter/Esc</Text>
-			</Box>
-		</TitledBoxWithPreferences>
-	);
-}
-
-// InnerDaemon model settings panel.
-//
-// Sentinel for "inherit the main agent model" (the default → preference null).
-// SelectInput values are strings, so we can't use null directly.
-const INNERDAEMON_INHERIT = '__inherit__';
-
-export function SettingsInnerDaemonModelPanel({
-	onBack,
-	onCancel,
-}: {
-	onBack: () => void;
-	onCancel: () => void;
-}) {
-	const {boxWidth, isNarrow} = useResponsiveTerminal();
-	const {colors} = useTheme();
-
-	const currentModel = getInnerDaemonModel(); // null = inherit (default)
-
-	useInput((_, key) => {
-		if (key.escape) {
-			onCancel();
-		}
-		if (key.shift && key.tab) {
-			onBack();
-		}
-	});
-
-	// Offer models from the current provider (the one the main agent runs on),
-	// since InnerDaemon inherits the parent provider and only switches the
-	// model — a model from another provider would not resolve at runtime. Fall
-	// back to every configured model, provider-labeled, if the current provider
-	// can't be determined.
-	const items = useMemo(() => {
-		const providers = loadAllProviderConfigs();
-		const activeProvider = loadPreferences().lastProvider;
-		const match = activeProvider
-			? providers.find(p => p.name === activeProvider)
-			: undefined;
-
-		const modelEntries: {label: string; value: string}[] = match
-			? (match.models ?? []).map(m => ({label: m, value: m}))
-			: providers.flatMap(p =>
-					(p.models ?? []).map(m => ({
-						label: `${m} (${p.name})`,
-						value: m,
-					})),
-				);
-
-		const withMarker = ({label, value}: {label: string; value: string}) => ({
-			label: value === currentModel ? `${label} (current)` : label,
-			value,
-		});
-
-		return [
-			{
-				label:
-					currentModel === null
-						? 'Default: main agent model (current)'
-						: 'Default: main agent model',
-				value: INNERDAEMON_INHERIT,
-			},
-			...modelEntries.map(withMarker),
-		];
-	}, [currentModel]);
-
-	const initialIndex = useMemo(() => {
-		if (currentModel === null) return 0;
-		const idx = items.findIndex(item => item.value === currentModel);
-		return idx >= 0 ? idx : 0;
-	}, [items, currentModel]);
-
-	const handleSelect = (item: {label: string; value: string}) => {
-		updateInnerDaemonModel(
-			item.value === INNERDAEMON_INHERIT ? null : item.value,
-		);
-		onBack();
-	};
-
-	const title = isNarrow ? 'InnerDaemon Model' : 'InnerDaemon Steering Model';
-
-	return (
-		<TitledBoxWithPreferences
-			title={title}
-			width={isNarrow ? '100%' : boxWidth}
-			borderColor={colors.primary}
-			paddingX={2}
-			paddingY={1}
-			flexDirection="column"
-			marginBottom={1}
-		>
-			{!isNarrow && (
-				<Box marginBottom={1}>
-					<Text color={colors.secondary}>
-						Model the InnerDaemon steering subagent runs on. Default inherits
-						the main agent model; pick a fast, thinking-off model so a steering
-						nudge doesn't stall on a heavy-thinking model. Enter to apply,
-						Shift+Tab back, Esc to go back.
-					</Text>
-				</Box>
-			)}
-			<StyledSelectInput
-				items={items}
-				initialIndex={initialIndex}
-				onSelect={handleSelect}
-			/>
-			{isNarrow && (
-				<Box marginTop={0}>
-					<Text color={colors.secondary}>Enter/Shift+Tab/Esc</Text>
-				</Box>
-			)}
-		</TitledBoxWithPreferences>
-	);
-}
-
-// Status Line settings panel
-export function SettingsStatusLinePanel({
-	onBack,
-	onCancel,
-}: {
-	onBack: () => void;
-	onCancel: () => void;
-}) {
-	const {boxWidth, isNarrow} = useResponsiveTerminal();
-	const {colors} = useTheme();
-
-	const preferences = loadPreferences();
-	const statusLine = preferences.statusLine ?? {enabled: false};
-	const [config, setConfig] = useState<StatusLineConfig>(statusLine);
-
-	useInput((_, key) => {
-		if (key.escape) {
-			onCancel();
-		}
-		if (key.shift && key.tab) {
-			onBack();
-		}
-	});
-
-	const updateConfig = (patch: Partial<StatusLineConfig>) => {
-		const next = {...config, ...patch};
-		setConfig(next);
-		preferences.statusLine = next;
-		savePreferences(preferences);
-	};
-
-	type ToggleKey = 'enabled';
-
-	const items: {label: string; value: ToggleKey | 'position' | 'command'}[] =
-		useMemo(() => {
-			const isOn = (val: boolean) => (val ? 'ON' : 'OFF');
-			return [
-				{
-					label: `Status Line: ${isOn(config.enabled)}`,
-					value: 'enabled',
-				},
-				{
-					label: `Position: ${config.position ?? 'bottom'}`,
-					value: 'position',
-				},
-				{
-					label: `Command: ${config.command ?? '(built-in)'}`,
-					value: 'command',
-				},
-			];
-		}, [config]);
-
-	const handleSelect = (item: {
-		label: string;
-		value: ToggleKey | 'position' | 'command';
-	}) => {
-		if (item.value === 'enabled') {
-			updateConfig({enabled: !config.enabled});
-		} else if (item.value === 'position') {
-			updateConfig({
-				position: config.position === 'top' ? 'bottom' : 'top',
-			});
-		}
-		// 'command' is read-only display here; use /statusline command to set
-	};
-
-	const title = isNarrow ? 'Status Line' : 'Status Line Settings';
-
-	return (
-		<TitledBoxWithPreferences
-			title={title}
-			width={isNarrow ? '100%' : boxWidth}
-			borderColor={colors.primary}
-			paddingX={2}
-			paddingY={1}
-			flexDirection="column"
-			marginBottom={1}
-		>
-			{!isNarrow && (
-				<Box marginBottom={1}>
-					<Text color={colors.secondary}>
-						Toggle settings with Enter. Shift+Tab to go back, Esc to go back
-					</Text>
-				</Box>
-			)}
-
-			<Box marginBottom={1}>
-				<Text color={colors.secondary}>
-					Use /statusline command &lt;cmd&gt; to set a custom command.
 				</Text>
 			</Box>
 

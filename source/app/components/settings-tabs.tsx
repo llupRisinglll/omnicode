@@ -6,18 +6,12 @@ import {StyledTitle} from '@/components/ui/styled-title';
 import {getAppConfig, loadDefaultMode, reloadAppConfig} from '@/config/index';
 import {
 	getAlternateScreen,
-	getInnerDaemonModel,
 	getNanocoderShape,
 	getNotificationsPreference,
 	getPasteThreshold,
 	getPrivacyPreference,
 	getReasoningExpanded,
-	getSteeringEnabled,
-	getSteeringVerbose,
-	loadPreferences,
 	updateAlternateScreen,
-	updateSteeringEnabled,
-	updateSteeringVerbose,
 } from '@/config/preferences';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
@@ -37,12 +31,10 @@ import type {
 } from './settings-selector';
 import {
 	SettingsDisplayPanel,
-	SettingsInnerDaemonModelPanel,
 	SettingsNanocoderShapePanel,
 	SettingsNotificationsPanel,
 	SettingsPasteThresholdPanel,
 	SettingsPrivacyPanel,
-	SettingsStatusLinePanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
 } from './settings-selector';
@@ -124,7 +116,6 @@ function buildRowsForTab(
 ): SettingRow[] {
 	switch (tabId) {
 		case 'appearance': {
-			const statusLine = loadPreferences().statusLine;
 			return [
 				{
 					kind: 'managed',
@@ -146,13 +137,6 @@ function buildRowsForTab(
 					label: 'Nanocoder Shape',
 					value: getNanocoderShape() ?? 'tiny',
 					panel: 'nanocoder-shape',
-				},
-				{
-					kind: 'managed',
-					id: 'status-line',
-					label: 'Status Line',
-					value: statusLine?.enabled ? 'on' : 'off',
-					panel: 'status-line',
 				},
 				{
 					kind: 'boolean',
@@ -264,27 +248,6 @@ function buildRowsForTab(
 					label: 'Privacy',
 					value: getPrivacyPreference() ? 'on' : 'off',
 					panel: 'privacy',
-				},
-				{
-					kind: 'boolean',
-					id: 'innerdaemon',
-					label: 'InnerDaemon',
-					value: getSteeringEnabled(),
-					onToggle: () => updateSteeringEnabled(!getSteeringEnabled()),
-				},
-				{
-					kind: 'boolean',
-					id: 'innerdaemon-verbose',
-					label: 'InnerDaemon Verbose',
-					value: getSteeringVerbose(),
-					onToggle: () => updateSteeringVerbose(!getSteeringVerbose()),
-				},
-				{
-					kind: 'managed',
-					id: 'innerdaemon-model',
-					label: 'InnerDaemon Model',
-					value: getInnerDaemonModel() ?? 'default (main agent)',
-					panel: 'innerdaemon-model',
 				},
 				{
 					kind: 'managed',
@@ -429,12 +392,6 @@ function renderManagedPanel(
 			return <SettingsDisplayPanel onBack={onBack} onCancel={onBack} />;
 		case 'privacy':
 			return <SettingsPrivacyPanel onBack={onBack} onCancel={onBack} />;
-		case 'status-line':
-			return <SettingsStatusLinePanel onBack={onBack} onCancel={onBack} />;
-		case 'innerdaemon-model':
-			return (
-				<SettingsInnerDaemonModelPanel onBack={onBack} onCancel={onBack} />
-			);
 		case 'json-config':
 			return <SettingsJsonConfigPanel onBack={onBack} onCancel={onBack} />;
 		case 'web-search':
