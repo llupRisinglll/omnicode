@@ -28,12 +28,12 @@ New work lands on `rc/*` branches here first, then gets proposed back to the ori
 | Statusline position control (`/statusline position top\|bottom`) | Incubating on `rc/statusline` |
 | Animated working/thinking indicators (`⚙ Working... (12s)`, `⚙ Thought (5s)`) | Incubating on `rc/indicators` |
 | Compact file diff display with inline word highlighting | Incubating on `rc/compact-diff` |
-| Session working directory — `cd` in bash persists across commands, and file tools resolve relative paths against it (fixes reads/edits after `cd` into a subdirectory or worktree) | Incubating on `rc/session-cwd` |
 | Optimized welcome header + conditional tips display | Incubating on `rc/welcome-header` |
 | `$ARGUMENTS` pass-through for commands without declared parameters | Incubating on `rc/arguments-passthrough` |
 | Atomic paste placeholders — cursor can't land inside `[Paste #N]`, backspace removes it whole, chat history shows the real pasted text | Incubating on `rc/paste-placeholders` |
 | Command menu descriptions — completion list shows each command's description, grey unselected rows | Incubating on `rc/command-menu-descriptions` |
 | Input command highlighting — valid leading slash commands are highlighted while typing | Incubating on `rc/input-command-highlight` |
+| Settings consolidation — every remaining option lives in `/settings` (tabs, search, default mode, auto-compact, sessions, tool auto-approval, Web Search key, environment view) plus an in-app JSON editor for `agents.config.json` | Incubating on `rc/settings-consolidation` |
 | Anthropic prompt caching — stable/volatile system-prompt split, breakpoint budget on tools + system + messages (≈90% input-token cost cut on cached turns) | Incubating on `rc/provider-network-prompt-arch` |
 | Per-provider tool naming — Claude Code names for Anthropic, Codex names for OpenAI, snake_case for local models; aliases accepted bidirectionally | Incubating on `rc/provider-network-prompt-arch` |
 | Per-model identity prompts, MCP server instructions in system prompt, skills-in-prompt listing + `skill` tool | Incubating on `rc/provider-network-prompt-arch` |
