@@ -517,8 +517,21 @@ TEMP_WORKTREE=""
 # reviewed one, so every one of these paths conflicts on the next upstream
 # merge. Upstream's version supersedes ours by definition.
 upstream_pr_paths() {
-	local pr_num="$1"
-	gh pr view "$pr_num" -R "$UPSTREAM_REPO" --json files --jq '.files[].path' 2>/dev/null || true
+	local pr_num="$1" branch="$2" path
+	local -a candidates=()
+	mapfile -t candidates < <(gh pr view "$pr_num" -R "$UPSTREAM_REPO" --json files --jq '.files[].path' 2>/dev/null || true)
+	[ "${#candidates[@]}" -eq 0 ] && return 0
+
+	# A path is only safe to supersede if fork main's copy is IDENTICAL to the
+	# rc branch we proposed. When main's copy has diverged it is because main
+	# layered fork-only work into the same file (extra settings panels, theme
+	# hooks), and taking upstream's side wholesale would silently delete it.
+	for path in "${candidates[@]}"; do
+		if [ -n "$branch" ] && ! git diff --quiet "origin/main" "$branch" -- "$path" 2>/dev/null; then
+			continue
+		fi
+		printf '%s\n' "$path"
+	done
 }
 
 # Take upstream's side for conflicts inside SUPERSEDE_PATHS. Anything else is a
@@ -1331,8 +1344,9 @@ cmd_merged() {
 	# Our copy of this feature is now the stale one: load the PR's file list so
 	# the upstream merge below resolves those paths to upstream instead of
 	# stopping on a conflict per file.
-	mapfile -t SUPERSEDE_PATHS < <(upstream_pr_paths "$pr_num")
-	echo "    PR #$pr_num touched ${#SUPERSEDE_PATHS[@]} path(s); conflicts there will take upstream's side."
+	mapfile -t SUPERSEDE_PATHS < <(upstream_pr_paths "$pr_num" "$branch")
+	echo "    PR #$pr_num: ${#SUPERSEDE_PATHS[@]} path(s) safe to supersede (fork main never diverged there)."
+	echo "    Any other conflict stops the run -- main may carry fork-only work in that file."
 
 	FORK_FLOW_YES=1 cmd_sync_main
 	SUPERSEDE_PATHS=()
@@ -1421,7 +1435,7 @@ cmd_sync_pr() {
 	SUPERSEDE_PATHS=()
 	for tag in $(git for-each-ref --format='%(refname:short)' 'refs/tags/pr-*-merged'); do
 		num="${tag#pr-}"; num="${num%-merged}"
-		mapfile -t -O "${#SUPERSEDE_PATHS[@]}" SUPERSEDE_PATHS < <(upstream_pr_paths "$num")
+		mapfile -t -O "${#SUPERSEDE_PATHS[@]}" SUPERSEDE_PATHS < <(upstream_pr_paths "$num" "$(gh pr view "$num" -R "$UPSTREAM_REPO" --json headRefName --jq .headRefName 2>/dev/null)")
 	done
 	echo "    ${#SUPERSEDE_PATHS[@]} path(s) superseded by already-merged upstream PRs."
 
