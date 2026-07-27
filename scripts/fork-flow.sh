@@ -557,6 +557,32 @@ resolve_superseded_conflicts() {
 	[ -z "$(git -C "$wt" diff --name-only --diff-filter=U)" ]
 }
 
+# Fork-only work living in files upstream also edits can be deleted by a merge
+# that resolves those files to upstream. tsc, the tests and the build all still
+# pass, because the code removes itself consistently. Assert the fork features
+# are still present before we push anything.
+check_fork_invariants() {
+	local wt="${1:-.}" file="scripts/fork-invariants.txt"
+	local line pat pathspec label missing=0
+
+	[ -f "$file" ] || return 0
+	while IFS='|' read -r pat pathspec label; do
+		case "$pat" in ''|'#'*) continue ;; esac
+		[ -n "$pathspec" ] || continue
+		if ! git -C "$wt" grep -q -F -- "$pat" -- "$pathspec" 2>/dev/null; then
+			echo "    MISSING: $label"
+			echo "             ('$pat' no longer found in $pathspec)"
+			missing=1
+		fi
+	done < "$file"
+
+	if [ "$missing" -eq 1 ]; then
+		return 1
+	fi
+	echo "    Fork invariants OK."
+	return 0
+}
+
 cleanup_temp_worktree() {
 	if [ -n "$TEMP_WORKTREE" ]; then
 		git worktree remove --force "$TEMP_WORKTREE" 2>/dev/null || true
@@ -1071,6 +1097,12 @@ cmd_sync_main() {
     Conflicts needing a human:
 $remaining"
 			fi
+		fi
+		if ! check_fork_invariants "$TEMP_WORKTREE"; then
+			cleanup_temp_worktree
+			die "the upstream merge dropped fork-only work (see MISSING above) -- NOT pushed.
+    Re-merge those files by hand: take upstream's version, then re-apply the
+    fork additions on top. Verify with scripts/fork-invariants.txt."
 		fi
 		git -C "$TEMP_WORKTREE" push origin main
 	fi
