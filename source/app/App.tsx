@@ -16,6 +16,7 @@ import {SuccessMessage} from '@/components/message-box';
 import SecurityDisclaimer from '@/components/security-disclaimer';
 import StreamingMessage from '@/components/streaming-message';
 import StreamingReasoning from '@/components/streaming-reasoning';
+import {SubagentView} from '@/components/subagent-view';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {
 	shouldPromptExtensionInstall,
@@ -41,6 +42,7 @@ import {TitleShapeContext, updateTitleShape} from '@/hooks/useTitleShape';
 import {UIStateProvider} from '@/hooks/useUIState';
 import {useUserMessageQueue} from '@/hooks/useUserMessageQueue';
 import {useVSCodeServer} from '@/hooks/useVSCodeServer';
+import {getAllSubagentProgress} from '@/services/subagent-events';
 import {generateKey} from '@/session/key-generator';
 import type {ImageAttachment} from '@/types/core';
 import type {ThemePreset} from '@/types/ui';
@@ -170,11 +172,53 @@ export default function App({
 		void getShutdownManager().gracefulShutdown(0);
 	};
 
+	// Mirror of attachedAgentId that updates synchronously, so rapid Ctrl+S
+	// presses cycle correctly even before React commits the previous change.
+	const attachedAgentIdRef = React.useRef(appState.attachedAgentId);
+	React.useEffect(() => {
+		attachedAgentIdRef.current = appState.attachedAgentId;
+	}, [appState.attachedAgentId]);
+
+	// Attach/cycle/detach the subagent inspector. The transcript renders
+	// through <Static> (append-only, permanent scrollback), so switching
+	// views needs the same treatment as /clear: wipe the real terminal, then
+	// let the remounted <Static> (keyed by agentId / conversationId) reprint.
+	const changeAttachedAgent = (nextAgentId: string | null) => {
+		if (attachedAgentIdRef.current === nextAgentId) {
+			return;
+		}
+		attachedAgentIdRef.current = nextAgentId;
+		if (!altScreenActive && process.stdout.isTTY) {
+			process.stdout.write('\x1B[2J\x1B[3J\x1B[H');
+		}
+		appState.setAttachedAgentId(nextAgentId);
+	};
+
 	// Ink's built-in exitOnCtrlC is disabled (cli.tsx) so Ctrl+C can run
 	// the same graceful path as /exit instead of abandoning the last frame.
 	useInput((input, key) => {
 		if (key.ctrl && input === 'c') {
 			handleExit();
+		}
+		if (key.ctrl && input === 's') {
+			const progresses = Array.from(getAllSubagentProgress().entries());
+			const runningAgents = progresses
+				.filter(([_, p]) => p.status !== 'complete' && p.status !== 'error')
+				.map(([id]) => id);
+
+			const current = attachedAgentIdRef.current;
+			if (runningAgents.length === 0) {
+				changeAttachedAgent(null);
+			} else if (!current) {
+				changeAttachedAgent(runningAgents[0]);
+			} else {
+				const currentIndex = runningAgents.indexOf(current);
+				changeAttachedAgent(
+					currentIndex === -1
+						? runningAgents[0]
+						: runningAgents[(currentIndex + 1) % runningAgents.length],
+				);
+			}
 		}
 	});
 
@@ -845,26 +889,35 @@ export default function App({
 						privacySessionMapRef: appState.privacySessionMapRef,
 					}}
 				>
-					<InteractiveApp
-						altScreenActive={altScreenActive}
-						appState={appState}
-						chatHandler={chatHandler}
-						modeHandlers={modeHandlers}
-						appHandlers={appHandlers}
-						vscodeServer={vscodeServer}
-						staticComponents={staticComponents}
-						transientNoticeComponents={transientNoticeComponents}
-						clearKey={conversationId}
-						liveComponent={liveComponent}
-						pendingSubagentApproval={pendingSubagentApproval}
-						handleSubagentToolApproval={handleSubagentToolApproval}
-						pendingToolConfirmation={pendingToolConfirmation}
-						handleToolConfirmation={handleToolConfirmation}
-						handleQuestionAnswer={handleQuestionAnswer}
-						handleUserSubmit={handleUserSubmit}
-						userMessageQueue={userMessageQueue}
-						handleIdeSelect={handleIdeSelect}
-					/>
+					{appState.attachedAgentId ? (
+						<SubagentView
+							agentId={appState.attachedAgentId}
+							onDetach={() => changeAttachedAgent(null)}
+							reasoningExpanded={appState.reasoningExpanded}
+							altScreenActive={altScreenActive}
+						/>
+					) : (
+						<InteractiveApp
+							altScreenActive={altScreenActive}
+							appState={appState}
+							chatHandler={chatHandler}
+							modeHandlers={modeHandlers}
+							appHandlers={appHandlers}
+							vscodeServer={vscodeServer}
+							staticComponents={staticComponents}
+							transientNoticeComponents={transientNoticeComponents}
+							clearKey={conversationId}
+							liveComponent={liveComponent}
+							pendingSubagentApproval={pendingSubagentApproval}
+							handleSubagentToolApproval={handleSubagentToolApproval}
+							pendingToolConfirmation={pendingToolConfirmation}
+							handleToolConfirmation={handleToolConfirmation}
+							handleQuestionAnswer={handleQuestionAnswer}
+							handleUserSubmit={handleUserSubmit}
+							userMessageQueue={userMessageQueue}
+							handleIdeSelect={handleIdeSelect}
+						/>
+					)}
 				</PrivacyContext.Provider>
 			</TitleShapeContext.Provider>
 		</ThemeContext.Provider>
