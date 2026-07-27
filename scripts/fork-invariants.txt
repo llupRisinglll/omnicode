@@ -1,0 +1,24 @@
+# Fork invariants: things that MUST still exist on fork main.
+#
+# Checked after every upstream merge, BEFORE pushing. An upstream merge that
+# resolves a shared file to upstream's side deletes fork-only work silently:
+# the tree stays type-correct and every test passes, because the code removes
+# itself consistently. Only an explicit "is it still there?" check catches it.
+# This list is that check. See NanoCollective/CLAUDE.md, "Fork invariants".
+#
+# Format:  <grep pattern>|<pathspec>|<what it is>
+# Add a line whenever a fork-only feature lands in a file upstream also edits.
+
+SettingsStatusLinePanel|source/app/components|Status Line settings panel (fork-only)
+SettingsInnerDaemonModelPanel|source/app/components|InnerDaemon model settings panel (fork-only)
+status-line|source/app/components/settings-tabs.tsx|Status Line row in the settings tabs
+innerdaemon|source/app/components/settings-tabs.tsx|InnerDaemon rows in the settings tabs
+transientNoticeComponents|source/app|transient notice components plumbing (fork-only)
+
+assistantIcon|source/types/ui.ts|theme hook: assistant icon
+promptChar|source/types/ui.ts|theme hook: prompt character
+textboxBackground|source/types/ui.ts|theme hook: textbox background
+bannerGradient|source/types/ui.ts|theme hook: banner gradient
+omnicode|source/config/themes.json|omnicode theme definition
+omnicode|source/config/themes.ts|omnicode is the fork default theme
+A fork of nanocoder|source/components/welcome-message.tsx|fork banner attribution
