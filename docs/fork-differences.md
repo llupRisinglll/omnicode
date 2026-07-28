@@ -20,6 +20,7 @@ This lives outside README.md so routine branch churn doesn't touch the README.
 | Atomic paste placeholders — cursor can't land inside `[Paste #N]`, backspace removes it whole, chat history shows the real pasted text | Incubating on `rc/paste-placeholders` |
 | Command menu descriptions — completion list shows each command's description, grey unselected rows | Incubating on `rc/command-menu-descriptions` |
 | Input command highlighting — valid leading slash commands are highlighted while typing | Incubating on `rc/input-command-highlight` |
+| Semantic memory with `/remember`, `/memory`, project-context prompt recall, and an Advanced setting to disable recall for stateless agents | Incubating on `rc/semantic-memory-setting` |
 | Anthropic prompt caching — stable/volatile system-prompt split, breakpoint budget on tools + system + messages (≈90% input-token cost cut on cached turns) | Incubating on `rc/provider-network-prompt-arch` |
 | Per-provider tool naming — Claude Code names for Anthropic, Codex names for OpenAI, snake_case for local models; aliases accepted bidirectionally | Incubating on `rc/provider-network-prompt-arch` |
 | Per-model identity prompts, MCP server instructions in system prompt, skills-in-prompt listing + `skill` tool | Incubating on `rc/provider-network-prompt-arch` |
