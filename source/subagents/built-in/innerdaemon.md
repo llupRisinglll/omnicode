@@ -1,5 +1,6 @@
 ---
 name: innerdaemon
+title: InnerDaemon
 description: Auto-steering secondary thinker. Observes the main agent's recent turns when a steering rule's condition matches and decides whether to inject a course-correcting nudge. Read-only — it never edits code or runs mutations; its only output is a structured steering decision. Invoked programmatically by the steering engine, not by the main agent.
 model: inherit
 internal: true

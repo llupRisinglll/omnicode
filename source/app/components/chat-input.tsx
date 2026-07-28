@@ -73,6 +73,8 @@ export interface ChatInputProps {
 	// Tool display
 	onToggleCompactDisplay?: () => void;
 	compactToolDisplay?: boolean;
+	liveCompactCounts?: React.ReactNode;
+	liveCompactStatus?: React.ReactNode;
 	liveTaskList?: Task[] | null;
 
 	// Handlers
@@ -132,6 +134,8 @@ export function ChatInput({
 	sessionName,
 	onToggleCompactDisplay,
 	compactToolDisplay,
+	liveCompactCounts,
+	liveCompactStatus,
 	liveTaskList,
 	onSubmit,
 	onToggleMode,
@@ -153,6 +157,8 @@ export function ChatInput({
 
 	return (
 		<Box flexDirection="column">
+			{liveCompactCounts}
+
 			{/* Live task list - updates in-place below tool counts, above spinner */}
 			{liveTaskList && liveTaskList.length > 0 && (
 				<TaskListDisplay tasks={liveTaskList} title="Tasks" />
@@ -215,6 +221,7 @@ export function ChatInput({
 						currentModel={currentModel}
 						statusInfo={statusInfo}
 						statusLineSlot={statusLineSlot}
+						busyStatus={liveCompactStatus ?? undefined}
 						activeEditor={activeEditor}
 						onDismissActiveEditor={onDismissActiveEditor}
 					/>

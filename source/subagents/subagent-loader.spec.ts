@@ -13,9 +13,11 @@ test.serial('loads built-in subagents', async t => {
 	const exploreAgent = await loader.getSubagent('explore');
 	t.true(exploreAgent !== null, 'Research agent should exist');
 	t.is(exploreAgent?.name, 'explore');
+	t.is(exploreAgent?.provider, undefined);
 	t.is(exploreAgent?.model, 'inherit');
 	t.true(exploreAgent?.tools?.includes('read_file'));
 	t.true(exploreAgent?.tools?.includes('search_file_contents'));
+	t.true(exploreAgent?.tools?.includes('execute_bash'));
 });
 
 test.serial('lists all available subagents', async t => {

@@ -40,6 +40,8 @@ interface InteractiveAppProps {
 	staticComponents: React.ReactNode[];
 	transientNoticeComponents?: React.ReactNode[];
 	liveComponent: React.ReactNode;
+	liveCompactCounts?: React.ReactNode;
+	liveCompactStatus?: React.ReactNode;
 	pendingSubagentApproval: PendingToolApproval | null;
 	handleSubagentToolApproval: (confirmed: boolean) => void;
 	pendingToolConfirmation: PendingToolConfirmation | null;
@@ -76,6 +78,8 @@ export function InteractiveApp({
 	staticComponents,
 	transientNoticeComponents = [],
 	liveComponent,
+	liveCompactCounts,
+	liveCompactStatus,
 	pendingSubagentApproval,
 	handleSubagentToolApproval,
 	pendingToolConfirmation,
@@ -467,6 +471,8 @@ export function InteractiveApp({
 						<ModalSelectors
 							activeMode={appState.activeMode}
 							isSettingsMode={appState.isSettingsMode}
+							settingsInitialTab={appState.settingsInitialTab}
+							toolManager={appState.toolManager}
 							showAllSessions={appState.showAllSessions}
 							currentModel={appState.currentModel}
 							currentProvider={appState.currentProvider}
@@ -543,6 +549,8 @@ export function InteractiveApp({
 								contextSource={appState.contextSource}
 								sessionName={appState.sessionName || undefined}
 								compactToolDisplay={appState.compactToolDisplay}
+								liveCompactCounts={liveCompactCounts}
+								liveCompactStatus={liveCompactStatus}
 								liveTaskList={appState.liveTaskList}
 								onToggleCompactDisplay={handleToggleCompactDisplay}
 								pendingSubagentApproval={pendingSubagentApproval}

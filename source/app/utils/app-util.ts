@@ -553,6 +553,11 @@ async function handleSlashCommand(
 	if (await handleCommandCreate(commandParts, options)) return;
 	if (await handleAgentCreate(commandParts, options)) return;
 	if (await handleAgentCopy(commandParts, options)) return;
+	if (commandParts[0] === 'agents' && commandParts.length === 1) {
+		options.onEnterSettingsMode('agents');
+		options.onCommandComplete?.();
+		return;
+	}
 	if (await handleToolCreate(commandParts, options)) return;
 	if (await handleSkillsCreate(commandParts, options)) return;
 	if (await handleSpecialCommand(commandName, options)) return;

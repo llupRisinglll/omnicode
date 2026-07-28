@@ -42,6 +42,7 @@ export async function parseSubagentMarkdown(
 
 	const config: SubagentConfig = {
 		name: frontmatter.name,
+		title: frontmatter.title,
 		description: frontmatter.description,
 		provider: frontmatter.provider,
 		model: frontmatter.model || 'inherit',
@@ -74,6 +75,16 @@ export function validateFrontmatter(
 		return {
 			valid: false,
 			error: 'name is required and must be a non-empty string',
+		};
+	}
+
+	if (
+		frontmatter.title !== undefined &&
+		(typeof frontmatter.title !== 'string' || !frontmatter.title.trim())
+	) {
+		return {
+			valid: false,
+			error: 'title must be a non-empty string',
 		};
 	}
 

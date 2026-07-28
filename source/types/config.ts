@@ -472,4 +472,16 @@ export interface UserPreferences {
 	 * finding #10).
 	 */
 	innerDaemonModel?: string | null;
+	/**
+	 * Per-subagent provider/model overrides. Missing agent entries default to the
+	 * subagent definition's own provider/model; built-ins use `model: inherit`,
+	 * so the default behavior is to inherit the main agent provider and model.
+	 */
+	subagentModels?: Record<
+		string,
+		{
+			provider: string;
+			model: string;
+		} | null
+	>;
 }

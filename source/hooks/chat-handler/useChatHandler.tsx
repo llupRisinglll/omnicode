@@ -10,6 +10,7 @@ import {
 	getInnerDaemonModel,
 	getSteeringEnabled,
 	getSteeringVerbose,
+	getSubagentModelPreference,
 	subscribeSteeringPrefs,
 } from '@/config/preferences';
 import {CommandIntegration} from '@/custom-commands/command-integration';
@@ -350,16 +351,16 @@ export function useChatHandler({
 			developmentModeRef
 				? () => developmentModeRef.current ?? 'normal'
 				: undefined,
-			// Live model resolver: read the InnerDaemon-model preference on every
-			// run. null (default) → undefined → inherit the session model exactly
-			// as before; a set value overrides it (see SubagentExecutor).
-			() => getInnerDaemonModel() ?? undefined,
 		);
 		engine.bindExecutor(executor);
-		// Same resolver, so the verbose/trigger trace can report which model the
-		// InnerDaemon thinker uses (visible when a custom model is configured).
+		// Report the configured InnerDaemon model in verbose/trigger traces.
+		// Prefer the provider/model subagent setting; fall back to the legacy
+		// model-only preference for existing preferences files.
 		engine.setInnerDaemonModelResolver(
-			() => getInnerDaemonModel() ?? undefined,
+			() =>
+				getSubagentModelPreference('innerdaemon')?.model ??
+				getInnerDaemonModel() ??
+				undefined,
 		);
 		innerdaemonBoundRef.current = true;
 	}, [client, toolManager, developmentModeRef]);

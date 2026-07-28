@@ -23,6 +23,7 @@ test.serial('updateSubagentProgress updates all fields', t => {
 		subagentName: 'research',
 		status: 'tool_call',
 		currentTool: 'read_file',
+		modelUsed: 'mimo-v2.5',
 		toolCallCount: 3,
 		turnCount: 2,
 		tokenCount: 500,
@@ -31,6 +32,7 @@ test.serial('updateSubagentProgress updates all fields', t => {
 	t.is(subagentProgress.subagentName, 'research');
 	t.is(subagentProgress.status, 'tool_call');
 	t.is(subagentProgress.currentTool, 'read_file');
+	t.is(subagentProgress.modelUsed, 'mimo-v2.5');
 	t.is(subagentProgress.toolCallCount, 3);
 	t.is(subagentProgress.turnCount, 2);
 	t.is(subagentProgress.tokenCount, 500);

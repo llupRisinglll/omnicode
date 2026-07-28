@@ -84,6 +84,7 @@ interface ChatProps {
 	currentModel?: string; // Active model id — resolves the 'auto' tune profile for display
 	statusInfo?: DevelopmentModeStatusInfo;
 	statusLineSlot?: ReactNode;
+	busyStatus?: ReactNode;
 	activeEditor?: ActiveEditorState | null; // VS Code active file + optional selection
 	onDismissActiveEditor?: () => void; // Dismiss the active editor pill on clear/escape
 	forceFocus?: boolean; // Force focus for testing (bypasses useFocus)
@@ -112,6 +113,7 @@ export default function UserInput({
 	currentModel,
 	statusInfo,
 	statusLineSlot,
+	busyStatus,
 	activeEditor,
 	onDismissActiveEditor,
 	forceFocus = false,
@@ -1090,7 +1092,7 @@ export default function UserInput({
 		<>
 			{!isBashMode ? (
 				<Box marginTop={1}>
-					{isBusy && getShowWorkingIndicator() ? (
+					{isBusy && (busyStatus || getShowWorkingIndicator()) ? (
 						<Box>
 							<Text color={colors.primary}>
 								<AnimatedGear />
@@ -1101,6 +1103,9 @@ export default function UserInput({
 							<Text color={colors.primary}>
 								<Spinner type="simpleDots" />
 							</Text>
+							{busyStatus && (
+								<Text color={colors.secondary}> · {busyStatus}</Text>
+							)}
 							{workingStartTime && (
 								<ElapsedTimer startTime={workingStartTime} />
 							)}

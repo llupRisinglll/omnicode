@@ -35,6 +35,7 @@ export interface CompactToolActivity {
 	detail?: string;
 	details?: string[];
 	liveDetails?: () => string[];
+	liveRunning?: () => boolean;
 	failed?: boolean;
 	running?: boolean;
 }
@@ -44,7 +45,13 @@ export type CompactToolActivityMap = Record<
 	number | CompactToolActivity
 >;
 
+const COMPACT_AGENT_HEADER_DETAIL_MAX = 48;
+
 type CompactToolCountsInput = CompactToolActivityMap;
+
+function isCompactActivityRunning(activity: CompactToolActivity): boolean {
+	return activity.liveRunning?.() ?? Boolean(activity.running);
+}
 
 function normalizeCompactToolEntries(
 	counts: CompactToolCountsInput,
@@ -69,12 +76,18 @@ function mergeCompactToolEntries(
 	const mergedEntries = Array.from(
 		entries
 			.reduce((merged, [toolName, activity]) => {
-				hasRunning ||= Boolean(activity.running);
+				hasRunning ||= isCompactActivityRunning(activity);
 				const current = merged.get(toolName);
 				merged.set(toolName, {
 					count: (current?.count ?? 0) + activity.count,
 					detail: current?.detail ?? activity.detail,
 					details: [...(current?.details ?? []), ...(activity.details ?? [])],
+					liveRunning:
+						current?.liveRunning || activity.liveRunning
+							? () =>
+									Boolean(current?.liveRunning?.()) ||
+									Boolean(activity.liveRunning?.())
+							: undefined,
 					liveDetails:
 						current?.liveDetails || activity.liveDetails
 							? () => [
@@ -93,7 +106,38 @@ function mergeCompactToolEntries(
 	return {entries: mergedEntries, hasRunning};
 }
 
-function getCompactDisplayToolName(toolName: string): string {
+function isAgentCompactToolName(toolName: string): boolean {
+	return toolName.startsWith('agent:');
+}
+
+function getAgentCompactParts(activity?: CompactToolActivity): {
+	name: string;
+	detail: string;
+} {
+	const detail = activity?.details?.[0] ?? activity?.liveDetails?.()[0] ?? '';
+	const separator = detail.indexOf(':');
+	const agentName = separator === -1 ? detail : detail.slice(0, separator);
+	const task = separator === -1 ? '' : detail.slice(separator + 1).trim();
+	return {
+		name: agentName.trim() || displayForFormat('agent', 'claude-code'),
+		detail: task,
+	};
+}
+
+function getAgentCompactDisplayName(activity?: CompactToolActivity): string {
+	const {name, detail} = getAgentCompactParts(activity);
+	return detail
+		? `${name}(${truncateDetail(detail, COMPACT_AGENT_HEADER_DETAIL_MAX)})`
+		: name;
+}
+
+function getCompactDisplayToolName(
+	toolName: string,
+	activity?: CompactToolActivity,
+): string {
+	if (toolName.startsWith('agent:')) {
+		return getAgentCompactDisplayName(activity);
+	}
 	return displayForFormat(toolName, 'claude-code');
 }
 
@@ -101,7 +145,9 @@ function ToolGlyph({running = false}: {running?: boolean}) {
 	const {colors} = useTheme();
 	return (
 		<>
-			<Text color={running ? colors.text : colors.primary}>{'\u2692'} </Text>
+			<Text color={running ? colors.secondary : colors.primary}>
+				{'\u2692'}{' '}
+			</Text>
 			<Text> </Text>
 		</>
 	);
@@ -145,6 +191,7 @@ function formatGroupedToolEntries(
 					toolName={toolName}
 					count={activity.count}
 					failed={activity.failed}
+					activity={activity}
 				/>
 			</React.Fragment>,
 		);
@@ -156,7 +203,7 @@ function formatToolNameWithCountText(
 	toolName: string,
 	activity: CompactToolActivity,
 ): string {
-	let text = getCompactDisplayToolName(toolName);
+	let text = getCompactDisplayToolName(toolName, activity);
 	if (activity.count > 1) text += ` ×${activity.count}`;
 	if (activity.failed) text += ' failed';
 	return text;
@@ -200,15 +247,40 @@ function ToolNameWithCount({
 	toolName,
 	count,
 	failed,
+	activity,
 }: {
 	toolName: string;
 	count: number;
 	failed?: boolean;
+	activity?: CompactToolActivity;
 }) {
 	const {colors} = useTheme();
+	if (isAgentCompactToolName(toolName)) {
+		const {name, detail} = getAgentCompactParts(activity);
+		const displayDetail = truncateDetail(
+			detail,
+			COMPACT_AGENT_HEADER_DETAIL_MAX,
+		);
+		return (
+			<>
+				<Text color={colors.primary}>{name}</Text>
+				{displayDetail && (
+					<>
+						<Text color={colors.secondary}>(</Text>
+						<Text color={colors.text}>{displayDetail}</Text>
+						<Text color={colors.secondary}>)</Text>
+					</>
+				)}
+				{count > 1 && <Text color={colors.text}> ×{count}</Text>}
+				{failed && <Text color={colors.error}> failed</Text>}
+			</>
+		);
+	}
 	return (
 		<>
-			<Text color={colors.primary}>{getCompactDisplayToolName(toolName)}</Text>
+			<Text color={colors.primary}>
+				{getCompactDisplayToolName(toolName, activity)}
+			</Text>
 			{count > 1 && <Text color={colors.text}> ×{count}</Text>}
 			{failed && <Text color={colors.error}> failed</Text>}
 		</>
@@ -231,7 +303,8 @@ export function CompactToolCountsLine({
 	const singleInline =
 		normalizedEntries.length === 1 &&
 		normalizedEntries[0]?.[1].count === 1 &&
-		normalizedEntries[0]?.[1].detail;
+		normalizedEntries[0]?.[1].detail &&
+		!isAgentCompactToolName(normalizedEntries[0]?.[0]);
 
 	return (
 		<Text>
@@ -242,6 +315,7 @@ export function CompactToolCountsLine({
 						toolName={normalizedEntries[0][0]}
 						count={normalizedEntries[0][1].count}
 						failed={normalizedEntries[0][1].failed}
+						activity={normalizedEntries[0][1]}
 					/>
 					<Text color={colors.secondary}>(</Text>
 					<Text color={colors.text}>
@@ -251,7 +325,7 @@ export function CompactToolCountsLine({
 				</>
 			) : (
 				<>
-					<Text color={colors.text}>{running ? 'Running ' : 'Ran '}</Text>
+					<Text color={colors.text}>Ran </Text>
 					{formatGroupedToolEntries(normalizedEntries, colors.text)}
 				</>
 			)}
@@ -271,15 +345,39 @@ function compactRunningDetailLines(
 ): {
 	lines: Array<{toolName: string; text: string}>;
 	hiddenCount: number;
+	footer?: string;
+	footerNoun: 'commands' | 'lines';
+	state?: string;
 } {
 	const seen = new Set<string>();
 	const lines: Array<{toolName: string; text: string}> = [];
+	let hasAgentEntry = false;
+	let footer: string | undefined;
+	let state: string | undefined;
 	for (const [toolName, activity] of entries) {
-		if (options?.runningOnly && !activity.running) continue;
-		const details = [
-			...(activity.details ?? []),
-			...(activity.liveDetails?.() ?? []),
-		];
+		if (options?.runningOnly && !isCompactActivityRunning(activity)) continue;
+		hasAgentEntry ||= isAgentCompactToolName(toolName);
+		const rawDetails =
+			isAgentCompactToolName(toolName) && (activity.details?.length ?? 0) > 0
+				? (activity.details ?? []).slice(1)
+				: (activity.details ?? []);
+		const details = [...rawDetails, ...(activity.liveDetails?.() ?? [])];
+		if (isAgentCompactToolName(toolName)) {
+			const statsIndex = details.findIndex(detail =>
+				detail.startsWith('stats:'),
+			);
+			if (statsIndex !== -1) {
+				footer = details[statsIndex]?.slice('stats:'.length).trim();
+				details.splice(statsIndex, 1);
+			}
+			const stateIndex = details.findIndex(detail =>
+				detail.startsWith('state:'),
+			);
+			if (stateIndex !== -1) {
+				state = details[stateIndex]?.slice('state:'.length).trim();
+				details.splice(stateIndex, 1);
+			}
+		}
 		for (const detail of details) {
 			const normalized = truncateDetail(detail, 110);
 			if (!normalized || seen.has(normalized)) continue;
@@ -288,10 +386,21 @@ function compactRunningDetailLines(
 		}
 	}
 
-	const displayed = options?.expanded ? lines : lines.slice(-maxLines);
+	const collapsedMaxLines =
+		hasAgentEntry && footer ? Math.max(1, maxLines - 1) : maxLines;
+	const displayed = options?.expanded
+		? lines
+		: hasAgentEntry
+			? options?.runningOnly
+				? lines.slice(-collapsedMaxLines)
+				: lines.slice(0, collapsedMaxLines)
+			: lines.slice(-collapsedMaxLines);
 	return {
 		lines: displayed,
 		hiddenCount: Math.max(0, lines.length - displayed.length),
+		footer,
+		footerNoun: hasAgentEntry ? 'lines' : 'commands',
+		state,
 	};
 }
 
@@ -304,12 +413,32 @@ function CompactDetailLineText({
 }) {
 	const {colors} = useTheme();
 	const display =
-		toolName === 'execute_bash' ? highlightCode(text, 'bash') : text;
+		toolName === 'execute_bash' || toolName.startsWith('execute_bash:')
+			? highlightCode(text, 'bash')
+			: text;
 	return (
 		<Text wrap="truncate-end" color={colors.text}>
 			{display}
 		</Text>
 	);
+}
+
+function partitionCompactEntries(
+	entries: Array<[string, CompactToolActivity]>,
+): {
+	regularEntries: Array<[string, CompactToolActivity]>;
+	agentEntries: Array<[string, CompactToolActivity]>;
+} {
+	const regularEntries: Array<[string, CompactToolActivity]> = [];
+	const agentEntries: Array<[string, CompactToolActivity]> = [];
+	for (const entry of entries) {
+		if (isAgentCompactToolName(entry[0])) {
+			agentEntries.push(entry);
+		} else {
+			regularEntries.push(entry);
+		}
+	}
+	return {regularEntries, agentEntries};
 }
 
 export function getCompactToolExpandHintText(expanded: boolean): string {
@@ -348,6 +477,76 @@ function CompactToolExpandHint({
 			{' '}
 			{getCompactToolExpandHintText(expanded)}
 		</Text>
+	);
+}
+
+function CompactToolActivityBlock({
+	entries,
+	expanded,
+	expandHintHovered = false,
+	running = false,
+}: {
+	entries: Array<[string, CompactToolActivity]>;
+	expanded: boolean;
+	expandHintHovered?: boolean;
+	running?: boolean;
+}) {
+	const {colors} = useTheme();
+	const detailPreview = compactRunningDetailLines(entries, {
+		expanded,
+		runningOnly: running,
+	});
+	const failedAlreadyInTitle = entries.some(([, activity]) => activity.failed);
+	return (
+		<Box flexDirection="column">
+			<Text>
+				<CompactToolCountsLine entries={entries} running={running} />
+				{!running &&
+					detailPreview.state &&
+					!(detailPreview.state === 'failed' && failedAlreadyInTitle) && (
+						<Text color={colors.secondary}> {detailPreview.state}</Text>
+					)}
+				{running && <Text color={colors.secondary}> (running)</Text>}
+				<CompactToolExpandHint
+					expanded={expanded}
+					hovered={expandHintHovered}
+				/>
+			</Text>
+			{detailPreview.lines.map((line, index) => (
+				<Text key={`${index}-${line.text.slice(0, 24)}`}>
+					<Text color={colors.secondary}>
+						{index === 0 ? '  └  ' : '     '}
+					</Text>
+					<CompactDetailLineText toolName={line.toolName} text={line.text} />
+				</Text>
+			))}
+			{(detailPreview.hiddenCount > 0 ||
+				(running &&
+					detailPreview.footer &&
+					detailPreview.footerNoun === 'lines')) && (
+				<Text color={colors.secondary}>
+					{'     '}
+					{detailPreview.hiddenCount > 0 && (
+						<>
+							… +{detailPreview.hiddenCount} more{' '}
+							{detailPreview.hiddenCount === 1
+								? detailPreview.footerNoun.slice(0, -1)
+								: detailPreview.footerNoun}
+							{detailPreview.footer && ' · '}
+						</>
+					)}
+					{detailPreview.footer}
+				</Text>
+			)}
+			{detailPreview.hiddenCount === 0 &&
+				detailPreview.footer &&
+				!(running && detailPreview.footerNoun === 'lines') && (
+					<Text color={colors.secondary}>
+						{'     '}
+						{detailPreview.footer}
+					</Text>
+				)}
+		</Box>
 	);
 }
 
@@ -656,6 +855,48 @@ export function getGroupedCompactDescription(
 	return value === 1 ? toolName : `${toolName} ×${value}`;
 }
 
+export function getCompactToolRunningSummary(
+	counts: CompactToolCountsInput,
+): string | null {
+	const entries = normalizeCompactToolEntries(counts);
+	const agentEntries = entries.filter(([toolName]) =>
+		isAgentCompactToolName(toolName),
+	);
+	if (agentEntries.length === 0) return null;
+
+	const total = agentEntries.length;
+	const running = agentEntries.filter(([, activity]) =>
+		isCompactActivityRunning(activity),
+	).length;
+	const completed = total - running;
+	return `${completed}/${total} agents completed`;
+}
+
+export function LiveCompactRunningSummary({
+	counts,
+}: {
+	counts: CompactToolCountsInput;
+}) {
+	const entries = normalizeCompactToolEntries(counts);
+	const hasRunning = entries.some(([, activity]) =>
+		isCompactActivityRunning(activity),
+	);
+	const hasLiveRunning = entries.some(([, activity]) =>
+		Boolean(activity.liveRunning),
+	);
+	const [, forceRender] = useReducer((x: number) => x + 1, 0);
+
+	useEffect(() => {
+		if (!hasRunning || !hasLiveRunning) return;
+		const interval = setInterval(() => {
+			forceRender();
+		}, 100);
+		return () => clearInterval(interval);
+	}, [hasRunning, hasLiveRunning]);
+
+	return <Text>{getCompactToolRunningSummary(counts)}</Text>;
+}
+
 /**
  * Live display component for running compact tool counts.
  * Shows accumulated counts during execution (e.g. "⚒ read_file ×7").
@@ -672,7 +913,10 @@ export function LiveCompactCounts({
 }) {
 	const entries = normalizeCompactToolEntries(counts);
 	const {entries: mergedEntries, hasRunning} = mergeCompactToolEntries(entries);
-	const {colors} = useTheme();
+	const {regularEntries, agentEntries} = partitionCompactEntries(mergedEntries);
+	const hasRegularRunning = regularEntries.some(([, activity]) =>
+		isCompactActivityRunning(activity),
+	);
 	const hasLiveDetails = mergedEntries.some(([, activity]) =>
 		Boolean(activity.liveDetails),
 	);
@@ -686,37 +930,25 @@ export function LiveCompactCounts({
 		return () => clearInterval(interval);
 	}, [hasRunning, hasLiveDetails]);
 
-	const detailPreview = compactRunningDetailLines(mergedEntries, {
-		expanded,
-		runningOnly: hasRunning,
-	});
-
 	return (
 		<Box flexDirection="column" marginBottom={1}>
-			{mergedEntries.length > 0 && (
-				<Text>
-					<CompactToolCountsLine entries={mergedEntries} />
-					{hasRunning && <Text color={colors.secondary}> (running)</Text>}
-					<CompactToolExpandHint
-						expanded={expanded}
-						hovered={expandHintHovered}
-					/>
-				</Text>
+			{regularEntries.length > 0 && (
+				<CompactToolActivityBlock
+					entries={regularEntries}
+					expanded={expanded}
+					expandHintHovered={expandHintHovered}
+					running={hasRegularRunning}
+				/>
 			)}
-			{detailPreview.lines.map((line, index) => (
-				<Text key={`${index}-${line.text.slice(0, 24)}`}>
-					<Text color={colors.secondary}>
-						{index === 0 ? '  └  ' : '     '}
-					</Text>
-					<CompactDetailLineText toolName={line.toolName} text={line.text} />
-				</Text>
+			{agentEntries.map(([toolName, activity]) => (
+				<CompactToolActivityBlock
+					key={toolName}
+					entries={[[toolName, activity]]}
+					expanded={expanded}
+					expandHintHovered={expandHintHovered}
+					running={isCompactActivityRunning(activity)}
+				/>
 			))}
-			{detailPreview.hiddenCount > 0 && (
-				<Text color={colors.secondary}>
-					{'     '}… +{detailPreview.hiddenCount} more command
-					{detailPreview.hiddenCount === 1 ? '' : 's'}
-				</Text>
-			)}
 		</Box>
 	);
 }
@@ -767,36 +999,29 @@ export function CompactToolCountsSummaryBlock({
 		toolName,
 		typeof value === 'number' ? {count: value} : value,
 	]) as Array<[string, CompactToolActivity]>;
-	const detailPreview = compactRunningDetailLines(normalizedEntries, {
-		expanded,
-	});
+	const {regularEntries, agentEntries} =
+		partitionCompactEntries(normalizedEntries);
 	return (
 		<Box
 			flexDirection="column"
 			marginLeft={indent && !colors.assistantIcon ? 2 : 0}
 			marginBottom={1}
 		>
-			<Text>
-				<CompactToolCountsLine entries={entries} />
-				<CompactToolExpandHint
+			{regularEntries.length > 0 && (
+				<CompactToolActivityBlock
+					entries={regularEntries}
 					expanded={expanded}
-					hovered={expandHintHovered}
+					expandHintHovered={expandHintHovered}
 				/>
-			</Text>
-			{detailPreview.lines.map((line, index) => (
-				<Text key={`${index}-${line.text.slice(0, 24)}`}>
-					<Text color={colors.secondary}>
-						{index === 0 ? '  └  ' : '     '}
-					</Text>
-					<CompactDetailLineText toolName={line.toolName} text={line.text} />
-				</Text>
-			))}
-			{detailPreview.hiddenCount > 0 && (
-				<Text color={colors.secondary}>
-					{'     '}… +{detailPreview.hiddenCount} more command
-					{detailPreview.hiddenCount === 1 ? '' : 's'}
-				</Text>
 			)}
+			{agentEntries.map(([toolName, activity]) => (
+				<CompactToolActivityBlock
+					key={toolName}
+					entries={[[toolName, activity]]}
+					expanded={expanded}
+					expandHintHovered={expandHintHovered}
+				/>
+			))}
 		</Box>
 	);
 }

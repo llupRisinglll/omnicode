@@ -121,6 +121,7 @@ const formatAgentProgressTail = (
 	agentName: string,
 	description: string,
 	progress: ReturnType<typeof getSubagentProgress>,
+	options?: {includeToolHistory?: boolean},
 ): string[] => {
 	const details: string[] = [];
 	const statusParts: string[] = [];
@@ -129,7 +130,7 @@ const formatAgentProgressTail = (
 	} else if (progress.status === 'running') {
 		statusParts.push('thinking');
 	} else if (progress.status === 'complete') {
-		statusParts.push('complete');
+		statusParts.push('completed');
 	} else if (progress.status === 'error') {
 		statusParts.push('error');
 	}
@@ -138,20 +139,86 @@ const formatAgentProgressTail = (
 			`${progress.toolCallCount} tool call${progress.toolCallCount === 1 ? '' : 's'}`,
 		);
 	}
+	if (progress.modelUsed) {
+		statusParts.push(progress.modelUsed);
+	}
 	if (progress.tokenCount > 0) {
 		statusParts.push(`~${progress.tokenCount.toLocaleString()} tokens`);
 	}
 
-	details.push(
-		statusParts.length > 0
-			? `${agentName}: ${statusParts.join(' · ')}`
-			: `${agentName}: ${description}`,
-	);
-
-	for (const toolName of progress.toolHistory.slice(-3)) {
-		details.push(`${agentName} → ${toolName}`);
+	if (progress.currentBashExecutionId && progress.currentBashCommand) {
+		details.push(
+			...formatBashProgressTail(
+				progress.currentBashCommand,
+				progress.currentBashExecutionId,
+			),
+		);
+	} else if (
+		options?.includeToolHistory ||
+		progress.status === 'complete' ||
+		progress.status === 'error'
+	) {
+		for (const toolName of progress.toolHistory.slice(-3)) {
+			details.push(toolName);
+		}
 	}
 
+	if (statusParts.length > 0) {
+		details.push(`stats:${statusParts.join(' · ')}`);
+	} else if (details.length === 0) {
+		details.push(`${agentName}: ${description}`);
+	}
+
+	return details;
+};
+
+const formatDuration = (ms: number): string => {
+	if (ms < 1000) return `${ms}ms`;
+	const seconds = ms / 1000;
+	if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remaining = Math.round(seconds % 60);
+	return `${minutes}m ${remaining}s`;
+};
+
+const formatCompletedAgentDetails = (
+	agentName: string,
+	description: string,
+	progress: ReturnType<typeof getSubagentProgress>,
+	result: {
+		executionTimeMs?: number;
+		modelUsed?: string;
+		tokensUsed?: number;
+		success?: boolean;
+	},
+): string[] => {
+	const details = [`${agentName}: ${description}`];
+	const statusParts = [result.success === false ? 'error' : 'complete'];
+	if (progress.toolCallCount > 0) {
+		statusParts.push(
+			`${progress.toolCallCount} tool call${progress.toolCallCount === 1 ? '' : 's'}`,
+		);
+	}
+	details.push(result.success === false ? 'state:failed' : 'state:completed');
+	details.push(
+		...formatAgentProgressTail(agentName, description, progress, {
+			includeToolHistory: true,
+		}).filter(detail => !detail.startsWith('stats:')),
+	);
+	const stats: string[] = statusParts.slice(1);
+	if (typeof result.executionTimeMs === 'number') {
+		stats.push(formatDuration(result.executionTimeMs));
+	}
+	if (result.modelUsed) {
+		stats.push(result.modelUsed);
+	}
+	const tokens = result.tokensUsed ?? progress.tokenCount;
+	if (tokens > 0) {
+		stats.push(`~${tokens.toLocaleString()} tokens`);
+	}
+	if (stats.length > 0) {
+		details.push(`stats:${stats.join(' · ')}`);
+	}
 	return details;
 };
 
@@ -456,10 +523,11 @@ const executeAgentBatch = async (
 	if (compactDisplay && !nonInteractiveMode && onRunningToolCounts) {
 		const counts: CompactToolActivityMap = {};
 		for (const e of agentExecutions) {
-			const current = counts[e.toolCall.function.name];
+			const key = `agent:${e.agentId}`;
+			const current = counts[key];
 			const currentActivity =
 				typeof current === 'number' ? {count: current} : current;
-			counts[e.toolCall.function.name] = {
+			counts[key] = {
 				count: (currentActivity?.count ?? 0) + 1,
 				details: [
 					...(currentActivity?.details ?? []),
@@ -471,6 +539,10 @@ const executeAgentBatch = async (
 						e.agentDesc,
 						getSubagentProgress(e.agentId),
 					),
+				liveRunning: () => {
+					const status = getSubagentProgress(e.agentId).status;
+					return status !== 'complete' && status !== 'error';
+				},
 				running: true,
 			};
 		}
@@ -571,8 +643,13 @@ const executeAgentBatch = async (
 					);
 				} else {
 					onCompactToolCount?.(
-						result.name,
-						formatAgentProgressTail(e.agentName, e.agentDesc, progress),
+						`agent:${e.agentId}`,
+						formatCompletedAgentDetails(
+							e.agentName,
+							e.agentDesc,
+							progress,
+							agentResult,
+						),
 						true,
 					);
 				}
@@ -586,8 +663,13 @@ const executeAgentBatch = async (
 				);
 			} else {
 				onCompactToolCount?.(
-					result.name,
-					formatAgentProgressTail(e.agentName, e.agentDesc, progress),
+					`agent:${e.agentId}`,
+					formatCompletedAgentDetails(
+						e.agentName,
+						e.agentDesc,
+						progress,
+						agentResult,
+					),
 				);
 			}
 		} else {

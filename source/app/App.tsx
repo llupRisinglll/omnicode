@@ -52,8 +52,10 @@ import {setNotificationsConfig} from '@/utils/notifications';
 import {getShutdownManager} from '@/utils/shutdown';
 import {pointerEvents} from '@/utils/terminal-mouse';
 import {
+	getCompactToolRunningSummary,
 	getLiveCompactToolExpandHitboxColumns,
 	LiveCompactCounts,
+	LiveCompactRunningSummary,
 } from '@/utils/tool-result-display';
 import {isExtensionInstalled} from '@/vscode/extension-installer';
 
@@ -480,6 +482,7 @@ export default function App({
 		getMessageTokens: appState.getMessageTokens,
 		setActiveMode: appState.setActiveMode,
 		setIsSettingsMode: appState.setIsSettingsMode,
+		setSettingsInitialTab: appState.setSettingsInitialTab,
 		addToChatQueue: appState.addToChatQueue,
 		reinitializeMCPServers: appInitialization.reinitializeMCPServers,
 		setTune: appState.setTune,
@@ -791,6 +794,11 @@ export default function App({
 				expandHintHovered={compactExpandHintHovered}
 			/>
 		) : null;
+	const liveCompactStatus = appState.compactToolCounts ? (
+		getCompactToolRunningSummary(appState.compactToolCounts) ? (
+			<LiveCompactRunningSummary counts={appState.compactToolCounts} />
+		) : null
+	) : null;
 
 	React.useEffect(() => {
 		const counts = appState.compactToolCounts;
@@ -850,7 +858,14 @@ export default function App({
 			</>
 		) : null;
 
-	const liveComponent =
+	const interactiveLiveComponent =
+		appState.liveComponent || streamingLiveComponent ? (
+			<>
+				{appState.liveComponent}
+				{streamingLiveComponent}
+			</>
+		) : null;
+	const nonInteractiveLiveComponent =
 		liveCompactCounts || appState.liveComponent || streamingLiveComponent ? (
 			<>
 				{liveCompactCounts}
@@ -870,7 +885,7 @@ export default function App({
 							startChat={appState.startChat}
 							staticComponents={staticComponents}
 							queuedComponents={appState.chatComponents}
-							liveComponent={liveComponent}
+							liveComponent={nonInteractiveLiveComponent}
 							statusMessage={nonInteractiveLoadingMessage}
 						/>
 					</UIStateProvider>
@@ -907,7 +922,9 @@ export default function App({
 							staticComponents={staticComponents}
 							transientNoticeComponents={transientNoticeComponents}
 							clearKey={conversationId}
-							liveComponent={liveComponent}
+							liveComponent={interactiveLiveComponent}
+							liveCompactCounts={liveCompactCounts}
+							liveCompactStatus={liveCompactStatus}
 							pendingSubagentApproval={pendingSubagentApproval}
 							handleSubagentToolApproval={handleSubagentToolApproval}
 							pendingToolConfirmation={pendingToolConfirmation}

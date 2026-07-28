@@ -97,7 +97,7 @@ test.beforeEach(() => {
 	resetPreferencesCache();
 });
 
-test('renders all four category tabs with Appearance selected first', async t => {
+test('renders all category tabs with Appearance selected first', async t => {
 	const {lastFrame, unmount} = renderWithTheme(
 		<SettingsSelector onCancel={() => {}} />,
 	);
@@ -106,7 +106,9 @@ test('renders all four category tabs with Appearance selected first', async t =>
 	t.truthy(output);
 	t.truthy(output!.includes('Appearance'));
 	t.truthy(output!.includes('Input'));
-	t.truthy(output!.includes('Display'));
+	t.truthy(output!.includes('Behavior'));
+	t.truthy(output!.includes('Agents'));
+	t.truthy(output!.includes('Providers'));
 	t.truthy(output!.includes('Advanced'));
 	// The selected tab is marked by the user's TitleShape system, not a
 	// literal bracket string (ANSI escapes also contain '[', so compare
@@ -255,12 +257,25 @@ test('each tab lists its expected setting rows', async t => {
 	await expectRow('Paste Threshold');
 	await expectRow('Notifications');
 
-	// Display.
+	// Behavior.
 	stdin.write(RIGHT);
 	await tick();
 	await expectRow('Tool Results and Thinking');
 
+	// Agents.
+	stdin.write(RIGHT);
+	await tick();
+	const agentsOutput = lastFrame();
+	t.truthy(agentsOutput);
+	t.true(agentsOutput!.includes('Agents'));
+	t.true(agentsOutput!.includes('Explore'));
+	t.true(agentsOutput!.includes('General'));
+	t.true(agentsOutput!.includes('model:'));
+	t.true(agentsOutput!.includes('tools:'));
+
 	// Advanced.
+	stdin.write(RIGHT);
+	await tick();
 	stdin.write(RIGHT);
 	await tick();
 	await expectRow('Privacy');

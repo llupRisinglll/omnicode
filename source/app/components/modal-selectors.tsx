@@ -4,7 +4,9 @@ import CheckpointSelector from '@/components/checkpoint-selector';
 import ModelSelector from '@/components/model-selector';
 import SessionSelector from '@/components/session-selector';
 import type {ActiveMode} from '@/hooks/useAppState';
+import type {ToolManager} from '@/tools/tool-manager';
 import type {CheckpointListItem, TuneConfig} from '@/types';
+import type {SettingsTabId} from '@/types/settings';
 import {McpWizard} from '@/wizards/mcp-wizard';
 import {ProviderWizard} from '@/wizards/provider-wizard';
 import {SettingsSelector} from './settings-tabs';
@@ -16,6 +18,8 @@ export interface ModalSelectorsProps {
 	onMcpChanged?: () => void | Promise<void>;
 	activeMode: ActiveMode;
 	isSettingsMode: boolean;
+	settingsInitialTab?: SettingsTabId;
+	toolManager?: ToolManager | null;
 	showAllSessions: boolean;
 
 	// Current values
@@ -65,6 +69,8 @@ export interface ModalSelectorsProps {
 export function ModalSelectors({
 	activeMode,
 	isSettingsMode,
+	settingsInitialTab,
+	toolManager,
 	showAllSessions,
 	currentModel,
 	currentProvider,
@@ -113,6 +119,8 @@ export function ModalSelectors({
 		return (
 			<SettingsSelector
 				onCancel={onSettingsCancel}
+				initialTab={settingsInitialTab}
+				toolManager={toolManager}
 				onLaunchTune={onLaunchTune}
 				onLaunchIde={onLaunchIde}
 				onMcpChanged={onMcpChanged}

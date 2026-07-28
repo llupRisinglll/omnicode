@@ -161,7 +161,13 @@ export default function ToolConfirmation({
 
 	return (
 		<Box width={boxWidth} marginBottom={1}>
-			<Box flexDirection="column">
+			<Box
+				borderStyle="round"
+				borderColor={colors.secondary}
+				flexDirection="column"
+				paddingX={1}
+				width={boxWidth}
+			>
 				{/* Formatter preview */}
 				{isLoadingPreview && (
 					<Box marginBottom={1}>

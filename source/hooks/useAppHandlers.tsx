@@ -39,6 +39,7 @@ import type {
 import type {CustomCommand} from '@/types/commands';
 import type {TuneConfig} from '@/types/config';
 import type {ApiCallRecord, ApiUsageSnapshot} from '@/types/core';
+import type {SettingsTabId} from '@/types/settings';
 import type {ThemePreset} from '@/types/ui';
 import type {UpdateInfo} from '@/types/utils';
 import {calculateTokenBreakdown} from '@/usage/calculator';
@@ -107,7 +108,7 @@ interface UseAppHandlersProps {
 	enterModelSelectionMode: () => void;
 	enterModelDatabaseMode: () => void;
 	enterConfigWizardMode: () => void;
-	enterSettingsMode: () => void;
+	enterSettingsMode: (tab?: SettingsTabId) => void;
 	enterMcpWizardMode: () => void;
 	enterExplorerMode: () => void;
 	enterIdeSelectionMode: () => void;

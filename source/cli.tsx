@@ -67,6 +67,7 @@ Commands:
   copilot login [provider-name]   Log in to GitHub Copilot (device flow). Saves credentials for the "GitHub Copilot" provider.
   daemon <subcommand>             Manage the per-project skill daemon.
                                   Subcommands: start, stop, status, logs, install, uninstall.
+  preview tui                     Render a live local mock conversation preview.
 
 Options:
   -v, --version       Show version number
@@ -122,17 +123,26 @@ function isValidOutputFormat(value: unknown): value is 'text' | 'json' {
 
 async function main(): Promise<void> {
 	// Dynamic imports so the fast-path flag handlers above never pay for them.
-	const [
-		{render},
-		{default: App},
-		{parseContextLimit},
-		{setSessionContextLimit},
-	] = await Promise.all([
-		import('ink'),
-		import('@/app'),
-		import('@/app/utils/handlers/context-max-handler'),
-		import('@/models/index'),
-	]);
+	const [{render}, {parseContextLimit}, {setSessionContextLimit}] =
+		await Promise.all([
+			import('ink'),
+			import('@/app/utils/handlers/context-max-handler'),
+			import('@/models/index'),
+		]);
+
+	if (args[0] === 'preview') {
+		const previewName = args[1];
+		if (previewName !== 'tui' && previewName !== 'subagents') {
+			console.error('Usage: nanocoder preview tui');
+			process.exit(previewName ? 1 : 0);
+		}
+		const {SubagentsPreviewApp} = await import(
+			'@/app/previews/subagents-preview'
+		);
+		const result = render(<SubagentsPreviewApp />, {exitOnCtrlC: false});
+		await result.waitUntilExit();
+		return;
+	}
 
 	const vscodeMode = args.includes('--vscode');
 
@@ -460,6 +470,8 @@ async function main(): Promise<void> {
 			outputFormat,
 		});
 	} else {
+		const {default: App} = await import('@/app');
+
 		// Prevent Node's global performance entry buffer from growing without
 		// bound during long Ink sessions. See issue #521.
 		const {installPerfBufferGuard} = await import('@/utils/perf-buffer');
