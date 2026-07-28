@@ -60,6 +60,7 @@ const createMockToolManager = () => ({
 	getToolNames: () => ['read_file'],
 	getFilteredTools: () => ({}),
 	getFilteredToolsForProvider: () => ({}),
+	getMCPInstructions: () => [],
 }) as NonNullable<UseChatHandlerProps['toolManager']>;
 
 const waitForCondition = async (
@@ -584,6 +585,7 @@ test('getBaseSystemPrompt - headless mode ignores cached prompt', t => {
 	// system prompt each call so `Current Date:` reflects the trigger time
 	// rather than whatever the interactive TUI cached at boot.
 	const toolManager = {
+		...createMockToolManager(),
 		getAvailableToolNames: (_tune: unknown, mode: string) => [`tool-for-${mode}`],
 	} as NonNullable<UseChatHandlerProps['toolManager']>;
 

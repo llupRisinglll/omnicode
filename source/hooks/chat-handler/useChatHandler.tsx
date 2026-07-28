@@ -27,6 +27,7 @@ import type {SteeringEngine} from '@/steering/steering-engine';
 import {getTuneToolMode} from '@/types/config';
 import type {ImageAttachment, Message} from '@/types/core';
 import {MessageBuilder} from '@/utils/message-builder';
+import {infoMsg} from '@/utils/message-factory';
 import {
 	type BuiltPromptBlock,
 	buildSystemPromptBlocks,
