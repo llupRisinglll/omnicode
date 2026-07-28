@@ -18,9 +18,8 @@ const {render} = await import('ink-testing-library');
 process.env.NANOCODER_CONFIG_DIR = mkdtempSync(
 	join(tmpdir(), 'nanocoder-spec-'),
 );
-const {resetPreferencesCache, getAlternateScreen} = await import(
-	'@/config/preferences'
-);
+const {resetPreferencesCache, getAlternateScreen, getSemanticMemoryEnabled} =
+	await import('@/config/preferences');
 resetPreferencesCache();
 
 const {renderWithTheme} = await import('../../test-utils/render-with-theme');
@@ -97,7 +96,7 @@ test.beforeEach(() => {
 	resetPreferencesCache();
 });
 
-test('renders all four category tabs with Appearance selected first', async t => {
+test('renders category tabs with Appearance selected first', async t => {
 	const {lastFrame, unmount} = renderWithTheme(
 		<SettingsSelector onCancel={() => {}} />,
 	);
@@ -106,7 +105,8 @@ test('renders all four category tabs with Appearance selected first', async t =>
 	t.truthy(output);
 	t.truthy(output!.includes('Appearance'));
 	t.truthy(output!.includes('Input'));
-	t.truthy(output!.includes('Display'));
+	t.truthy(output!.includes('Behavior'));
+	t.truthy(output!.includes('Providers'));
 	t.truthy(output!.includes('Advanced'));
 	// The selected tab is marked by the user's TitleShape system, not a
 	// literal bracket string (ANSI escapes also contain '[', so compare
@@ -264,6 +264,7 @@ test('each tab lists its expected setting rows', async t => {
 	stdin.write(RIGHT);
 	await tick();
 	await expectRow('Privacy');
+	await expectRow('Semantic Memory');
 
 	unmount();
 });
@@ -347,6 +348,33 @@ test('Enter on the Alternate Screen boolean row flips the persisted preference',
 	await tick();
 
 	t.is(getAlternateScreen(), true);
+
+	unmount();
+});
+
+test('Enter on the Semantic Memory boolean row flips the persisted preference', async t => {
+	t.is(getSemanticMemoryEnabled(), true);
+
+	const {stdin, unmount} = renderWithTheme(
+		<SettingsSelector onCancel={() => {}} />,
+	);
+	await tick();
+
+	for (let i = 0; i < 4; i++) {
+		stdin.write(RIGHT);
+		await tick();
+	}
+
+	stdin.write(DOWN);
+	await tick();
+	stdin.write('Semantic Memory');
+	await tick();
+	stdin.write(DOWN);
+	await tick();
+	stdin.write(ENTER);
+	await tick();
+
+	t.is(getSemanticMemoryEnabled(), false);
 
 	unmount();
 });

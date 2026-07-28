@@ -8,6 +8,7 @@ import UserMessage from '@/components/user-message';
 import {getAppConfig} from '@/config/index';
 import {
 	getInnerDaemonModel,
+	getSemanticMemoryEnabled,
 	getSteeringEnabled,
 	getSteeringVerbose,
 	subscribeSteeringPrefs,
@@ -687,7 +688,10 @@ export function useChatHandler({
 				systemPrompt,
 				message,
 				projectMemoryFinder,
-				projectContextOptions,
+				{
+					...projectContextOptions,
+					semanticMemoryEnabled: getSemanticMemoryEnabled(),
+				},
 			);
 			systemPrompt = projectContext.systemPrompt;
 			setLastBuiltPrompt(systemPrompt);

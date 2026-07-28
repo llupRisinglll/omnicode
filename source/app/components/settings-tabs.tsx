@@ -12,10 +12,12 @@ import {
 	getPasteThreshold,
 	getPrivacyPreference,
 	getReasoningExpanded,
+	getSemanticMemoryEnabled,
 	getSteeringEnabled,
 	getSteeringVerbose,
 	loadPreferences,
 	updateAlternateScreen,
+	updateSemanticMemoryEnabled,
 	updateSteeringEnabled,
 	updateSteeringVerbose,
 } from '@/config/preferences';
@@ -264,6 +266,14 @@ function buildRowsForTab(
 					label: 'Privacy',
 					value: getPrivacyPreference() ? 'on' : 'off',
 					panel: 'privacy',
+				},
+				{
+					kind: 'boolean',
+					id: 'semantic-memory',
+					label: 'Semantic Memory',
+					value: getSemanticMemoryEnabled(),
+					onToggle: () =>
+						updateSemanticMemoryEnabled(!getSemanticMemoryEnabled()),
 				},
 				{
 					kind: 'boolean',
