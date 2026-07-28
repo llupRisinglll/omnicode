@@ -1,4 +1,5 @@
 import test from 'ava';
+import {Text} from 'ink';
 import React from 'react';
 import {renderWithTheme} from '../../test-utils/render-with-theme';
 import {ChatInput} from './chat-input';
@@ -119,8 +120,28 @@ test('ChatInput keeps UserInput visible while a tool is executing', t => {
 	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Working\./);
+	t.regex(output!, /Executing tool: test_tool/);
 	t.regex(output!, /Press Esc to cancel/);
+	unmount();
+});
+
+test('ChatInput renders live compact counts above the input prompt', t => {
+	const props = createDefaultProps({
+		client: {},
+		isBusy: true,
+		liveCompactCounts: <Text>running-agent-strip</Text>,
+		liveCompactStatus: '0/3 agents completed',
+	});
+
+	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
+	const output = lastFrame()!;
+	t.regex(output, /running-agent-strip/);
+	t.regex(output, /Working/);
+	t.regex(output, /0\/3 agents completed/);
+	t.true(
+		output.indexOf('running-agent-strip') <
+			output.indexOf('Working'),
+	);
 	unmount();
 });
 

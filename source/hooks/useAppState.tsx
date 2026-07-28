@@ -136,6 +136,8 @@ export function useAppState(
 	const [isToolConfirmationMode, setIsToolConfirmationMode] =
 		useState<boolean>(false);
 	const [isToolExecuting, setIsToolExecuting] = useState<boolean>(false);
+	const [settingsInitialTab, setSettingsInitialTab] =
+		useState<import('@/types/settings').SettingsTabId>('appearance');
 
 	// Flipped once subagent loading finishes so the cached system prompt
 	// can rebuild with the real agent list instead of "No subagents available."
@@ -365,6 +367,7 @@ export function useAppState(
 		sessionName,
 		isToolConfirmationMode,
 		isToolExecuting,
+		settingsInitialTab,
 		subagentsReady,
 		compactToolDisplay,
 		compactToolDisplayRef,
@@ -421,6 +424,7 @@ export function useAppState(
 		setSessionName,
 		setIsToolConfirmationMode,
 		setIsToolExecuting,
+		setSettingsInitialTab,
 		setSubagentsReady,
 		setCompactToolDisplay,
 		setCompactToolCounts,

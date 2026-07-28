@@ -365,6 +365,24 @@ test.serial('chat message - displayValue is optional (callers without a placehol
 	t.is(received.displayValue, undefined);
 });
 
+test.serial('agents command - bare /agents opens settings on Agents tab', async t => {
+	let openedTab: string | undefined;
+	let completed = false;
+	const options = createResumeTestOptions({
+		onCommandComplete: () => {
+			completed = true;
+		},
+	});
+	options.onEnterSettingsMode = tab => {
+		openedTab = tab;
+	};
+
+	await handleMessageSubmission('/agents', options);
+
+	t.is(openedTab, 'agents');
+	t.true(completed);
+});
+
 test.serial('retry command - /retry without a prior user turn shows an error', async t => {
 	let queued: React.ReactNode = null;
 	let submitted = false;

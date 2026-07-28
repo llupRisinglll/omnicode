@@ -8,6 +8,10 @@
 import {createLLMClient} from '@/client-factory';
 import {getAppConfig} from '@/config/index';
 import {
+	getInnerDaemonModel,
+	getSubagentModelPreference,
+} from '@/config/preferences';
+import {
 	appendSubagentTool,
 	getSubagentProgress,
 	subagentProgress,
@@ -21,6 +25,7 @@ import {
 	updateSubagentSessionStreaming,
 } from '@/services/subagent-session-store';
 import {resolveToolApproval} from '@/tools/approval-policy';
+import {executeBashCommand, formatBashResultForLLM} from '@/tools/execute-bash';
 import type {ToolManager} from '@/tools/tool-manager';
 import type {
 	AISDKCoreTool,
@@ -32,7 +37,10 @@ import type {
 import {formatError} from '@/utils/error-formatter';
 import {signalToolApproval} from '@/utils/tool-approval-queue';
 import {parseToolArguments} from '@/utils/tool-args-parser';
-import {toolErrorToContent} from '@/utils/tool-validation';
+import {
+	formatValidationError,
+	toolErrorToContent,
+} from '@/utils/tool-validation';
 import {getSubagentLoader} from './subagent-loader.js';
 import type {
 	SubagentConfigWithSource,
@@ -191,6 +199,7 @@ export class SubagentExecutor {
 				config,
 				!!agentId,
 			);
+			const modelUsed = client.getCurrentModel();
 
 			try {
 				const output = await this.runSubagentConversation(
@@ -198,6 +207,7 @@ export class SubagentExecutor {
 					messages,
 					filteredTools,
 					config,
+					modelUsed,
 					signal,
 					agentId,
 				);
@@ -212,6 +222,7 @@ export class SubagentExecutor {
 					output,
 					success: true,
 					tokensUsed: finalTokenCount,
+					modelUsed,
 					executionTimeMs: Date.now() - startTime,
 				};
 			} finally {
@@ -344,14 +355,21 @@ export class SubagentExecutor {
 				? config.contextWindow
 				: undefined;
 		const parentProviderConfig = this.parentClient.getProviderConfig();
-		const targetProvider = config.provider ?? parentProviderConfig.name;
+		const preference = getSubagentModelPreference(config.name);
+		const legacyInnerDaemonModel =
+			config.name === 'innerdaemon' ? getInnerDaemonModel() : null;
+		const targetProvider =
+			preference?.provider ?? config.provider ?? parentProviderConfig.name;
 		// A live override (InnerDaemon's configured model) takes precedence over
-		// the frontmatter `model:` — including `inherit`. When no override is set
-		// this is the frontmatter model verbatim, so the default path is
-		// byte-for-byte the previous behavior.
+		// saved subagent preferences and frontmatter `model:` — including
+		// `inherit`. When no live override is set, a saved per-subagent preference
+		// can choose provider+model; otherwise the frontmatter behavior is kept.
 		const override = this.resolvedModelOverride();
 		const effectiveModel =
-			override ?? (config.model === 'inherit' ? undefined : config.model);
+			override ??
+			preference?.model ??
+			legacyInnerDaemonModel ??
+			(config.model === 'inherit' ? undefined : config.model);
 		const targetModel =
 			effectiveModel && effectiveModel !== 'inherit'
 				? effectiveModel
@@ -367,13 +385,13 @@ export class SubagentExecutor {
 		}
 
 		// Different provider — create a new client entirely
-		if (config.provider) {
+		if (targetProvider !== parentProviderConfig.name) {
 			const model =
 				effectiveModel && effectiveModel !== 'inherit'
 					? effectiveModel
 					: undefined;
 
-			const {client} = await createLLMClient(config.provider, model);
+			const {client} = await createLLMClient(targetProvider, model);
 			return {client, restoreParent: () => {}};
 		}
 
@@ -419,6 +437,7 @@ export class SubagentExecutor {
 		messages: Message[],
 		tools: Record<string, AISDKCoreTool>,
 		config: SubagentConfigWithSource,
+		modelUsed: string,
 		signal?: AbortSignal,
 		agentId?: string,
 	): Promise<string> {
@@ -439,11 +458,15 @@ export class SubagentExecutor {
 		const emitProgress = (
 			status: 'running' | 'tool_call' | 'complete' | 'error',
 			currentTool?: string,
+			bash?: {executionId: string; command: string},
 		) => {
 			const event = {
 				subagentName: config.name,
 				status,
 				currentTool,
+				currentBashExecutionId: bash?.executionId,
+				currentBashCommand: bash?.command,
+				modelUsed,
 				toolCallCount: totalToolCalls,
 				turnCount: iterations,
 				tokenCount: totalTokens,
@@ -577,6 +600,9 @@ export class SubagentExecutor {
 					toolCall.id,
 					config,
 					signal,
+					(executionId, command) => {
+						emitProgress('tool_call', toolName, {executionId, command});
+					},
 				);
 
 				// Count tokens from tool results
@@ -624,6 +650,7 @@ export class SubagentExecutor {
 		toolCallId: string,
 		config: SubagentConfigWithSource,
 		signal?: AbortSignal,
+		onBashStarted?: (executionId: string, command: string) => void,
 	): Promise<string> {
 		if (signal?.aborted) {
 			return 'Error: Execution was cancelled';
@@ -661,6 +688,23 @@ export class SubagentExecutor {
 
 		try {
 			const parsedArgs = parseToolArguments(rawArguments);
+			if (toolName === 'execute_bash') {
+				const validator = this.toolManager.getToolValidator?.(toolName);
+				const validation = validator
+					? await validator(parsedArgs)
+					: ({valid: true} as const);
+				if (!validation.valid) {
+					return formatValidationError(validation.error, validation.details);
+				}
+
+				const command =
+					typeof parsedArgs.command === 'string' ? parsedArgs.command : '';
+				const {executionId, promise} = executeBashCommand(command, {signal});
+				onBashStarted?.(executionId, command);
+				const bashState = await promise;
+				return formatBashResultForLLM(bashState);
+			}
+
 			const result = await toolHandler(parsedArgs);
 			// Subagents converse in text, so collapse structured output to its
 			// text representation.

@@ -360,3 +360,48 @@ export function updateInnerDaemonModel(value: string | null): void {
 	savePreferences(preferences);
 	emitSteeringPrefsChanged();
 }
+
+export interface SubagentModelPreference {
+	provider: string;
+	model: string;
+}
+
+export function getSubagentModelPreference(
+	agentName: string,
+): SubagentModelPreference | null {
+	const preference = loadPreferences().subagentModels?.[agentName];
+	if (
+		preference &&
+		typeof preference.provider === 'string' &&
+		preference.provider.trim().length > 0 &&
+		typeof preference.model === 'string' &&
+		preference.model.trim().length > 0
+	) {
+		return {
+			provider: preference.provider.trim(),
+			model: preference.model.trim(),
+		};
+	}
+	return null;
+}
+
+export function updateSubagentModelPreference(
+	agentName: string,
+	value: SubagentModelPreference | null,
+): void {
+	const preferences = loadPreferences();
+	const next = {...(preferences.subagentModels ?? {})};
+	if (value) {
+		next[agentName] = {
+			provider: value.provider,
+			model: value.model,
+		};
+	} else {
+		delete next[agentName];
+	}
+	preferences.subagentModels = Object.keys(next).length > 0 ? next : undefined;
+	savePreferences(preferences);
+	if (agentName === 'innerdaemon') {
+		emitSteeringPrefsChanged();
+	}
+}

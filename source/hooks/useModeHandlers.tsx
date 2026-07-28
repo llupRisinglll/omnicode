@@ -15,6 +15,7 @@ import {getModelContextLimit, getSessionContextLimit} from '@/models/index';
 import {generateKey} from '@/session/key-generator';
 import type {AIProviderConfig, TuneConfig} from '@/types/config';
 import {LLMClient, Message} from '@/types/core';
+import type {SettingsTabId} from '@/types/settings';
 import {
 	setAutoCompactMode,
 	setAutoCompactThreshold,
@@ -33,6 +34,7 @@ interface UseModeHandlersProps {
 	getMessageTokens: (message: Message) => number;
 	setActiveMode: (mode: ActiveMode) => void;
 	setIsSettingsMode: (mode: boolean) => void;
+	setSettingsInitialTab: (tab: SettingsTabId) => void;
 	addToChatQueue: (component: React.ReactNode) => void;
 	reinitializeMCPServers: (
 		toolManager: import('@/tools/tool-manager').ToolManager,
@@ -53,6 +55,7 @@ export function useModeHandlers({
 	getMessageTokens,
 	setActiveMode,
 	setIsSettingsMode,
+	setSettingsInitialTab,
 	addToChatQueue,
 	reinitializeMCPServers,
 	setTune,
@@ -377,7 +380,10 @@ export function useModeHandlers({
 		enterMcpWizardMode: () => enterMode('mcpWizard'),
 		enterExplorerMode: () => enterMode('explorer'),
 		enterIdeSelectionMode: () => enterMode('ideSelection'),
-		enterSettingsMode: () => setIsSettingsMode(true),
+		enterSettingsMode: (tab: SettingsTabId = 'appearance') => {
+			setSettingsInitialTab(tab);
+			setIsSettingsMode(true);
+		},
 		// Cancel/complete handlers
 		handleModelSelect,
 		handleModelSelectionCancel: exitMode,

@@ -12,6 +12,7 @@ import type {
 	ImageAttachment,
 	Message,
 } from './core';
+import type {SettingsTabId} from './settings';
 import type {UpdateInfo} from './utils';
 
 export interface MessageSubmissionOptions {
@@ -25,7 +26,7 @@ export interface MessageSubmissionOptions {
 	onEnterModelSelectionMode: () => void;
 	onEnterModelDatabaseMode: () => void;
 	onEnterConfigWizardMode: () => void;
-	onEnterSettingsMode: () => void;
+	onEnterSettingsMode: (tab?: SettingsTabId) => void;
 	onEnterMcpWizardMode: () => void;
 	onEnterExplorerMode: () => void;
 	onEnterIdeSelectionMode: () => void;

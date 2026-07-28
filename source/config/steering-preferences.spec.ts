@@ -16,6 +16,8 @@ const {
 	getSteeringVerbose,
 	updateSteeringVerbose,
 	subscribeSteeringPrefs,
+	getSubagentModelPreference,
+	updateSubagentModelPreference,
 } = await import('@/config/preferences');
 resetPreferencesCache();
 
@@ -68,3 +70,19 @@ test.serial(
 		updateSteeringVerbose(false);
 	},
 );
+
+test.serial('subagent model preference defaults to inherit and can be cleared', t => {
+	t.is(getSubagentModelPreference('explore'), null);
+
+	updateSubagentModelPreference('explore', {
+		provider: 'OmniRoute',
+		model: 'combo/free-only',
+	});
+	t.deepEqual(getSubagentModelPreference('explore'), {
+		provider: 'OmniRoute',
+		model: 'combo/free-only',
+	});
+
+	updateSubagentModelPreference('explore', null);
+	t.is(getSubagentModelPreference('explore'), null);
+});

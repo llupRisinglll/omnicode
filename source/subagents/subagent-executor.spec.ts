@@ -8,6 +8,8 @@ import {setGlobalToolApprovalHandler} from '@/utils/tool-approval-queue';
 
 console.log('\nsubagent-executor.spec.ts');
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Helper to create a mock tool manager
 function createMockToolManager(
 	tools: Record<string, {handler: (args: unknown) => Promise<string>; readOnly: boolean; needsApproval?: boolean}> = {},
@@ -720,6 +722,64 @@ test.serial(
 			'read_file',
 		]);
 
+		clearAllSubagentProgress();
+	},
+);
+
+test.serial(
+	'execute_bash updates subagent progress with running command metadata',
+	async t => {
+		const {
+			getSubagentProgress,
+			clearAllSubagentProgress,
+		} = await import('@/services/subagent-events');
+		clearAllSubagentProgress();
+
+		const toolManager = createMockToolManager({
+			execute_bash: {handler: async () => 'unused', readOnly: false},
+		});
+		const command = "sleep 0.15; printf 'subagent bash done\\n'";
+		const client = createMockClient([
+			{
+				content: '',
+				tool_calls: [
+					{
+						id: 'bash-tc',
+						function: {
+							name: 'execute_bash',
+							arguments: JSON.stringify({command}),
+						},
+					},
+				],
+			},
+			{content: 'done'},
+		]);
+		const executor = new SubagentExecutor(
+			toolManager,
+			client,
+			process.cwd(),
+			'yolo',
+		);
+
+		const run = executor.execute(
+			{subagent_type: 'explore', description: 'run bash'},
+			undefined,
+			0,
+			'bash-agent',
+		);
+
+		let progress = getSubagentProgress('bash-agent');
+		for (let i = 0; i < 10 && !progress.currentBashExecutionId; i++) {
+			await delay(30);
+			progress = getSubagentProgress('bash-agent');
+		}
+		t.is(progress.currentTool, 'execute_bash');
+		t.is(progress.currentBashCommand, command);
+		t.truthy(progress.currentBashExecutionId);
+
+		const result = await run;
+		t.true(result.success);
+		t.is(result.output, 'done');
 		clearAllSubagentProgress();
 	},
 );

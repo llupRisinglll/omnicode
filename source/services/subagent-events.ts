@@ -12,6 +12,9 @@ export interface SubagentEvent {
 	subagentName: string;
 	status: 'running' | 'tool_call' | 'complete' | 'error';
 	currentTool?: string;
+	currentBashExecutionId?: string;
+	currentBashCommand?: string;
+	modelUsed?: string;
 	toolCallCount: number;
 	turnCount: number;
 	tokenCount: number;
@@ -61,6 +64,9 @@ export function updateSubagentProgressById(
 		existing.subagentName = event.subagentName;
 		existing.status = event.status;
 		existing.currentTool = event.currentTool;
+		existing.currentBashExecutionId = event.currentBashExecutionId;
+		existing.currentBashCommand = event.currentBashCommand;
+		existing.modelUsed = event.modelUsed;
 		existing.toolCallCount = event.toolCallCount;
 		existing.turnCount = event.turnCount;
 		existing.tokenCount = event.tokenCount;
@@ -74,6 +80,9 @@ export function updateSubagentProgress(event: SubagentEventInput): void {
 	subagentProgress.subagentName = event.subagentName;
 	subagentProgress.status = event.status;
 	subagentProgress.currentTool = event.currentTool;
+	subagentProgress.currentBashExecutionId = event.currentBashExecutionId;
+	subagentProgress.currentBashCommand = event.currentBashCommand;
+	subagentProgress.modelUsed = event.modelUsed;
 	subagentProgress.toolCallCount = event.toolCallCount;
 	subagentProgress.turnCount = event.turnCount;
 	subagentProgress.tokenCount = event.tokenCount;
@@ -125,6 +134,9 @@ export function resetSubagentProgress(): void {
 	subagentProgress.subagentName = '';
 	subagentProgress.status = 'running';
 	subagentProgress.currentTool = undefined;
+	subagentProgress.currentBashExecutionId = undefined;
+	subagentProgress.currentBashCommand = undefined;
+	subagentProgress.modelUsed = undefined;
 	subagentProgress.toolCallCount = 0;
 	subagentProgress.turnCount = 0;
 	subagentProgress.tokenCount = 0;

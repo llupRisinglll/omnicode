@@ -8,8 +8,10 @@ import {renderWithTheme} from '../test-utils/render-with-theme.js';
 import {
 	CompactToolCountsLine,
 	LiveCompactCounts,
+	LiveCompactRunningSummary,
 	displayCompactCountsSummary,
 	displayToolResult,
+	getCompactToolRunningSummary,
 	getLiveCompactToolExpandHitboxColumns,
 } from './tool-result-display.js';
 
@@ -206,6 +208,176 @@ test('CompactToolCountsLine renders completed failed summaries as ran', t => {
 	const output = lastFrame()!;
 	t.regex(output, /^⚒\s+Ran WebFetch ×10 failed/);
 	t.notRegex(output, /^ ⚒/);
+	unmount();
+});
+
+test('LiveCompactCounts renders agent instance keys as separate blocks', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:first': {
+					count: 1,
+					details: ['explore: first'],
+					running: true,
+				},
+				'agent:second': {
+					count: 1,
+					details: ['review: second'],
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /^⚒\s+Ran explore\(first\) \(running\) \(ctrl-o to expand\)/m);
+	t.regex(output, /^⚒\s+Ran review\(second\) \(running\) \(ctrl-o to expand\)/m);
+	t.notRegex(output, /Task and Task/);
+	t.notRegex(output, /Task ×2/);
+	unmount();
+});
+
+test('LiveCompactCounts truncates long agent task details before the expand hint', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:long': {
+					count: 1,
+					details: [
+						'explore: Inspect the top-level repository layout and run a short bash command: sleep 4 && echo subagent-a',
+					],
+					liveDetails: () => ['stats:thinking · ~12 tokens'],
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(
+		output,
+		/Ran explore\(Inspect the top-level repository layout and run…\) \(running\) \(ctrl-o to expand\)/,
+	);
+	t.notRegex(output, /^\(ctrl-o to expand\)$/m);
+	unmount();
+});
+
+test('getCompactToolRunningSummary summarizes running agents', t => {
+	t.is(
+		getCompactToolRunningSummary({
+			'agent:first': {count: 1, details: ['explore: first'], running: true},
+			'agent:second': {count: 1, details: ['explore: second'], running: true},
+			'agent:third': {count: 1, details: ['explore: third'], running: true},
+		}),
+		'0/3 agents completed',
+	);
+});
+
+test('getCompactToolRunningSummary uses dynamic subagent running state', t => {
+	t.is(
+		getCompactToolRunningSummary({
+			'agent:first': {
+				count: 1,
+				details: ['explore: first'],
+				liveRunning: () => false,
+				running: true,
+			},
+			'agent:second': {
+				count: 1,
+				details: ['explore: second'],
+				liveRunning: () => true,
+				running: true,
+			},
+			'agent:third': {
+				count: 1,
+				details: ['explore: third'],
+				liveRunning: () => true,
+				running: true,
+			},
+		}),
+		'1/3 agents completed',
+	);
+});
+
+test('LiveCompactRunningSummary refreshes dynamic subagent completion counts', async t => {
+	let firstRunning = true;
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactRunningSummary
+			counts={{
+				'agent:first': {
+					count: 1,
+					details: ['explore: first'],
+					liveRunning: () => firstRunning,
+					running: true,
+				},
+				'agent:second': {
+					count: 1,
+					details: ['explore: second'],
+					liveRunning: () => true,
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	t.regex(lastFrame() ?? '', /0\/2 agents completed/);
+	firstRunning = false;
+	await new Promise(resolve => setTimeout(resolve, 150));
+	t.regex(lastFrame() ?? '', /1\/2 agents completed/);
+
+	unmount();
+});
+
+test('LiveCompactCounts renders dynamically completed subagent rows during parallel work', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:first': {
+					count: 1,
+					details: ['explore: first', 'state:completed', 'read_file'],
+					liveDetails: () => ['state:completed', 'stats:1 tool call'],
+					liveRunning: () => false,
+					running: true,
+				},
+				'agent:second': {
+					count: 1,
+					details: ['explore: second'],
+					liveDetails: () => ['stats:thinking · mimo-v2.5 · ~12 tokens'],
+					liveRunning: () => true,
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /Ran explore\(first\) completed \(ctrl-o to expand\)/);
+	t.regex(output, /Ran explore\(second\) \(running\) \(ctrl-o to expand\)/);
+	t.regex(output, /thinking · mimo-v2\.5 · ~12 tokens/);
+	unmount();
+});
+
+test('LiveCompactCounts renders failed agent state only once', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:failed-id': {
+					count: 1,
+					details: [
+						'explore: failed task',
+						'state:failed',
+						'read_file',
+						'stats:1 tool call · mimo-v2.5 · ~42 tokens',
+					],
+					failed: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /Ran explore\(failed task\) failed \(ctrl-o to expand\)/);
+	t.notRegex(output, /failed failed/);
 	unmount();
 });
 
@@ -752,10 +924,15 @@ test('LiveCompactCounts - renders live detail tails for running compact groups',
 	const {lastFrame, unmount} = renderWithTheme(
 		<LiveCompactCounts
 			counts={{
-				agent: {
+				'agent:preview': {
 					count: 1,
 					details: ['explore: inspect repository'],
-					liveDetails: () => ['explore: running read_file'],
+					liveDetails: () => [
+						'opening target files',
+						'checking relevant symbols',
+						'reading source/hooks/chat-handler/conversation/tool-executor.tsx',
+						'stats:running read_file · 1 tool call · ~42 tokens',
+					],
 					running: true,
 				},
 			}}
@@ -764,9 +941,76 @@ test('LiveCompactCounts - renders live detail tails for running compact groups',
 
 	let output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Ran Task \(running\)/);
-	t.regex(output!, /└\s+explore: inspect repository/);
-	t.regex(output!, /explore: running read_file/);
+	t.regex(output!, /Ran explore\(inspect repository\) \(running\)/);
+	t.notRegex(output!, /└\s+opening target files/);
+	t.regex(output!, /└\s+checking relevant symbols/);
+	t.regex(
+		output!,
+		/^\s+reading source\/hooks\/chat-handler\/conversation\/tool-executor\.tsx$/m,
+	);
+	t.notRegex(output!, /└\s+read_file/);
+	t.regex(output!, /… \+1 more line · running read_file · 1 tool call · ~42 tokens/);
+	t.notRegex(output!, /\+0 more lines/);
+	t.notRegex(output!, /└\s+explore: inspect repository/);
+	t.notRegex(output!, /└\s+explore: running read_file/);
+	t.notRegex(output!, /explore → read_file/);
+	unmount();
+});
+
+test('LiveCompactCounts - keeps running agent body free of raw tool labels when only stats change', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:preview': {
+					count: 1,
+					details: ['explore: inspect repository'],
+					liveDetails: () => [
+						'stats:running read_file · 1 tool call · ~42 tokens',
+					],
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame();
+	t.truthy(output);
+	t.regex(output!, /Ran explore\(inspect repository\) \(running\)/);
+	t.regex(output!, /^\s+running read_file · 1 tool call · ~42 tokens$/m);
+	t.notRegex(output!, /└\s+read_file/);
+	t.notRegex(output!, /\+0 more lines/);
+	unmount();
+});
+
+test('LiveCompactCounts - renders completed agent stats on hidden-count footer', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:preview': {
+					count: 1,
+					details: [
+						'explore: inspect repository',
+						'state:completed',
+						'execute_bash',
+						"sleep 2; printf 'packages checked\\n'",
+						'final summary received',
+						'stats:2 tool calls · 1.8s · preview-model · ~1,280 tokens',
+					],
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame();
+	t.truthy(output);
+	t.regex(output!, /Ran explore\(inspect repository\) completed/);
+	t.regex(
+		output!,
+		/… \+1 more line · 2 tool calls · 1\.8s · preview-model · ~1,280 tokens/,
+	);
+	t.regex(output!, /└\s+execute_bash/);
+	t.notRegex(output!, /└\s+Completed/);
+	t.notRegex(output!, /Ran explore\(inspect repository\) · complete/);
 	unmount();
 });
 
@@ -874,6 +1118,33 @@ test('displayCompactCountsSummary - keeps safe compact details below summary', t
 	t.regex(output!, /\(ctrl-o to collapse\)/);
 	t.regex(output!, /└\s+first command/);
 	t.regex(output!, /last command/);
+	unmount();
+});
+
+test('displayCompactCountsSummary renders agent entries as separate blocks', t => {
+	const components: React.ReactNode[] = [];
+	displayCompactCountsSummary(
+		{
+			'agent:first': {
+				count: 1,
+				details: ['explore: first task', 'explore: complete'],
+			},
+			'agent:second': {
+				count: 1,
+				details: ['review: second task', 'review: complete'],
+			},
+		},
+		component => {
+			components.push(component);
+		},
+		{indent: false},
+	);
+
+	const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
+	const output = lastFrame()!;
+	t.regex(output, /^⚒\s+Ran explore\(first task\) \(ctrl-o to expand\)/m);
+	t.regex(output, /^⚒\s+Ran review\(second task\) \(ctrl-o to expand\)/m);
+	t.notRegex(output, /Task and Task/);
 	unmount();
 });
 

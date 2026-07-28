@@ -17,6 +17,7 @@ import {
 	getPrivacyPreference,
 	getReasoningExpanded,
 	getShowWorkingIndicator,
+	getSubagentModelPreference,
 	loadPreferences,
 	savePreferences,
 	updateCompactDiffMaxLines,
@@ -29,12 +30,15 @@ import {
 	updateReasoningExpanded,
 	updateSelectedTheme,
 	updateShowWorkingIndicator,
+	updateSubagentModelPreference,
 } from '@/config/preferences';
 import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
+import type {ToolManager} from '@/tools/tool-manager';
 import type {NotificationsConfig} from '@/types/config';
+import type {SettingsTabId} from '@/types/settings';
 import type {StatusLineConfig} from '@/types/statusline';
 import type {NanocoderShape, ThemePreset} from '@/types/ui';
 import {setNotificationsConfig} from '@/utils/notifications';
@@ -55,6 +59,8 @@ export type ManagedSettingsPanel =
 	| 'display-settings'
 	| 'privacy'
 	| 'status-line'
+	| 'subagent-model-explore'
+	| 'subagent-model-innerdaemon'
 	| 'innerdaemon-model'
 	| 'json-config'
 	| 'web-search'
@@ -69,6 +75,8 @@ export type ManagedSettingsPanel =
 
 export interface SettingsSelectorProps {
 	onCancel: () => void;
+	initialTab?: SettingsTabId;
+	toolManager?: ToolManager | null;
 	/** Close settings and launch the tune wizard (app-level mode switch). */
 	onLaunchTune?: () => void;
 	/** Close settings and launch the IDE-connection wizard. */
@@ -1016,6 +1024,8 @@ export function SettingsPrivacyPanel({
 // Sentinel for "inherit the main agent model" (the default → preference null).
 // SelectInput values are strings, so we can't use null directly.
 const INNERDAEMON_INHERIT = '__inherit__';
+const SUBAGENT_MODEL_INHERIT = '__inherit__';
+const DEFAULT_CONFIGURABLE_SUBAGENT = 'explore';
 
 export function SettingsInnerDaemonModelPanel({
 	onBack,
@@ -1107,6 +1117,115 @@ export function SettingsInnerDaemonModelPanel({
 						Model the InnerDaemon steering subagent runs on. Default inherits
 						the main agent model; pick a fast, thinking-off model so a steering
 						nudge doesn't stall on a heavy-thinking model. Enter to apply,
+						Shift+Tab back, Esc to go back.
+					</Text>
+				</Box>
+			)}
+			<StyledSelectInput
+				items={items}
+				initialIndex={initialIndex}
+				onSelect={handleSelect}
+			/>
+			{isNarrow && (
+				<Box marginTop={0}>
+					<Text color={colors.secondary}>Enter/Shift+Tab/Esc</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+export function SettingsSubagentModelPanel({
+	onBack,
+	onCancel,
+	agentName = DEFAULT_CONFIGURABLE_SUBAGENT,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+	agentName?: string;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+	const current = getSubagentModelPreference(agentName);
+
+	useInput((_, key) => {
+		if (key.escape) {
+			onCancel();
+		}
+		if (key.shift && key.tab) {
+			onBack();
+		}
+	});
+
+	const items = useMemo(() => {
+		const providerItems = loadAllProviderConfigs().flatMap(provider =>
+			(provider.models ?? []).map(model => {
+				const value = JSON.stringify({provider: provider.name, model});
+				const isCurrent =
+					current?.provider === provider.name && current.model === model;
+				return {
+					label: `${provider.name} / ${model}${isCurrent ? ' (current)' : ''}`,
+					value,
+				};
+			}),
+		);
+
+		return [
+			{
+				label: current
+					? 'Default: inherit main agent provider/model'
+					: 'Default: inherit main agent provider/model (current)',
+				value: SUBAGENT_MODEL_INHERIT,
+			},
+			...providerItems,
+		];
+	}, [current]);
+
+	const initialIndex = useMemo(() => {
+		if (!current) return 0;
+		const currentValue = JSON.stringify(current);
+		const idx = items.findIndex(item => item.value === currentValue);
+		return idx >= 0 ? idx : 0;
+	}, [items, current]);
+
+	const handleSelect = (item: {label: string; value: string}) => {
+		if (item.value === SUBAGENT_MODEL_INHERIT) {
+			updateSubagentModelPreference(agentName, null);
+			if (agentName === 'innerdaemon') {
+				updateInnerDaemonModel(null);
+			}
+			onBack();
+			return;
+		}
+		const selected = JSON.parse(item.value) as {
+			provider: string;
+			model: string;
+		};
+		updateSubagentModelPreference(agentName, selected);
+		if (agentName === 'innerdaemon') {
+			updateInnerDaemonModel(null);
+		}
+		onBack();
+	};
+
+	const title = isNarrow
+		? 'Subagent Model'
+		: `${agentName} Subagent Provider and Model`;
+
+	return (
+		<TitledBoxWithPreferences
+			title={title}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{!isNarrow && (
+				<Box marginBottom={1}>
+					<Text color={colors.secondary}>
+						Default inherits the main agent provider and model. Enter to apply,
 						Shift+Tab back, Esc to go back.
 					</Text>
 				</Box>
