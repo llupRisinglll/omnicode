@@ -47,6 +47,7 @@ const worktreeRule: SteeringRule = {
 	id: 'worktree-supervision',
 	mode: 'innerdaemon',
 	maxFires: 3,
+	onExhaustion: 'stop',
 	cooldownTurns: 1,
 	condition: {
 		modelIn: ['mimo-v2.5'],
@@ -118,6 +119,139 @@ test('evaluate: git log constraint → instant block, no InnerDaemon call', asyn
 		model: MIMO,
 	});
 	t.false(innerdaemonCalled, 'InnerDaemon must not be called for a constraint block');
+});
+
+test('evaluateConstraints blocks a forbidden call before tool results exist', t => {
+	const rule: SteeringRule = {
+		id: 'reproduce-first',
+		mode: 'innerdaemon',
+		condition: {
+			modelIn: ['mimo*'],
+			intentClass: 'reproduce',
+			userTaskKind: 'bug-reproduction',
+		},
+		watch: {
+			successCriterion: 'reproductionReported',
+			alsoBlock: [
+				{
+					tool: 'agent',
+					argMatches: ['explore'],
+					message: 'reproduce before exploring',
+				},
+			],
+		},
+		body: 'Reproduce first.',
+	};
+	const engine = engineWith([rule], {action: 'noop', reason: ''});
+	const fact = makeFact({
+		intentClass: 'reproduce',
+		userTaskKind: 'bug-reproduction',
+		toolCalls: [
+			toolCall('explore-1', 'agent', {subagent_type: 'explore'}),
+		],
+		toolResults: [],
+	});
+
+	t.deepEqual(engine.evaluateConstraints([fact]), {
+		type: 'block',
+		toolCallIds: ['explore-1'],
+		message: 'reproduce before exploring',
+		urgency: 'light',
+		ruleId: 'reproduce-first',
+		model: MIMO,
+	});
+});
+
+test('evaluateConstraints permits exploration after reproduction is recorded', t => {
+	const rule: SteeringRule = {
+		id: 'reproduce-first',
+		mode: 'innerdaemon',
+		condition: {modelIn: ['mimo*'], intentClass: 'reproduce'},
+		watch: {
+			successCriterion: 'reproductionReported',
+			alsoBlock: [
+				{
+					tool: 'agent',
+					argMatches: ['explore'],
+					message: 'reproduce before exploring',
+				},
+			],
+		},
+		body: 'Reproduce first.',
+	};
+	const engine = new SteeringEngine({
+		rules: [rule],
+		modelId: MIMO,
+		innerDaemonModelId: () => MIMO,
+		invokeInnerDaemon: async () => ({action: 'noop', reason: ''}),
+		criterionChecker: (criterion, _fact, facts) =>
+			criterion === 'reproductionReported' &&
+			facts.some(f =>
+				f.toolResults.some(r => r.content.includes('REPRODUCTION_RECORDED')),
+			),
+	});
+	const recorded = makeFact({
+		intentClass: 'reproduce',
+		toolResults: [
+			{
+				toolCallId: 'report-1',
+				name: 'report_reproduction',
+				content: 'REPRODUCTION_RECORDED',
+			},
+		],
+	});
+	const explore = makeFact({
+		turnIndex: 1,
+		intentClass: 'reproduce',
+		toolCalls: [
+			toolCall('explore-1', 'agent', {subagent_type: 'explore'}),
+		],
+		toolResults: [],
+	});
+
+	t.is(engine.evaluateConstraints([recorded, explore]), null);
+});
+
+test('equal-priority hard constraints rotate instead of starving a sibling', async t => {
+	const makeRule = (id: string): SteeringRule => ({
+		id,
+		mode: 'detector-only',
+		watch: {
+			alsoBlock: [
+				{tool: 'execute_bash', argMatches: ['git log'], message: id},
+			],
+		},
+	});
+	const engine = engineWith(
+		[makeRule('first'), makeRule('second')],
+		{action: 'noop', reason: ''},
+	);
+	const fact = makeFact({
+		toolCalls: [toolCall('x', 'execute_bash', {command: 'git log'})],
+	});
+	t.is((await engine.evaluate([fact]))?.ruleId, 'first');
+	t.is((await engine.evaluate([fact]))?.ruleId, 'second');
+});
+
+test('within-turn watchdog activates only for an established matching rule', t => {
+	const engine = engineWith(
+		[
+			{
+				id: 'runtime-budget',
+				mode: 'innerdaemon',
+				condition: {intentClass: 'runtime-setup'},
+				watch: {maxWallClockMsWithoutSuccess: 5000},
+				body: 'Stop setup loops.',
+			},
+		],
+		{action: 'noop', reason: ''},
+	);
+	t.is(engine.getWithinTurnWatchdog([]), null);
+	const watchdog = engine.getWithinTurnWatchdog([
+		makeFact({intentClass: 'runtime-setup'}),
+	]);
+	t.is(watchdog?.ruleId, 'runtime-budget');
+	t.is(watchdog?.timeoutMs, 5000);
 });
 
 // --- innerdaemon candidate: budget + delegation -----------------------------
@@ -282,6 +416,26 @@ test('evaluate: after maxFires real injections, escalate to stop', async t => {
 	]);
 	t.is(action?.type, 'stop');
 	t.is(innerdaemonCalls, 0, 'must not call InnerDaemon after maxFires');
+});
+
+test('evaluate: maxFires defaults to dormant instead of stopping the task', async t => {
+	const rule: SteeringRule = {
+		...worktreeRule,
+		maxFires: 1,
+		onExhaustion: undefined,
+	};
+	const engine = engineWith(
+		[rule],
+		{action: 'inject', message: 'nudge', urgency: 'light'},
+	);
+	const facts = [worktreeFact(0), worktreeFact(1), worktreeFact(2)];
+	t.is((await engine.evaluate(facts))?.type, 'inject');
+	facts.push(worktreeFact(3));
+	t.is(
+		await engine.evaluate(facts),
+		null,
+		'exhausted advisory rule becomes dormant',
+	);
 });
 
 // --- escalation ladder on relapse (finding #9) -----------------------------
@@ -724,6 +878,46 @@ test('createCriterionChecker: uiDrivenOrAppRun — a non-error dev-server run co
 	t.false(
 		checker('uiDrivenOrAppRun', failedRun, [failedRun]),
 		'errored dev run → not met',
+	);
+});
+
+test('createCriterionChecker: reproductionReported requires both product activity and recorded evidence', async t => {
+	const {createCriterionChecker} = await import('./steering-engine');
+	const checker = createCriterionChecker(() => '/mnt/x');
+	const browse = makeFact({
+		turnIndex: 0,
+		toolCalls: [toolCall('b', 'browser_navigate', {url: 'http://x/counter'})],
+	});
+	const report = makeFact({
+		turnIndex: 1,
+		toolCalls: [
+			toolCall('r', 'report_reproduction', {
+				status: 'reproduced',
+				expected: 'replacement remains active',
+				actual: 'replacement disappeared',
+				steps: ['edit cart', 'void old line'],
+			}),
+		],
+		toolResults: [
+			toolResult(
+				'r',
+				'report_reproduction',
+				'REPRODUCTION_RECORDED\nActual: replacement disappeared',
+			),
+		],
+	});
+
+	t.false(
+		checker('reproductionReported', browse, [browse]),
+		'navigation alone is setup, not reproduction evidence',
+	);
+	t.false(
+		checker('reproductionReported', report, [report]),
+		'a report without driving the product is insufficient',
+	);
+	t.true(
+		checker('reproductionReported', report, [browse, report]),
+		'product activity plus structured evidence completes the gate',
 	);
 });
 

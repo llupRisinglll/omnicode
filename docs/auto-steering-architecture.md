@@ -175,7 +175,8 @@ watch:
     - { tool: execute_bash, argMatches: ['git log', 'git show', 'git blame', 'git reflog'],
         message: 'git-history is forbidden in this simulation.' }
 mode: innerdaemon            # 'innerdaemon' (LLM) or 'detector-only'
-maxFires: 3                # after 3 InnerDaemon injections with no progress → stop
+maxFires: 3                # after 3 injections, become dormant by default
+onExhaustion: dormant      # use stop only for explicit safety termination
 ---
 ```
 
@@ -233,7 +234,7 @@ With the rule in §4.1–4.2, this flows:
 3. **Turn 5 (budget hit, `maxTurnsWithoutSuccess: 4`):** Detector fires InnerDaemon with `triggerReason: "5 turns in worktree-creation, worktreeDirExists=false"`. InnerDaemon reads the dense rule body (the migrated prose), sees hand-rolling, returns `inject` with the nudge: *"You're hand-rolling a worktree. /worktree runs the verified scripts — invoke it, or report why you can't. Don't run another manual step."* → rendered as **InnerDaemon light detail**.
 4. **If the agent also emits `git log`:** the `alsoBlock` detector-only rule fires instantly (no InnerDaemon call) → block + the no-history message.
 5. **Success:** once the watcher reports `worktreeDirExists: true` and plugins are wired, the detector stops firing for this rule. InnerDaemon returns `noop` if called.
-6. **Max fires exceeded:** after 3 InnerDaemon nudges with no success, engine escalates to `stop` (loud error) — the enforcement of "report and stop" that prose couldn't enforce.
+6. **Max fires exceeded:** after 3 nudges the advisory rule becomes dormant, so it cannot terminate unrelated recovery. Explicit safety rules may opt into `onExhaustion: stop`.
 
 ---
 
@@ -271,7 +272,7 @@ No new event bus, no parallel control flow. The detector+InnerDaemon call is ins
 
 1. **Detector false-positive rate vs InnerDaemon cost.** A broad detector that fires often will spin InnerDaemon often (cost/latency). Mitigation: detector returns a *confidence* and a *cooldown*; InnerDaemon only runs when confidence clears a threshold and the rule hasn't fired in N turns. InnerDaemon's first job is to reject false alarms (`noop`), which is cheap relative to a wrong steering action.
 2. **InnerDaemon latency on the critical path.** An LLM call at every candidate turn adds latency. Mitigations: (a) detector-only rules for the cheap/deterministic cases (the `git log` block needs no LLM); (b) a fast/small model for InnerDaemon (it does shallow judgment, not deep coding); (c) run InnerDaemon *after* dispatching the turn's tool results, in parallel with the next model call where possible, so the nudge lands on the *following* turn rather than blocking.
-3. **Avoiding nag loops.** `maxFires` + `cooldownTurns` per rule; after exhaustion, escalate `inject → stop`. InnerDaemon is explicitly instructed to prefer `noop`.
+3. **Avoiding nag loops.** `maxFires` + `cooldownTurns` per rule; after exhaustion, advisory rules become dormant. InnerDaemon is explicitly instructed to prefer `noop`; hard termination is opt-in.
 4. **InnerDaemon prompt drift.** The secondary thinker is itself an LLM and can be wrong. Hard guardrails: read-only tools (it can't break anything directly), strict output schema, and the main agent is free to ignore a `light` nudge (it's advisory-forcing, not a hard override) — only `block`/`stop` are non-advisory.
 5. **Determinism/testing.** The detector is pure (facts + conditions → candidates) and fully unit-testable with synthetic `TurnFact[]`. InnerDaemon is tested via recorded fixtures (seed request → expected response shape), accepting it's non-deterministic by nature.
 6. **Model selection for InnerDaemon.** Open question: same provider as the session, a fixed small model, or configurable per rule? v1: inherit session model with a small-model preference; make it configurable in the rule frontmatter (`innerdaemonModel`).
@@ -291,6 +292,12 @@ Generalize conditions (`pathMatches` for frontend, etc.). Migrate scenario-speci
 
 **Phase 3 — watcher integration.**
 Wire `source/events/` file-change and process/port signals into the detector for `successCriterion` checks, reducing per-turn `fs` polling.
+
+**Implemented extensions.**
+Rules support stable `userTaskKind` gating, recursive `anyOf`/`not`, explicit
+priority with equal-priority fairness, provider-qualified model normalization,
+within-turn wall-clock interruption, project-defined deterministic success
+criteria, live file reload, lifecycle-safe authoring, and per-rule diagnostics.
 
 ---
 

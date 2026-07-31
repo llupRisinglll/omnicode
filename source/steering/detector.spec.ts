@@ -4,6 +4,7 @@ import {
 	conditionMatches,
 	detectConstraintViolations,
 	evaluateRules,
+	modelMatchesAny,
 	modelMatchesGlob,
 	pathMatchesGlob,
 } from './detector';
@@ -78,7 +79,26 @@ test('modelMatchesGlob: exact id', t => {
 test('modelMatchesGlob: trailing wildcard', t => {
 	t.true(modelMatchesGlob('gpt-4o-mini', '*-mini'));
 	t.true(modelMatchesGlob('gemini-2.5-flash', 'gemini-*'));
+	t.true(modelMatchesGlob('mimo-v2.5-pro', 'mimo*'));
+	t.true(modelMatchesAny('openrouter/mimo-v2.5-pro', ['mimo*']));
 	t.false(modelMatchesGlob('claude-sonnet-4-6', '*-mini'));
+});
+
+test('conditionMatches: task kind and recursive negation', t => {
+	const fact = makeFact({
+		userTaskKind: 'review',
+		intentClass: 'reproduce',
+	});
+	t.true(
+		conditionMatches(
+			{userTaskKind: 'review', not: {intentClass: 'runtime-setup'}},
+			MIMO,
+			fact,
+		),
+	);
+	t.false(
+		conditionMatches({userTaskKind: 'bug-reproduction'}, MIMO, fact),
+	);
 });
 
 test('modelMatchesGlob: contains wildcard', t => {
