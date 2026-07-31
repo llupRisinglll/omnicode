@@ -127,7 +127,7 @@ test('displayToolResult - renders a validation failure as a red error', async t 
 	const result = createMockToolResult(
 		'call-1',
 		'TestTool',
-		'⚒ Validation failed: one or more arguments have the wrong type\n  - `path`: expected string, received object',
+		'✦ Validation failed: one or more arguments have the wrong type\n  - `path`: expected string, received object',
 	);
 	const {addToChatQueue, queue} = createMockAddToChatQueue();
 
@@ -167,7 +167,7 @@ test('displayToolResult - compact mode condenses a validation failure too', asyn
 	const result = createMockToolResult(
 		'call-1',
 		'write_file',
-		'⚒ Validation failed: Invalid file path: "/abs/path". Path must be relative.',
+		'✦ Validation failed: Invalid file path: "/abs/path". Path must be relative.',
 	);
 	const {addToChatQueue, queue} = createMockAddToChatQueue();
 
@@ -193,7 +193,7 @@ test('LiveCompactCounts renders running state and groups failed tools', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /^⚒\s+Ran WebFetch ×10 failed \(running\) \(ctrl-o to expand\)/);
+	t.regex(output, /^✦\s+Ran WebFetch ×10 failed \(running\)/);
 	t.notRegex(output, /Running WebFetch/);
 	unmount();
 });
@@ -206,8 +206,8 @@ test('CompactToolCountsLine renders completed failed summaries as ran', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /^⚒\s+Ran WebFetch ×10 failed/);
-	t.notRegex(output, /^ ⚒/);
+	t.regex(output, /^✦\s+Ran WebFetch ×10 failed/);
+	t.notRegex(output, /^ ✦/);
 	unmount();
 });
 
@@ -230,8 +230,8 @@ test('LiveCompactCounts renders agent instance keys as separate blocks', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /^⚒\s+Ran explore\(first\) \(running\) \(ctrl-o to expand\)/m);
-	t.regex(output, /^⚒\s+Ran review\(second\) \(running\) \(ctrl-o to expand\)/m);
+	t.regex(output, /^✦\s+Ran explore\(first\) \(running\)/m);
+	t.regex(output, /^✦\s+Ran review\(second\) \(running\)/m);
 	t.notRegex(output, /Task and Task/);
 	t.notRegex(output, /Task ×2/);
 	unmount();
@@ -256,10 +256,9 @@ test('LiveCompactCounts truncates long agent task details before the expand hint
 	const output = lastFrame()!;
 	t.regex(
 		output,
-		/Ran explore\(Inspect the top-level repository layout and run…\) \(running\) \(ctrl-o to expand\)/,
+		/Ran explore\(Inspect the top-level repository layout and run…\) \(running\)/,
 	);
-	t.notRegex(output, /^\(ctrl-o to expand\)$/m);
-	unmount();
+		unmount();
 });
 
 test('getCompactToolRunningSummary summarizes running agents', t => {
@@ -351,8 +350,8 @@ test('LiveCompactCounts renders dynamically completed subagent rows during paral
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /Ran explore\(first\) completed \(ctrl-o to expand\)/);
-	t.regex(output, /Ran explore\(second\) \(running\) \(ctrl-o to expand\)/);
+	t.regex(output, /Ran explore\(first\) completed/);
+	t.regex(output, /Ran explore\(second\) \(running\)/);
 	t.regex(output, /thinking · mimo-v2\.5 · ~12 tokens/);
 	unmount();
 });
@@ -376,7 +375,7 @@ test('LiveCompactCounts renders failed agent state only once', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /Ran explore\(failed task\) failed \(ctrl-o to expand\)/);
+	t.regex(output, /Ran explore\(failed task\) failed/);
 	t.notRegex(output, /failed failed/);
 	unmount();
 });
@@ -509,7 +508,7 @@ test('displayToolResult - displays formatted result as ToolMessage when formatte
 	const element = queue[0] as React.ReactElement<ToolMessageProps>;
 	t.is(element.type, ToolMessage);
 	t.is(element.props.message, 'Formatted content');
-	t.is(element.props.title, '⚒ ReadFile');
+	t.is(element.props.title, '✦ ReadFile');
 });
 
 test('displayToolResult - clones React element when formatter returns element', async t => {
@@ -554,7 +553,7 @@ test('displayToolResult - falls back to raw result when formatter throws', async
 	t.is(queue.length, 1);
 	const element = queue[0] as React.ReactElement<ToolMessageProps>;
 	t.is(element.props.message, 'raw result');
-	t.is(element.props.title, '⚒ BrokenTool');
+	t.is(element.props.title, '✦ BrokenTool');
 });
 
 test('displayToolResult - displays raw result when no formatter exists', async t => {
@@ -579,7 +578,7 @@ test('displayToolResult - displays raw result when no formatter exists', async t
 	t.is(queue.length, 1);
 	const element = queue[0] as React.ReactElement<ToolMessageProps>;
 	t.is(element.props.message, 'raw content');
-	t.is(element.props.title, '⚒ NoFormatterTool');
+	t.is(element.props.title, '✦ NoFormatterTool');
 });
 
 // ============================================================================
@@ -864,8 +863,7 @@ test('LiveCompactCounts - renders tool counts', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Ran Read ×3 and Grep ×2 \(running\)/);
-	t.regex(output!, /\(ctrl-o to expand\)/);
-	unmount();
+		unmount();
 });
 
 test('LiveCompactCounts - renders single count without multiplier', t => {
@@ -913,8 +911,7 @@ test('LiveCompactCounts - merges completed and running compact counts', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Ran Bash ×3 \(running\)/);
-	t.regex(output!, /\(ctrl-o to expand\)/);
-	t.regex(output!, /└\s+gh repo list llupRisinglll --limit 100 --json name/);
+		t.regex(output!, /└\s+gh repo list llupRisinglll --limit 100 --json name/);
 	t.notRegex(output!, /source\/app\/App\.tsx/);
 	t.notRegex(output!, /Running Bash/);
 	unmount();
@@ -1063,7 +1060,6 @@ test('LiveCompactCounts - expanded mode shows all grouped details', t => {
 	t.regex(output!, /command one/);
 	t.regex(output!, /command four/);
 	t.notRegex(output!, /more commands/);
-	t.regex(output!, /\(ctrl-o to collapse\)/);
 	unmount();
 });
 
@@ -1079,8 +1075,7 @@ test('LiveCompactCounts - hover highlights expand hint', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /\(ctrl-o to expand\)/);
-	unmount();
+		unmount();
 });
 
 test('getLiveCompactToolExpandHitboxColumns returns visible hint columns', t => {
@@ -1092,7 +1087,7 @@ test('getLiveCompactToolExpandHitboxColumns returns visible hint columns', t => 
 	);
 
 	t.truthy(hitbox);
-	t.true(hitbox!.start > '⚒  Ran Bash ×2 (running)'.length);
+	t.true(hitbox!.start > '✦  Ran Bash ×2 (running)'.length);
 	t.is(hitbox!.end - hitbox!.start + 1, '(ctrl-o to expand)'.length);
 });
 
@@ -1115,7 +1110,6 @@ test('displayCompactCountsSummary - keeps safe compact details below summary', t
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Ran Bash ×2/);
-	t.regex(output!, /\(ctrl-o to collapse\)/);
 	t.regex(output!, /└\s+first command/);
 	t.regex(output!, /last command/);
 	unmount();
@@ -1142,8 +1136,8 @@ test('displayCompactCountsSummary renders agent entries as separate blocks', t =
 
 	const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
 	const output = lastFrame()!;
-	t.regex(output, /^⚒\s+Ran explore\(first task\) \(ctrl-o to expand\)/m);
-	t.regex(output, /^⚒\s+Ran review\(second task\) \(ctrl-o to expand\)/m);
+	t.regex(output, /^✦\s+Ran explore\(first task\)/m);
+	t.regex(output, /^✦\s+Ran review\(second task\)/m);
 	t.notRegex(output, /Task and Task/);
 	unmount();
 });
@@ -1170,7 +1164,7 @@ test('LiveCompactCounts - renders a single hammer for grouped entries', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	const hammerCount = (output!.match(/\u2692/g) || []).length;
+	const hammerCount = (output!.match(/\u2726/g) || []).length;
 	t.is(hammerCount, 1);
 	t.regex(output!, /Ran Read and Bash ×2 \(running\)/);
 	unmount();

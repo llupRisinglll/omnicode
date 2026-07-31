@@ -1,11 +1,17 @@
 import {Box, Text} from 'ink';
-import {useMemo, useRef} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {formatElapsed} from '@/components/animated-gear-timer';
 import {useNonInteractiveRender} from '@/hooks/useNonInteractiveRender';
 import {useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {Colors, parseMarkdown} from '@/markdown-parser/index';
 import type {AssistantReasoningProps} from '@/types/index';
+import {
+	isScreenTextAt,
+	isScreenTextBlockFromEndOccurrenceAt,
+	isScreenTextOccurrenceFromEndAt,
+} from '@/utils/selection';
+import {clickEvents, pointerEvents} from '@/utils/terminal-mouse';
 import {wrapWithTrimmedContinuations} from '@/utils/text-wrapping';
 import {calculateTokens} from '@/utils/token-calculator';
 import {
@@ -16,6 +22,8 @@ import {
 // Module-level store for reasoning start times, shared across components.
 // StreamingReasoning sets it when reasoning starts; AssistantReasoning reads it.
 let lastReasoningStartTime: number | null = null;
+let nextReasoningInstanceId = 0;
+const reasoningInstances = new Map<number, string>();
 
 export function setReasoningStartTime(time: number) {
 	lastReasoningStartTime = time;
@@ -37,6 +45,27 @@ export function getReasoningStartTime(): number | null {
 // beneath it. Keep in sync with the marginLeft used in
 // displayCompactCountsSummary.
 const EXPANDED_INDENT = 2;
+
+function useReasoningHeaderHover(headerText: string, active: boolean): boolean {
+	const [hovered, setHovered] = useState(false);
+
+	useEffect(() => {
+		if (!active) {
+			setHovered(false);
+			return;
+		}
+		const onPointer = ({x, y}: {x: number; y: number}) => {
+			const next = isScreenTextAt(x - 1, y - 1, headerText);
+			setHovered(value => (value === next ? value : next));
+		};
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [active, headerText]);
+
+	return hovered;
+}
 
 export default function AssistantReasoning({
 	reasoning,
@@ -92,33 +121,119 @@ export default function AssistantReasoning({
 	// up under the assistant icon column. Every other theme keeps the classic
 	// colors.tool header, flush left.
 	const isIconTheme = Boolean(colors.assistantIcon);
+	const [mouseExpansion, setMouseExpansion] = useState<{
+		base: boolean;
+		value: boolean;
+	} | null>(null);
+	const effectiveExpand =
+		mouseExpansion?.base === expand ? mouseExpansion.value : expand;
+	const durationText =
+		thinkingDuration === null
+			? ''
+			: isFastThinking
+				? ' (<1s)'
+				: ` (${formatElapsed(thinkingDuration)})`;
+	const headerText = `⚙ Thought${durationText}  (ctrl+r to ${
+		effectiveExpand ? 'collapse' : 'expand'
+	})`;
+	const identityText = `⚙ Thought${durationText}`;
+	const [instanceId] = useState(() => nextReasoningInstanceId++);
+	reasoningInstances.set(instanceId, identityText);
+	useEffect(() => {
+		return () => {
+			reasoningInstances.delete(instanceId);
+		};
+	}, [instanceId]);
+	const occurrenceFromEnd = [...reasoningInstances]
+		.filter(([, text]) => text === identityText)
+		.reverse()
+		.findIndex(([id]) => id === instanceId);
+	const [headerHovered, setHeaderHovered] = useState(false);
+	const footerText = `~${tokens.toLocaleString()} tokens`;
+	const isMouseTarget = useCallback(
+		(x: number, y: number) =>
+			effectiveExpand
+				? isScreenTextBlockFromEndOccurrenceAt(
+						x,
+						y,
+						identityText,
+						occurrenceFromEnd,
+						footerText,
+					)
+				: isScreenTextOccurrenceFromEndAt(
+						x,
+						y,
+						identityText,
+						occurrenceFromEnd,
+					),
+		[effectiveExpand, footerText, identityText, occurrenceFromEnd],
+	);
+
+	useEffect(() => {
+		if (nonInteractive) return;
+		const onPointer = ({x, y}: {x: number; y: number}) => {
+			const hovered = isMouseTarget(x - 1, y - 1);
+			setHeaderHovered(value => (value === hovered ? value : hovered));
+		};
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [isMouseTarget, nonInteractive]);
+
+	useEffect(() => {
+		if (nonInteractive) return;
+		const onClick = ({x, y}: {x: number; y: number}) => {
+			if (!isMouseTarget(x, y)) return;
+			setMouseExpansion(value => ({
+				base: expand,
+				value: !(value?.base === expand ? value.value : expand),
+			}));
+		};
+		clickEvents.on('click', onClick);
+		return () => {
+			clickEvents.off('click', onClick);
+		};
+	}, [expand, isMouseTarget, nonInteractive]);
 
 	return (
-		<Box flexDirection="column" marginBottom={1}>
-			<Box paddingLeft={isIconTheme ? 2 : 0}>
-				<Text color={isIconTheme ? colors.secondary : colors.tool}>
-					{'⚙'} Thought
+		<Box
+			flexDirection="column"
+			marginBottom={1}
+			width="100%"
+			backgroundColor={effectiveExpand ? colors.secondary : undefined}
+		>
+			<Box
+				paddingLeft={isIconTheme ? 2 : 0}
+				width="100%"
+				backgroundColor={
+					headerHovered || effectiveExpand ? colors.secondary : undefined
+				}
+			>
+				<Text
+					color={
+						headerHovered || effectiveExpand
+							? colors.text
+							: isIconTheme
+								? colors.secondary
+								: colors.tool
+					}
+					backgroundColor={
+						headerHovered || effectiveExpand ? colors.secondary : undefined
+					}
+				>
+					{nonInteractive ? `⚙ Thought${durationText}` : headerText}
 				</Text>
-				{thinkingDuration !== null && (
-					<Text color={colors.secondary}>
-						{isFastThinking
-							? ' (<1s)'
-							: ` (${formatElapsed(thinkingDuration)})`}
-					</Text>
-				)}
-				{!expand && !nonInteractive && (
-					<Text color={colors.secondary}>{'  '}(ctrl+r to expand)</Text>
-				)}
 			</Box>
-			{expand && (
+			{effectiveExpand && (
 				<Box flexDirection="column" marginLeft={EXPANDED_INDENT}>
 					<Box marginBottom={1}>
-						<Text color={colors.secondary} italic>
+						<Text color={colors.text} backgroundColor={colors.secondary} italic>
 							{renderedMessage}
 						</Text>
 					</Box>
 					<Box>
-						<Text color={colors.secondary}>
+						<Text color={colors.text} backgroundColor={colors.secondary}>
 							~{tokens.toLocaleString()} tokens{' '}
 						</Text>
 					</Box>
@@ -151,6 +266,8 @@ export function ThoughtRunSummary({
 	const isFastThinking = totalMs > 0 && totalSeconds < 1;
 	const durationLabel = isFastThinking ? '<1s' : formatElapsed(totalSeconds);
 	const toolEntries = toolCounts ? Object.entries(toolCounts) : [];
+	const summaryHeader = `⚙ Thought for ${durationLabel} (ctrl+r to expand)`;
+	const hintHovered = useReasoningHeaderHover(summaryHeader, !nonInteractive);
 
 	return (
 		<Box flexDirection="column" marginBottom={1}>
@@ -162,9 +279,11 @@ export function ThoughtRunSummary({
 				/>
 			)}
 			<Box paddingLeft={2}>
-				<Text color={colors.secondary}>
-					{'⚙'} Thought for {durationLabel}
-					{!nonInteractive ? ' (ctrl+r to expand)' : ''}
+				<Text
+					color={hintHovered ? colors.text : colors.secondary}
+					backgroundColor={hintHovered ? colors.secondary : undefined}
+				>
+					{nonInteractive ? `⚙ Thought for ${durationLabel}` : summaryHeader}
 				</Text>
 			</Box>
 		</Box>

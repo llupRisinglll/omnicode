@@ -30,6 +30,8 @@ export default function BashProgress({
 		completedState ?? {
 			executionId,
 			command,
+			startedAt: Date.now(),
+			isBackground: false,
 			outputPreview: '',
 			fullOutput: '',
 			stderr: '',

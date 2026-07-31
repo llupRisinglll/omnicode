@@ -1,12 +1,14 @@
 import React from 'react';
 import BashProgress from '@/components/bash-progress';
-import type {BashExecutionState} from '@/services/bash-executor';
+import {type BashExecutionState, bashExecutor} from '@/services/bash-executor';
 import {generateKey} from '@/session/key-generator';
 import {executeBashCommand, formatBashResultForLLM} from '@/tools/execute-bash';
 import type {ToolManager} from '@/tools/tool-manager';
 import type {ToolCall, ToolResult} from '@/types/core';
 import {parseToolArguments} from '@/utils/tool-args-parser';
 import {formatValidationError} from '@/utils/tool-validation';
+
+const AUTO_BACKGROUND_MS = 15_000;
 
 export interface StreamingBashRun {
 	toolCall: ToolCall;
@@ -37,6 +39,7 @@ export async function runStreamingBashTool(
 	keyPrefix: string,
 	signal?: AbortSignal,
 	onStarted?: (executionId: string, command: string) => void,
+	autoBackgroundMs = AUTO_BACKGROUND_MS,
 ): Promise<StreamingBashRun> {
 	const parsedArgs = parseToolArguments(toolCall.function.arguments);
 
@@ -58,8 +61,24 @@ export async function runStreamingBashTool(
 	}
 
 	const commandStr = parsedArgs.command as string;
-	const {executionId, promise} = executeBashCommand(commandStr, {signal});
+	const explicitBackground = parsedArgs.run_in_background === true;
+	const {executionId, promise} = executeBashCommand(commandStr, {
+		signal: explicitBackground ? undefined : signal,
+		background: explicitBackground,
+	});
 	onStarted?.(executionId, commandStr);
+	if (explicitBackground) {
+		return {
+			toolCall,
+			result: {
+				tool_call_id: toolCall.id,
+				role: 'tool',
+				name: toolCall.function.name,
+				content: `Background command started with task ID ${executionId}. Use monitor with this task ID to read output, check status, or stop it.`,
+			},
+			bashState: bashExecutor.getState(executionId),
+		};
+	}
 	setLiveComponent(
 		<BashProgress
 			key={generateKey(`${keyPrefix}-${toolCall.id}`)}
@@ -69,7 +88,30 @@ export async function runStreamingBashTool(
 		/>,
 	);
 
-	const bashState = await promise;
+	const disallowAutoBackground = /^\s*sleep(?:\s|$)/.test(commandStr);
+	const autoBackground = disallowAutoBackground
+		? null
+		: new Promise<null>(resolve => {
+				const timeout = setTimeout(() => resolve(null), autoBackgroundMs);
+				timeout.unref();
+			});
+	const bashState = autoBackground
+		? await Promise.race([promise, autoBackground])
+		: await promise;
+	if (bashState === null) {
+		bashExecutor.background(executionId);
+		setLiveComponent(null);
+		return {
+			toolCall,
+			result: {
+				tool_call_id: toolCall.id,
+				role: 'tool',
+				name: toolCall.function.name,
+				content: `Command exceeded the ${autoBackgroundMs / 1000}-second foreground budget and is still running as background task ${executionId}. Use monitor to read output, check status, or stop it.`,
+			},
+			bashState: bashExecutor.getState(executionId),
+		};
+	}
 	setLiveComponent(null);
 
 	return {
