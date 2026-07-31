@@ -1,3 +1,4 @@
+import {basename} from 'node:path';
 import {Box, Text, useApp, useInput} from 'ink';
 import React from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
@@ -1242,7 +1243,10 @@ export function PreviewBody({
 				</Box>
 			)}
 			<Box flexDirection="column" flexShrink={0}>
-				{bgDetailsIndex === -1 && (
+				{/* Any modal panel (agents/bg details or the mock settings view)
+				    unmounts the input so its ESC/arrow handlers can't reach the
+				    prompt (clear-message, history navigation) behind the modal. */}
+				{bgDetailsIndex === -1 && scenario !== 'settings' && (
 					<UserInput
 						forceFocus={true}
 						suppressBuiltInCompletions={true}
@@ -1278,6 +1282,12 @@ export function PreviewBody({
 						developmentMode="yolo"
 						contextPercentUsed={3}
 						contextSource="estimate"
+						tune={{
+							enabled: true,
+							toolProfile: 'full',
+							aggressiveCompact: false,
+						}}
+						statusInfo={{directory: basename(process.cwd())}}
 						currentModel="preview-model"
 						compactToolDisplay={!expanded}
 						onToggleCompactDisplay={() => setExpanded(value => !value)}
