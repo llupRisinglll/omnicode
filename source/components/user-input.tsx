@@ -1073,10 +1073,19 @@ export default function UserInput({
 			Math.floor(commandCompletionAvailableWidth * 0.4),
 		);
 	}, [completions, commandCompletionAvailableWidth]);
-	const modelInputBadge =
-		colors.promptChar && currentModel
-			? truncate(currentModel, Math.max(8, inputWrapWidth - 4))
-			: '';
+	// Model badge in the box's bottom-right corner. The ctx figure rides
+	// beside it (bar glyphs dropped — just the estimate marker + percentage),
+	// rendered in secondary so the model name stays the visual anchor.
+	const modelInputBadge = (() => {
+		if (!colors.promptChar || !currentModel) return null;
+		const ctxPct = contextPercentUsed ?? null;
+		const ctxPart =
+			ctxPct !== null
+				? ` · ctx ${contextSource === 'api' ? '' : '~'}${ctxPct}%`
+				: '';
+		const modelBudget = Math.max(6, inputWrapWidth - 4 - ctxPart.length);
+		return {model: truncate(currentModel, modelBudget), ctx: ctxPart};
+	})();
 
 	// When disabled, show minimal UI to avoid cluttering the screen
 	if (disabled) {
@@ -1136,27 +1145,31 @@ export default function UserInput({
 
 	return (
 		<>
-			{!isBashMode ? (
+			{isBashMode ? (
+				<Text color={colors.tool} bold>
+					Bash mode
+				</Text>
+			) : isBusy && (busyStatus || getShowWorkingIndicator()) ? (
 				<Box marginTop={1}>
-					{isBusy && (busyStatus || getShowWorkingIndicator()) ? (
-						<Box>
-							<Text color={colors.primary}>
-								<AnimatedGear />
-							</Text>
-							<Text color={colors.primary} bold>
-								{' Working'}
-							</Text>
-							<Text color={colors.primary}>
-								<Spinner type="simpleDots" />
-							</Text>
-							{busyStatus && (
-								<Text color={colors.secondary}> · {busyStatus}</Text>
-							)}
-							{workingStartTime && (
-								<ElapsedTimer startTime={workingStartTime} />
-							)}
-						</Box>
-					) : colors.assistantIcon ? (
+					<Box>
+						<Text color={colors.primary}>
+							<AnimatedGear />
+						</Text>
+						<Text color={colors.primary} bold>
+							{' Working'}
+						</Text>
+						<Text color={colors.primary}>
+							<Spinner type="simpleDots" />
+						</Text>
+						{busyStatus && (
+							<Text color={colors.secondary}> · {busyStatus}</Text>
+						)}
+						{workingStartTime && <ElapsedTimer startTime={workingStartTime} />}
+					</Box>
+				</Box>
+			) : !colors.promptChar ? (
+				<Box marginTop={1}>
+					{colors.assistantIcon ? (
 						<Text>
 							<Text color={colors.secondary}>{colors.assistantIcon} </Text>
 							<Text color={colors.primary}>
@@ -1169,11 +1182,7 @@ export default function UserInput({
 						</Text>
 					)}
 				</Box>
-			) : (
-				<Text color={colors.tool} bold>
-					Bash mode
-				</Text>
-			)}
+			) : null}
 
 			{Boolean(colors.promptChar) && queuedBlock && (
 				<Box marginX={1} flexDirection="column">
@@ -1339,8 +1348,13 @@ export default function UserInput({
 				>
 					<Text color={colors.info} bold>
 						{' '}
-						{modelInputBadge}{' '}
+						{modelInputBadge.model}
 					</Text>
+					{modelInputBadge.ctx && (
+						<Text color={colors.secondary} bold>
+							{modelInputBadge.ctx}{' '}
+						</Text>
+					)}
 				</Box>
 			)}
 
