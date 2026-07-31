@@ -5,14 +5,16 @@ import React, {useMemo} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
+import {PreviewDevPanel} from '@/app/components/preview-dev-panel';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
 import {StatusLine} from '@/components/StatusLine';
-import {loadPreferences} from '@/config/preferences';
+import {loadPreferences, updateDeveloperMode} from '@/config/preferences';
 import type {useChatHandler} from '@/hooks/chat-handler';
 import type {AppHandlers} from '@/hooks/useAppHandlers';
 import type {useAppState} from '@/hooks/useAppState';
+import {useBackgroundTaskCount} from '@/hooks/useBackgroundTaskCount';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
 import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {UIStateProvider} from '@/hooks/useUIState';
@@ -23,13 +25,9 @@ import {isSingleToolProfile, resolveToolProfile} from '@/tools/tool-profiles';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
 import type {StatusLineData} from '@/types/statusline';
-import {clickEvents} from '@/utils/terminal-mouse';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
-import {
-	displayCompactCountsSummary,
-	getLiveCompactToolExpandHitboxColumns,
-} from '@/utils/tool-result-display';
+import {displayCompactCountsSummary} from '@/utils/tool-result-display';
 
 interface InteractiveAppProps {
 	appState: ReturnType<typeof useAppState>;
@@ -127,41 +125,15 @@ export function InteractiveApp({
 		}
 	}, [appState]);
 
-	const handleToggleReasoningExpanded = () => {
+	const handleToggleReasoningExpanded = React.useCallback(() => {
 		appState.setReasoningExpanded(!appState.reasoningExpanded);
-	};
-
-	React.useEffect(() => {
-		const hasCompactSummary =
-			appState.compactToolCounts &&
-			Object.keys(appState.compactToolCounts).length > 0;
-		if (!hasCompactSummary) return;
-
-		const hitbox = getLiveCompactToolExpandHitboxColumns(
-			appState.compactToolCounts ?? {},
-			!appState.compactToolDisplay,
-		);
-		if (!hitbox) return;
-
-		const onClick = ({x}: {x: number; y: number}) => {
-			if (x < hitbox.start || x > hitbox.end) return;
-			handleToggleCompactDisplay();
-		};
-
-		clickEvents.on('click', onClick);
-		return () => {
-			clickEvents.off('click', onClick);
-		};
-	}, [
-		appState.compactToolCounts,
-		appState.compactToolDisplay,
-		handleToggleCompactDisplay,
-	]);
+	}, [appState.reasoningExpanded, appState.setReasoningExpanded]);
 
 	const showModalSelectors =
 		(appState.activeMode !== null &&
 			appState.activeMode !== 'explorer' &&
-			appState.activeMode !== 'ideSelection') ||
+			appState.activeMode !== 'ideSelection' &&
+			appState.activeMode !== 'preview') ||
 		appState.isSettingsMode;
 
 	// Show the plan review bar when the chat handler signals that a turn which
@@ -308,6 +280,7 @@ export function InteractiveApp({
 
 	const terminalRows = useTerminalRows();
 	const terminalWidth = useTerminalWidth();
+	const backgroundTaskCount = useBackgroundTaskCount();
 	const statusLineConfig = loadPreferences().statusLine;
 	const statusInfo = useMemo(() => {
 		let git:
@@ -373,6 +346,9 @@ export function InteractiveApp({
 					? 'single'
 					: 'parallel',
 			},
+			background_tasks: {
+				running: backgroundTaskCount,
+			},
 			version: '1.28.1',
 		};
 	}, [
@@ -380,6 +356,7 @@ export function InteractiveApp({
 		appState.currentModel,
 		appState.contextPercentUsed,
 		appState.tune,
+		backgroundTaskCount,
 	]);
 	const statusLineSlot =
 		statusLineConfig?.enabled && statusLineConfig.command && statusLineData ? (
@@ -451,6 +428,15 @@ export function InteractiveApp({
 					</Box>
 				)}
 
+				{appState.activeMode === 'preview' && (
+					<PreviewDevPanel
+						onClose={() => {
+							appState.setActiveMode(null);
+							appState.setIsSettingsMode(false);
+						}}
+					/>
+				)}
+
 				{appState.isIdeSelectionMode && (
 					<Box marginLeft={-1} flexDirection="column">
 						<IdeSelector
@@ -486,6 +472,13 @@ export function InteractiveApp({
 							onMcpWizardCancel={modeHandlers.handleMcpWizardCancel}
 							onSettingsCancel={modeHandlers.handleSettingsCancel}
 							onMcpChanged={modeHandlers.reloadMcpServers}
+							currentSessionId={appState.currentSessionId ?? undefined}
+							messageCount={appState.messages.length}
+							onActivateDeveloperMode={() => {
+								updateDeveloperMode(true);
+								appState.setIsSettingsMode(false);
+								appState.setActiveMode('preview');
+							}}
 							onLaunchTune={() => {
 								launchedFromSettingsRef.current = true;
 								modeHandlers.handleSettingsCancel();

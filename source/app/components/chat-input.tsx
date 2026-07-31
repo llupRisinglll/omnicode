@@ -157,9 +157,7 @@ export function ChatInput({
 
 	return (
 		<Box flexDirection="column">
-			{liveCompactCounts}
-
-			{/* Live task list - updates in-place below tool counts, above spinner */}
+			{/* Live task list - updates in-place above spinner */}
 			{liveTaskList && liveTaskList.length > 0 && (
 				<TaskListDisplay tasks={liveTaskList} title="Tasks" />
 			)}

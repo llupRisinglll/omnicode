@@ -1,11 +1,14 @@
 import {Box, Text} from 'ink';
 import React from 'react';
+import {StyledTitle} from '@/components/ui/styled-title';
 import {
 	TOKEN_THRESHOLD_CRITICAL_PERCENT,
 	TOKEN_THRESHOLD_WARNING_PERCENT,
 } from '@/constants';
+import {useBackgroundTaskCount} from '@/hooks/useBackgroundTaskCount';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import type {useTheme} from '@/hooks/useTheme';
+import {TitleShapeContext} from '@/hooks/useTitleShape';
 import {resolveToolProfile} from '@/tools/tool-profiles';
 import type {TuneConfig} from '@/types/config';
 import type {ContextSource, DevelopmentMode} from '@/types/core';
@@ -36,6 +39,10 @@ interface DevelopmentModeIndicatorProps {
 	tune?: TuneConfig;
 	currentModel?: string;
 	activeEditor?: ActiveEditorState | null;
+	backgroundCount?: number;
+	bgHighlighted?: boolean;
+	agentCount?: number;
+	agentHighlighted?: boolean;
 	statusInfo?: DevelopmentModeStatusInfo;
 }
 
@@ -68,9 +75,18 @@ export const DevelopmentModeIndicator = React.memo(
 		tune,
 		currentModel,
 		activeEditor,
+		backgroundCount,
+		bgHighlighted = false,
+		agentCount = 0,
+		agentHighlighted = false,
 		statusInfo,
 	}: DevelopmentModeIndicatorProps) => {
 		const {isNarrow, actualWidth, truncate} = useResponsiveTerminal();
+		const backgroundTaskCount = backgroundCount ?? useBackgroundTaskCount();
+		// The focus pill reuses the user's configured titlebar shape so the
+		// status-line selection matches Settings' active tab exactly.
+		const titleShape =
+			React.useContext(TitleShapeContext)?.currentTitleShape ?? 'pill';
 		const modeLabel = isNarrow
 			? DEVELOPMENT_MODE_LABELS_NARROW[developmentMode]
 			: DEVELOPMENT_MODE_LABELS[developmentMode];
@@ -127,6 +143,8 @@ export const DevelopmentModeIndicator = React.memo(
 				contextPercentUsed !== null
 					? ` · ctx: ${ctxPrefix}${contextBar(contextPercentUsed)} ${contextPercentUsed}%`
 					: '';
+			const backgroundSegment =
+				backgroundTaskCount > 0 ? ` · bg: ${backgroundTaskCount}` : '';
 			const sessionSeparator = sessionName ? ' · ' : '';
 			const editorSeparator = editorFileName ? ' · ' : '';
 
@@ -139,6 +157,7 @@ export const DevelopmentModeIndicator = React.memo(
 				modeLabel.length +
 				tuneSegment.length +
 				ctxSegment.length +
+				backgroundSegment.length +
 				sessionSeparator.length +
 				editorSeparator.length +
 				editorPrefix.length +
@@ -164,6 +183,7 @@ export const DevelopmentModeIndicator = React.memo(
 				shiftHint.length +
 				tuneSegment.length +
 				ctxSegment.length +
+				backgroundSegment.length +
 				sessionSeparator.length +
 				editorSeparator.length +
 				editorPrefix.length +
@@ -270,6 +290,36 @@ export const DevelopmentModeIndicator = React.memo(
 								{ctxPrefix}
 								{contextBar(contextPercentUsed)} {contextPercentUsed}%
 							</Text>
+						</>
+					)}
+					{agentCount > 0 && (
+						<>
+							<Text color={colors.secondary}> · </Text>
+							{agentHighlighted ? (
+								<StyledTitle
+									title={`agents: ${agentCount}`}
+									shape={titleShape}
+									borderColor={colors.primary}
+									textColor={colors.base}
+								/>
+							) : (
+								<Text color={colors.text}>agents: {agentCount}</Text>
+							)}
+						</>
+					)}
+					{backgroundTaskCount > 0 && (
+						<>
+							<Text color={colors.secondary}> · </Text>
+							{bgHighlighted ? (
+								<StyledTitle
+									title={`bg: ${backgroundTaskCount}`}
+									shape={titleShape}
+									borderColor={colors.primary}
+									textColor={colors.base}
+								/>
+							) : (
+								<Text color={colors.text}>bg: {backgroundTaskCount}</Text>
+							)}
 						</>
 					)}
 					{editorLabel && (
