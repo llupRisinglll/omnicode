@@ -14,6 +14,8 @@ const TOOL_PROFILES: Record<ConcreteProfile, string[]> = {
 		'write_file',
 		'string_replace',
 		'execute_bash',
+		'monitor',
+		'report_reproduction',
 		'find_files',
 		'search_file_contents',
 		'list_directory',
@@ -24,6 +26,8 @@ const TOOL_PROFILES: Record<ConcreteProfile, string[]> = {
 		'diff_edit',
 		'write_file',
 		'execute_bash',
+		'monitor',
+		'report_reproduction',
 		'search_file_contents',
 	],
 };
@@ -32,16 +36,16 @@ export const TOOL_PROFILE_DESCRIPTIONS: Record<ToolProfile, string> = {
 	auto: 'Pick the profile automatically from the active model (default)',
 	full: 'All tools including MCP',
 	minimal:
-		'Core editing, bash, and exploration tools — slim prompt, single-tool mode enabled automatically',
-	nano: 'Strictest budget — 5 tools, diff-block editing, ultra-slim prompt. For low-end hardware running tiny models.',
+		'Core editing, bash, background monitoring, and exploration tools — slim prompt, single-tool mode enabled automatically',
+	nano: 'Strictest budget — 7 tools, diff-block editing, bash monitoring, reproduction evidence, ultra-slim prompt. For low-end hardware running tiny models.',
 };
 
 export const TOOL_PROFILE_TOOLTIPS: Record<ToolProfile, string> = {
 	auto: 'Resolves from the model size: tiny models get nano, small models get minimal, larger/cloud models get full. Switching models re-resolves automatically.',
 	full: 'No filtering. All registered tools including MCP servers.',
 	minimal:
-		'8 core tools (edit, bash, search, agent) with slim prompt and single-tool enforcement. Recommended for small models.',
-	nano: '5 tools (read, diff edit, write, bash, search) with an ultra-slim prompt and single-tool enforcement. AGENTS.md is omitted from the system prompt by default. Recommended for tiny models or low-end hardware.',
+		'10 core tools (edit, bash, monitor, reproduction evidence, search, agent) with slim prompt and single-tool enforcement. Recommended for small models.',
+	nano: '7 tools (read, diff edit, write, bash, monitor, reproduction evidence, search) with an ultra-slim prompt and single-tool enforcement. AGENTS.md is omitted from the system prompt by default. Recommended for tiny models or low-end hardware.',
 };
 
 /**

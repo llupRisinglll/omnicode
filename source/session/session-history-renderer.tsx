@@ -67,7 +67,7 @@ function describeToolCall(toolCall: ToolCall): string {
 function isErrorResult(content: string | undefined): boolean {
 	if (!content) return false;
 	return (
-		content.startsWith('Error: ') || content.startsWith('⚒ Validation failed')
+		content.startsWith('Error: ') || content.startsWith('✦ Validation failed')
 	);
 }
 
@@ -119,7 +119,7 @@ const HistoryToolSummary = memo(function HistoryToolSummary({
 	return (
 		<Box width={boxWidth} flexDirection="column">
 			<Text>
-				<Text color={colors.primary}>⚒ </Text>
+				<Text color={colors.primary}>✦ </Text>
 				<Text> </Text>
 				{singleCallWithDetail ? (
 					<>

@@ -1,5 +1,6 @@
 import {getAppConfig} from '@/config/index';
 import {getBraveSearchApiKey} from '@/config/nanocoder-tools-config';
+import {getSteeringEnabled} from '@/config/preferences';
 import {buildToolEntry} from '@/custom-tools/build-tool';
 import {CustomToolLoader} from '@/custom-tools/loader';
 // Type-only import — the `MCPClient` runtime value is loaded dynamically
@@ -46,12 +47,14 @@ const MODE_EXCLUDED_TOOLS: Record<DevelopmentMode, string[]> = {
 		'diff_edit',
 		'file_op',
 		'execute_bash',
+		'monitor',
 		// No task tool — plan mode produces the plan itself
 		'write_tasks',
 		// No git mutation tools — keep read-only git tools
 		'git_add',
 		'git_commit',
 		'git_pr', // can create PRs — excluded like other git mutators
+		'innerdaemon_create',
 	],
 	headless: ['ask_user', 'agent'],
 };
@@ -181,6 +184,13 @@ export class ToolManager {
 			}
 		}
 
+		if (getSteeringEnabled() && !names.includes('innerdaemon_create')) {
+			names.push('innerdaemon_create');
+		}
+		if (!getSteeringEnabled()) {
+			names = names.filter(name => name !== 'innerdaemon_create');
+		}
+
 		// Apply mode-based exclusions
 		if (developmentMode) {
 			const excluded = MODE_EXCLUDED_TOOLS[developmentMode];
@@ -247,6 +257,7 @@ export class ToolManager {
 	): Record<string, AISDKCoreTool> {
 		const result: Record<string, AISDKCoreTool> = {};
 		for (const [name, tool] of Object.entries(tools)) {
+			if (name === 'innerdaemon_create' && !getSteeringEnabled()) continue;
 			const entry = this.registry.getEntry(name);
 			if (entry?.scoped) {
 				if (entry.ownerSkill && entry.ownerSkill === opts?.forSkill) {

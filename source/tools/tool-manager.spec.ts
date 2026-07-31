@@ -691,7 +691,7 @@ test('getAvailableToolNames - returns all tools when tune disabled', t => {
 test('getAvailableToolNames - filters to minimal profile', t => {
 	const manager = new ToolManager();
 	const result = manager.getAvailableToolNames({enabled: true, toolProfile: 'minimal', aggressiveCompact: false});
-	t.deepEqual(result, ['read_file', 'write_file', 'string_replace', 'execute_bash', 'find_files', 'search_file_contents', 'list_directory', 'agent']);
+	t.deepEqual(result, ['read_file', 'write_file', 'string_replace', 'execute_bash', 'monitor', 'report_reproduction', 'find_files', 'search_file_contents', 'list_directory', 'agent', 'innerdaemon_create']);
 });
 
 test('getAvailableToolNames - full profile returns all minus mode exclusions', t => {
@@ -754,8 +754,8 @@ test('plan mode hides every mutating built-in tool (except agent/ask_user)', t =
 test('getAvailableToolNames - plan + minimal excludes mutation tools from minimal set', t => {
 	const manager = new ToolManager();
 	const result = manager.getAvailableToolNames({enabled: true, toolProfile: 'minimal', aggressiveCompact: false}, 'plan');
-	// Plan mode excludes write_file, string_replace, execute_bash from minimal
-	t.deepEqual(result, ['read_file', 'find_files', 'search_file_contents', 'list_directory', 'agent']);
+	// Plan mode excludes write_file, string_replace, execute_bash, and monitor
+	t.deepEqual(result, ['read_file', 'report_reproduction', 'find_files', 'search_file_contents', 'list_directory', 'agent']);
 });
 
 // ============================================================================
@@ -800,10 +800,13 @@ test('getAvailableToolNames - disabledTools intersects with minimal profile', t 
 		'read_file',
 		'write_file',
 		'string_replace',
+		'monitor',
+		'report_reproduction',
 		'find_files',
 		'search_file_contents',
 		'list_directory',
 		'agent',
+		'innerdaemon_create',
 	]);
 });
 

@@ -483,3 +483,60 @@ test('cancel() on a detached process kills a spawned child (process-group assert
 		process.kill(childPid, 0);
 	}, undefined, 'process.kill(pid, 0) should throw because the child was killed by the process-group signal');
 });
+
+test('background() removes foreground timeout and retains completed state', async t => {
+	const executor = createExecutor();
+	const { executionId, promise } = executor.execute(
+		'printf started; sleep 0.2; printf finished',
+		{ timeoutMs: 50 },
+	);
+
+	t.true(executor.background(executionId));
+	t.true(executor.getState(executionId)?.isBackground);
+
+	const result = await promise;
+	t.is(result.exitCode, 0);
+	t.regex(result.fullOutput, /startedfinished/);
+	t.deepEqual(executor.getState(executionId), result);
+});
+
+test('cancelAll() terminates every active background execution', async t => {
+	const first = createExecutor();
+	const a = first.execute('sleep 10', { background: true });
+	const b = first.execute('sleep 10', { background: true });
+
+	first.cancelAll();
+	const results = await Promise.all([a.promise, b.promise]);
+
+	t.true(results.every(result => result.isComplete));
+	t.true(results.every(result => result.error === 'Nanocoder session ended'));
+	t.false(first.hasActiveExecutions());
+});
+
+test('getActiveBackgroundCount() counts only background executions', async t => {
+	const executor = createExecutor();
+	const foreground = executor.execute('sleep 10');
+	const background = executor.execute('sleep 10', { background: true });
+
+	t.is(executor.getActiveBackgroundCount(), 1);
+	executor.background(foreground.executionId);
+	t.is(executor.getActiveBackgroundCount(), 2);
+	executor.cancel(background.executionId);
+	t.is(executor.getActiveBackgroundCount(), 1);
+
+	executor.cancelAll();
+	await Promise.all([foreground.promise, background.promise]);
+});
+
+test('background command completes when an inherited output pipe outlives its shell', async t => {
+	const executor = createExecutor();
+	const start = Date.now();
+	const {promise} = executor.execute('sleep 0.5 & printf launched', {
+		background: true,
+	});
+	const result = await promise;
+
+	t.true(Date.now() - start < 400, 'shell exit completes without waiting on detached output holders');
+	t.is(result.exitCode, 0);
+	t.regex(result.fullOutput, /launched/);
+});

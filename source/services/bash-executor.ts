@@ -19,6 +19,8 @@ const isWindows = platform === 'win32';
 export interface BashExecutionState {
 	executionId: string;
 	command: string;
+	startedAt: number;
+	isBackground: boolean;
 	outputPreview: string; // Last 150 chars for display
 	fullOutput: string; // Complete output
 	stderr: string; // Complete stderr
@@ -40,10 +42,15 @@ interface ExecutionEntry {
 
 export class BashExecutor extends EventEmitter {
 	private executions = new Map<string, ExecutionEntry>();
+	private completedExecutions = new Map<string, BashExecutionState>();
 
 	execute(
 		command: string,
-		options?: {timeoutMs?: number; signal?: AbortSignal},
+		options?: {
+			timeoutMs?: number;
+			signal?: AbortSignal;
+			background?: boolean;
+		},
 	): {
 		executionId: string;
 		promise: Promise<BashExecutionState>;
@@ -53,6 +60,8 @@ export class BashExecutor extends EventEmitter {
 		const state: BashExecutionState = {
 			executionId,
 			command,
+			startedAt: Date.now(),
+			isBackground: options?.background ?? false,
 			outputPreview: '',
 			fullOutput: '',
 			stderr: '',
@@ -163,7 +172,9 @@ export class BashExecutor extends EventEmitter {
 				cwdCaptureFile,
 			};
 
-			const ms = options?.timeoutMs ?? TIMEOUT_BASH_DEFAULT_MS;
+			const ms = options?.background
+				? 0
+				: (options?.timeoutMs ?? TIMEOUT_BASH_DEFAULT_MS);
 			if (ms > 0) {
 				entry.timeoutId = setTimeout(() => {
 					this.cancel(executionId, `Command timed out after ${ms}ms`);
@@ -171,7 +182,7 @@ export class BashExecutor extends EventEmitter {
 				entry.timeoutId.unref();
 			}
 
-			if (options?.signal) {
+			if (options?.signal && !options.background) {
 				entry.abortListener = () => {
 					this.cancel(executionId, 'Cancelled via AbortSignal');
 				};
@@ -202,7 +213,32 @@ export class BashExecutor extends EventEmitter {
 				state.exitCode = code;
 				this.emit('complete', {...state});
 				this.executions.delete(executionId);
+				this.rememberCompleted(state);
 				resolve({...state});
+			});
+
+			// A setup command may intentionally daemonize servers that inherit its
+			// stdout/stderr descriptors. In that case the shell exits but Node never
+			// emits `close`, because those detached descendants keep the pipes open.
+			// Once a task is backgrounded, shell exit is the command boundary.
+			proc.on('exit', (code: number | null) => {
+				setTimeout(() => {
+					if (!state.isBackground || !this.executions.has(executionId)) return;
+					if (entry.timeoutId) clearTimeout(entry.timeoutId);
+					if (entry.signal && entry.abortListener) {
+						entry.signal.removeEventListener('abort', entry.abortListener);
+					}
+					proc.stdout?.destroy();
+					proc.stderr?.destroy();
+					applyCapturedCwd();
+					clearInterval(intervalId);
+					state.isComplete = true;
+					state.exitCode = code;
+					this.executions.delete(executionId);
+					this.rememberCompleted(state);
+					this.emit('complete', {...state});
+					resolve({...state});
+				}, 100).unref();
 			});
 
 			proc.on('error', (error: Error) => {
@@ -220,6 +256,7 @@ export class BashExecutor extends EventEmitter {
 				state.error = error.message;
 				this.emit('complete', {...state});
 				this.executions.delete(executionId);
+				this.rememberCompleted(state);
 				resolve({...state}); // Resolve with error state instead of rejecting
 			});
 		});
@@ -228,6 +265,24 @@ export class BashExecutor extends EventEmitter {
 		this.emit('start', {...state});
 
 		return {executionId, promise};
+	}
+
+	background(executionId: string): boolean {
+		const execution = this.executions.get(executionId);
+		if (!execution) return false;
+
+		if (execution.timeoutId) {
+			clearTimeout(execution.timeoutId);
+			execution.timeoutId = undefined;
+		}
+		if (execution.signal && execution.abortListener) {
+			execution.signal.removeEventListener('abort', execution.abortListener);
+			execution.signal = undefined;
+			execution.abortListener = undefined;
+		}
+		execution.state.isBackground = true;
+		this.emit('progress', {...execution.state});
+		return true;
 	}
 
 	cancel(executionId: string, reason = 'Cancelled by user'): boolean {
@@ -258,13 +313,22 @@ export class BashExecutor extends EventEmitter {
 		}
 		execution.state.isComplete = true;
 		execution.state.error = reason;
+		this.executions.delete(executionId);
+		this.rememberCompleted(execution.state);
 		this.emit('complete', {...execution.state});
 
 		// Resolve the promise with the cancelled state
 		execution.resolve({...execution.state});
-
-		this.executions.delete(executionId);
 		return true;
+	}
+
+	private rememberCompleted(state: BashExecutionState): void {
+		this.completedExecutions.set(state.executionId, {...state});
+		while (this.completedExecutions.size > 50) {
+			const oldest = this.completedExecutions.keys().next().value;
+			if (oldest === undefined) break;
+			this.completedExecutions.delete(oldest);
+		}
 	}
 
 	/**
@@ -298,7 +362,16 @@ export class BashExecutor extends EventEmitter {
 
 	getState(executionId: string): BashExecutionState | undefined {
 		const execution = this.executions.get(executionId);
-		return execution ? {...execution.state} : undefined;
+		return execution
+			? {...execution.state}
+			: this.completedExecutions.get(executionId);
+	}
+
+	getStates(): BashExecutionState[] {
+		return [
+			...Array.from(this.executions.values(), entry => ({...entry.state})),
+			...this.completedExecutions.values(),
+		].sort((a, b) => b.startedAt - a.startedAt);
 	}
 
 	hasActiveExecutions(): boolean {
@@ -307,6 +380,20 @@ export class BashExecutor extends EventEmitter {
 
 	getActiveExecutionIds(): string[] {
 		return Array.from(this.executions.keys());
+	}
+
+	getActiveBackgroundCount(): number {
+		let count = 0;
+		for (const execution of this.executions.values()) {
+			if (execution.state.isBackground) count++;
+		}
+		return count;
+	}
+
+	cancelAll(reason = 'Nanocoder session ended'): void {
+		for (const executionId of this.getActiveExecutionIds()) {
+			this.cancel(executionId, reason);
+		}
 	}
 }
 

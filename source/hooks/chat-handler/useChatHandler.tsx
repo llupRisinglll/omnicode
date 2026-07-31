@@ -9,6 +9,7 @@ import {getAppConfig} from '@/config/index';
 import {
 	getInnerDaemonModel,
 	getSteeringEnabled,
+	getSteeringRulesRevision,
 	getSteeringVerbose,
 	getSubagentModelPreference,
 	subscribeSteeringPrefs,
@@ -21,6 +22,7 @@ import {
 	createInnerDaemonExecutor,
 	loadAndCreateSteeringEngine,
 } from '@/steering';
+import {classifyUserTask} from '@/steering/intent-classifier';
 import type {SteeringEngine} from '@/steering/steering-engine';
 import {getTuneToolMode} from '@/types/config';
 import type {ImageAttachment, Message} from '@/types/core';
@@ -310,6 +312,11 @@ export function useChatHandler({
 		getSteeringVerbose,
 		getSteeringVerbose,
 	);
+	const steeringRulesRevision = React.useSyncExternalStore(
+		subscribeSteeringPrefs,
+		getSteeringRulesRevision,
+		getSteeringRulesRevision,
+	);
 	// InnerDaemon's configured model (null = inherit the session model, the
 	// default). A change notifies via subscribeSteeringPrefs; folding it into the
 	// engine memo below re-binds the executor with a fresh model resolver.
@@ -319,6 +326,7 @@ export function useChatHandler({
 		getInnerDaemonModel,
 	);
 	const steeringEngine = React.useMemo<SteeringEngine | null>(() => {
+		void steeringRulesRevision;
 		// Disabled → engine is never built or run (the loop treats null as "skip
 		// evaluation"): no InnerDaemon subagent calls, no blocks/nudges.
 		if (!steeringEnabledPref || !client || !toolManager) {
@@ -333,7 +341,13 @@ export function useChatHandler({
 		steeringEngineRef.current = engine;
 		innerdaemonBoundRef.current = false; // re-bind after recreation
 		return engine;
-	}, [steeringEnabledPref, currentModel, client, toolManager]);
+	}, [
+		steeringEnabledPref,
+		steeringRulesRevision,
+		currentModel,
+		client,
+		toolManager,
+	]);
 
 	// Lazy-bind the InnerDaemon executor the first time the engine is used. Kept
 	// out of the memo so we don't construct a SubagentExecutor on every render.
@@ -389,6 +403,9 @@ export function useChatHandler({
 	// conversation loop via the userTriggeredSkill param so steering rules keyed
 	// on `userTriggeredSkill` can fire.
 	const userTriggeredSkillRef = React.useRef<string | undefined>(undefined);
+	const userTaskKindRef = React.useRef<
+		ReturnType<typeof classifyUserTask> | undefined
+	>(undefined);
 
 	// State for streaming message content
 	const [streamingContent, setStreamingContent] = React.useState<string>('');
@@ -518,6 +535,7 @@ export function useChatHandler({
 					steeringVerbose: steeringVerbosePref,
 					turnFacts: [],
 					userTriggeredSkill: userTriggeredSkillRef.current,
+					userTaskKind: userTaskKindRef.current,
 				});
 			} catch (error) {
 				// The loop unwound exceptionally (Escape/interrupt or a mid-turn
@@ -610,6 +628,7 @@ export function useChatHandler({
 		// keyed on `userTriggeredSkill` can fire for this conversation loop.
 		const commandMatch = /^\s*\/([a-zA-Z0-9:_-]+)/.exec(message);
 		userTriggeredSkillRef.current = commandMatch ? commandMatch[1] : undefined;
+		userTaskKindRef.current = classifyUserTask(message);
 
 		// The submit chain hands us the display version (with [@file]
 		// placeholders) alongside the fully assembled message. Use it directly

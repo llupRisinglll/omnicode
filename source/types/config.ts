@@ -437,6 +437,8 @@ export interface UserPreferences {
 	reasoningExpanded?: boolean;
 	compactToolDisplay?: boolean;
 	enablePromptScrubbing?: boolean;
+	/** Whether semantic memory is active. Default true to preserve existing behavior. */
+	semanticMemoryEnabled?: boolean;
 	showWorkingIndicator?: boolean;
 	statusLine?: import('@/types/statusline').StatusLineConfig;
 	/**
@@ -450,6 +452,11 @@ export interface UserPreferences {
 	alternateScreen?: boolean;
 	/** Max diff lines shown in compact-mode file results. 0 = unlimited. Default 20. */
 	compactDiffMaxLines?: number;
+	/**
+	 * Developer mode switch. Enables mock/test features and development-mode
+	 * behavior. Off by default.
+	 */
+	developerMode?: boolean;
 	/**
 	 * Auto-steering (InnerDaemon) master switch. true (default): the steering
 	 * engine evaluates each turn and may nudge/block/stop. false: the engine is

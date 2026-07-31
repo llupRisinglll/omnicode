@@ -164,7 +164,7 @@ function GitDiffFormatter({
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<Text color={colors.tool}>⚒ git_diff</Text>
+			<Text color={colors.tool}>✦ git_diff</Text>
 
 			<Box>
 				<Text color={colors.secondary}>Comparing: </Text>

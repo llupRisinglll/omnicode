@@ -20,7 +20,11 @@ import {jsonSchema, tool} from '@/types/core';
  */
 export function executeBashCommand(
 	command: string,
-	options?: {timeoutMs?: number; signal?: AbortSignal},
+	options?: {
+		timeoutMs?: number;
+		signal?: AbortSignal;
+		background?: boolean;
+	},
 ): {
 	executionId: string;
 	promise: Promise<BashExecutionState>;
@@ -63,25 +67,34 @@ export function formatBashResultForLLM(result: BashExecutionState): string {
  * and this function serves as a fallback/compatibility layer
  */
 const executeExecuteBash = async (
-	args: {command: string},
+	args: {command: string; run_in_background?: boolean},
 	options?: {abortSignal?: AbortSignal},
 ): Promise<string> => {
-	const {promise} = bashExecutor.execute(args.command, {
-		signal: options?.abortSignal,
+	const {executionId, promise} = bashExecutor.execute(args.command, {
+		signal: args.run_in_background ? undefined : options?.abortSignal,
+		background: args.run_in_background,
 	});
+	if (args.run_in_background) {
+		return `Background command started with task ID ${executionId}. Use monitor with this task ID to read output, check status, or stop it.`;
+	}
 	const result = await promise;
 	return formatBashResultForLLM(result);
 };
 
 const executeBashCoreTool = tool({
 	description:
-		'Execute a bash command in the working directory. Returns stdout, stderr, and exit code. Commands time out after 2 minutes by default. Use for: running builds, tests, installing packages, git operations not covered by git tools, or any shell command.',
-	inputSchema: jsonSchema<{command: string}>({
+		'Execute a bash command in the working directory. Returns stdout, stderr, and exit code. Commands time out after 2 minutes by default. Set run_in_background=true for non-terminating commands such as dev servers, watchers, and log streams; use monitor afterward. Do not append shell & when using run_in_background.',
+	inputSchema: jsonSchema<{command: string; run_in_background?: boolean}>({
 		type: 'object',
 		properties: {
 			command: {
 				type: 'string',
 				description: 'The bash command to execute.',
+			},
+			run_in_background: {
+				type: 'boolean',
+				description:
+					'Run without waiting for exit. Required for dev servers, watch processes, and other intentionally long-running commands.',
 			},
 		},
 		required: ['command'],
@@ -136,6 +149,7 @@ const executeBashStreamingFormatter = (
 
 const executeBashValidator = (args: {
 	command: string;
+	run_in_background?: boolean;
 }): Promise<{valid: true} | {valid: false; error: string}> => {
 	const command = args.command?.trim();
 
@@ -144,6 +158,19 @@ const executeBashValidator = (args: {
 		return Promise.resolve({
 			valid: false,
 			error: 'Command cannot be empty',
+		});
+	}
+
+	const leadingSleep = command.match(/^sleep\s+(\d+)(?:\s*(?:&&|;)|\s*$)/);
+	if (
+		leadingSleep &&
+		Number.parseInt(leadingSleep[1], 10) >= 2 &&
+		!args.run_in_background
+	) {
+		return Promise.resolve({
+			valid: false,
+			error:
+				'Long foreground sleeps are blocked. Use monitor to inspect the running task, or set run_in_background=true for an intentional delay.',
 		});
 	}
 

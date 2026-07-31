@@ -341,6 +341,19 @@ test('execute_bash tool has formatter function', t => {
 	t.is(typeof executeBashTool.formatter, 'function');
 });
 
+test('execute_bash blocks long foreground sleeps and permits explicit background waits', async t => {
+	const blocked = await executeBashTool.validator!({
+		command: 'sleep 60 && echo done',
+	});
+	t.false(blocked.valid);
+
+	const background = await executeBashTool.validator!({
+		command: 'sleep 60 && echo done',
+		run_in_background: true,
+	});
+	t.true(background.valid);
+});
+
 // ============================================================================
 // Tests for execute_bash Tool Handler - Edge Cases
 // ============================================================================

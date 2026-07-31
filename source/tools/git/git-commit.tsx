@@ -202,7 +202,7 @@ function GitCommitFormatter({
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<Text color={colors.tool}>⚒ git_commit</Text>
+			<Text color={colors.tool}>✦ git_commit</Text>
 
 			{!result && stagedCount > 0 && (
 				<Box>
