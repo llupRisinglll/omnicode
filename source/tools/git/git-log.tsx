@@ -164,7 +164,7 @@ function GitLogFormatter({
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<Text color={colors.tool}>⚒ git_log</Text>
+			<Text color={colors.tool}>✦ git_log</Text>
 
 			{branch && (
 				<Box>

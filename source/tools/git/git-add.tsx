@@ -161,7 +161,7 @@ function GitAddFormatter({
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<Text color={colors.tool}>⚒ git_add</Text>
+			<Text color={colors.tool}>✦ git_add</Text>
 
 			<Box>
 				<Text color={colors.secondary}>Mode: </Text>

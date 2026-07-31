@@ -1,5 +1,5 @@
 import test from 'ava';
-import {stripMouseSequences} from './terminal-mouse.js';
+import {clickEvents, stripMouseSequences} from './terminal-mouse.js';
 
 test('passes plain text through untouched', t => {
 	const r = stripMouseSequences('hello world');
@@ -30,6 +30,35 @@ test('strips click press/release without emitting wheel', t => {
 	t.is(r.clean, 'typed');
 	t.deepEqual(r.wheel, []);
 	t.deepEqual(r.clicks, [{x: 3, y: 4}]);
+});
+
+test.serial('emits a zero-based click after a primary press and release', async t => {
+	const clicks: Array<{x: number; y: number}> = [];
+	const onClick = (click: {x: number; y: number}) => clicks.push(click);
+	clickEvents.on('click', onClick);
+	try {
+		stripMouseSequences('\x1b[<0;55;7M');
+		stripMouseSequences('\x1b[<0;55;7m');
+		await Promise.resolve();
+		t.deepEqual(clicks, [{x: 54, y: 6}]);
+	} finally {
+		clickEvents.off('click', onClick);
+	}
+});
+
+test.serial('does not emit a click after a primary drag', async t => {
+	const clicks: Array<{x: number; y: number}> = [];
+	const onClick = (click: {x: number; y: number}) => clicks.push(click);
+	clickEvents.on('click', onClick);
+	try {
+		stripMouseSequences('\x1b[<0;3;4M');
+		stripMouseSequences('\x1b[<32;8;4M');
+		stripMouseSequences('\x1b[<0;8;4m');
+		await Promise.resolve();
+		t.deepEqual(clicks, []);
+	} finally {
+		clickEvents.off('click', onClick);
+	}
 });
 
 test('modified primary click is reported with coordinates', t => {

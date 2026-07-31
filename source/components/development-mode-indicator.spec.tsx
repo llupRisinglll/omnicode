@@ -1,6 +1,7 @@
 import {render} from 'ink-testing-library';
 import test from 'ava';
 import React from 'react';
+import {bashExecutor} from '@/services/bash-executor';
 import {DevelopmentModeIndicator} from './development-mode-indicator';
 
 void React; // JSX runtime requires React in scope
@@ -19,6 +20,26 @@ const mockColors = {
 };
 
 const TUNE_DEFAULTS_LIKE = {enabled: true, aggressiveCompact: false} as const;
+
+test.serial('shows the live background process count', async t => {
+	const task = bashExecutor.execute('sleep 10', {background: true});
+	const {lastFrame, unmount} = render(
+		<DevelopmentModeIndicator
+			developmentMode="normal"
+			colors={mockColors}
+			contextPercentUsed={null}
+		/>,
+	);
+
+	await new Promise(resolve => setTimeout(resolve, 20));
+	t.regex(lastFrame()!, /bg: 1/);
+
+	bashExecutor.cancel(task.executionId);
+	await task.promise;
+	await new Promise(resolve => setTimeout(resolve, 20));
+	t.notRegex(lastFrame()!, /bg:/);
+	unmount();
+});
 
 // ============================================================================
 // Tune profile label

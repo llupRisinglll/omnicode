@@ -1,11 +1,13 @@
 import {Box, Text} from 'ink';
 import Spinner from 'ink-spinner';
-import {memo, useRef} from 'react';
+import {memo, useCallback, useEffect, useRef, useState} from 'react';
 import {AnimatedGear, ElapsedTimer} from '@/components/animated-gear-timer';
 import {setReasoningStartTime} from '@/components/assistant-reasoning';
 import {useNonInteractiveRender} from '@/hooks/useNonInteractiveRender';
 import {useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
+import {isScreenLineAt, isScreenTextBlockAt} from '@/utils/selection';
+import {clickEvents, pointerEvents} from '@/utils/terminal-mouse';
 import {wrapWithTrimmedContinuations} from '@/utils/text-wrapping';
 import {calculateTokens} from '@/utils/token-calculator';
 
@@ -52,28 +54,88 @@ export default memo(function StreamingReasoning({
 	// Omnicode: mirror AssistantReasoning's grey "stats line" treatment for the
 	// live header too, so collapsed → settled doesn't flash color/indent.
 	const isIconTheme = Boolean(colors.assistantIcon);
+	const [mouseExpansion, setMouseExpansion] = useState<{
+		base: boolean;
+		value: boolean;
+	} | null>(null);
+	const [mouseHovered, setMouseHovered] = useState(false);
+	const effectiveExpand =
+		mouseExpansion?.base === expand ? mouseExpansion.value : expand;
+	const footerText = `~${tokens.toLocaleString()} tokens · ${tokPerSec} tok/s`;
+	const isMouseTarget = useCallback(
+		(x: number, y: number) =>
+			effectiveExpand
+				? isScreenTextBlockAt(x, y, 'Thinking', footerText)
+				: isScreenLineAt(x, y, 'Thinking'),
+		[effectiveExpand, footerText],
+	);
+
+	useEffect(() => {
+		if (nonInteractive) return;
+		const onPointer = ({x, y}: {x: number; y: number}) => {
+			const hovered = isMouseTarget(x - 1, y - 1);
+			setMouseHovered(value => (value === hovered ? value : hovered));
+		};
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [isMouseTarget, nonInteractive]);
+
+	useEffect(() => {
+		if (nonInteractive) return;
+		const onClick = ({x, y}: {x: number; y: number}) => {
+			if (!isMouseTarget(x, y)) return;
+			setMouseExpansion(value => ({
+				base: expand,
+				value: !(value?.base === expand ? value.value : expand),
+			}));
+		};
+		clickEvents.on('click', onClick);
+		return () => {
+			clickEvents.off('click', onClick);
+		};
+	}, [expand, isMouseTarget, nonInteractive]);
+	const active = mouseHovered || effectiveExpand;
 
 	return (
-		<Box flexDirection="column" marginBottom={2}>
-			<Box paddingLeft={isIconTheme ? 2 : 0}>
-				<Text color={isIconTheme ? colors.secondary : colors.tool}>
+		<Box
+			flexDirection="column"
+			marginBottom={2}
+			width="100%"
+			backgroundColor={effectiveExpand ? colors.secondary : undefined}
+		>
+			<Box
+				paddingLeft={isIconTheme ? 2 : 0}
+				width="100%"
+				backgroundColor={active ? colors.secondary : undefined}
+			>
+				<Text
+					color={
+						active ? colors.text : isIconTheme ? colors.secondary : colors.tool
+					}
+					backgroundColor={active ? colors.secondary : undefined}
+				>
 					<AnimatedGear /> Thinking
 					<Spinner type="simpleDots" />
+					<ElapsedTimer startTime={effectiveStartTime} />
+					{nonInteractive
+						? null
+						: `  (ctrl+r to ${effectiveExpand ? 'collapse' : 'expand'})`}
 				</Text>
-				<ElapsedTimer startTime={effectiveStartTime} />
-				{expand ? (
-					<Text>
-						{'  '}~{tokens.toLocaleString()} tokens · {tokPerSec} tok/s
-					</Text>
-				) : nonInteractive ? null : (
-					<Text color={colors.secondary}>{'  '}(ctrl+r to expand)</Text>
-				)}
 			</Box>
-			{expand && (
+			{effectiveExpand && (
 				<Box flexDirection="column">
-					{truncated && <Text color={colors.secondary}>…</Text>}
-					<Text color={colors.secondary} italic>
+					{truncated && (
+						<Text color={colors.text} backgroundColor={colors.secondary}>
+							…
+						</Text>
+					)}
+					<Text color={colors.text} backgroundColor={colors.secondary} italic>
 						{displayText}
+					</Text>
+					<Text color={colors.text} backgroundColor={colors.secondary}>
+						{footerText}
 					</Text>
 				</Box>
 			)}

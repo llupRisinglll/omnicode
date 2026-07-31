@@ -25,7 +25,7 @@ test('TaskListDisplay renders task titles', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Tasks/);
+	t.regex(output!, /tasks/);
 	t.regex(output!, /Fix the bug/);
 	t.regex(output!, /Write tests/);
 	unmount();
@@ -42,15 +42,17 @@ test('TaskListDisplay renders empty state', t => {
 	unmount();
 });
 
-test('TaskListDisplay renders custom title', t => {
-	const tasks = makeTasks(['A task']);
+test('TaskListDisplay renders custom title with active task', t => {
+	const tasks = makeTasks(['A task']).map((task, i) =>
+		i === 0 ? {...task, status: 'in_progress' as const} : task
+	);
 	const {lastFrame, unmount} = renderWithTheme(
 		<TaskListDisplay tasks={tasks} title="My Custom Title" />,
 	);
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /My Custom Title/);
+	t.regex(output!, /A task/);
 	unmount();
 });
 

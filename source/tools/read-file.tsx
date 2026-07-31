@@ -264,7 +264,7 @@ const ReadFileFormatter = React.memo(
 
 		const messageContent = (
 			<Box flexDirection="column">
-				<Text color={colors.tool}>⚒ read_file</Text>
+				<Text color={colors.tool}>✦ read_file</Text>
 
 				<Box>
 					<Text color={colors.secondary}>Path: </Text>

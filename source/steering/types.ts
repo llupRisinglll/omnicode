@@ -46,6 +46,15 @@ export type IntentClass =
 	| 'verify'
 	| 'unknown';
 
+export type UserTaskKind =
+	| 'bug-reproduction'
+	| 'implementation'
+	| 'review'
+	| 'operations'
+	| 'documentation'
+	| 'question'
+	| 'unknown';
+
 /**
  * A flattened, serializable record of one conversation turn, accumulated by the
  * conversation loop and consumed by the detector. Pure data — cheap to thread
@@ -74,6 +83,8 @@ export interface TurnFact {
 	 * `condition.userTriggeredSkill`.
 	 */
 	userTriggeredSkill?: string;
+	/** Stable category derived from the original user request. */
+	userTaskKind?: UserTaskKind;
 }
 
 /**
@@ -102,6 +113,8 @@ export interface SteeringCondition {
 	intentClass?: IntentClass;
 	/** The user invoked this slash command / skill at loop start. */
 	userTriggeredSkill?: string;
+	/** Original user request must belong to this category. */
+	userTaskKind?: UserTaskKind;
 	/** A tool edited a path matching this glob (e.g. `'ui/**'`). */
 	pathMatches?: string;
 	/** Current working directory must match this glob. */
@@ -111,6 +124,8 @@ export interface SteeringCondition {
 	 * same object are AND-ed with the `anyOf` match.
 	 */
 	anyOf?: SteeringCondition[];
+	/** Negated recursive condition. */
+	not?: SteeringCondition;
 }
 
 /**
@@ -186,7 +201,7 @@ export interface SteeringRuleWatch {
  * Built-in observable success criteria. Each maps to a cheap, deterministic
  * check the detector can run at the turn boundary (no LLM, no heavy I/O).
  */
-export type SuccessCriterion =
+export type BuiltInSuccessCriterion =
 	| 'worktreeDirExists'
 	| 'portListenerExists'
 	| 'newTestFileExists'
@@ -196,6 +211,11 @@ export type SuccessCriterion =
 	 * error. Stays met through the subsequent fix phase.
 	 */
 	| 'uiDrivenOrAppRun'
+	/**
+	 * Loop-stateful reproduction gate: met only after the product was driven
+	 * and report_reproduction recorded concrete observed behavior or a blocker.
+	 */
+	| 'reproductionReported'
 	/**
 	 * Loop-stateful (over-exploration budget): met once ANY concrete artifact
 	 * has been produced in the task — a `write_file`/`string_replace`, a
@@ -211,6 +231,13 @@ export type SuccessCriterion =
 	 */
 	| 'implEditedBeforeTest'
 	| 'none';
+
+/**
+ * Built-ins plus deterministic project criteria such as `fileExists:<path>`,
+ * `fileContains:<path>::<text>`, `toolSucceeded:<tool>`,
+ * `resultContains:<text>`, and `gitChanged`.
+ */
+export type SuccessCriterion = BuiltInSuccessCriterion | (string & {});
 
 /** Whether a rule acts deterministically or delegates judgment to InnerDaemon. */
 export type SteeringMode = 'detector-only' | 'innerdaemon' | 'announce';
@@ -232,8 +259,15 @@ export interface SteeringRule {
 	 * `inject → stop`. Defaults to {@link DEFAULT_STEERING_MAX_FIRES}.
 	 */
 	maxFires?: number;
+	/**
+	 * What happens after maxFires. Defaults to `dormant`; `stop` is reserved for
+	 * explicit safety rules that must terminate the whole agent loop.
+	 */
+	onExhaustion?: 'dormant' | 'stop';
 	/** Don't re-fire for this many turns after firing. Defaults to constant. */
 	cooldownTurns?: number;
+	/** Higher-priority rules are evaluated first. Defaults to zero. */
+	priority?: number;
 	/** InnerDaemon domain context (the migrated dense prose). */
 	body?: string;
 	/**

@@ -53,10 +53,14 @@ export default memo(function ChatQueue({
 
 	// Fullscreen path: no Static — render a bounded tail in regular flow so
 	// the bottom-anchored viewport in ChatHistory can clip it at the top.
+	// Include ALL queued components (not just staticQueuedComponents) so the
+	// last component scrolls normally instead of being fixed in the live area.
 	const flowComponents = useMemo(() => {
 		if (!disableStatic) return [];
-		return allStaticComponents.slice(-FULLSCREEN_TAIL_CAP);
-	}, [disableStatic, allStaticComponents]);
+		return [...staticComponents, ...queuedComponents].slice(
+			-FULLSCREEN_TAIL_CAP,
+		);
+	}, [disableStatic, staticComponents, queuedComponents]);
 
 	if (disableStatic) {
 		// Fullscreen (alt-screen): this transcript renders inside the scroll
@@ -64,6 +68,8 @@ export default memo(function ChatQueue({
 		// negative margin — that would push content one column left of the
 		// viewport's clip window and Ink would slice off the first character of
 		// every line. Keep it in normal flow at the padded column.
+		// All components (including the last queued one) render in flow so
+		// they all scroll — liveQueuedComponents is not rendered separately.
 		return (
 			<Box flexDirection="column">
 				{flowComponents.map((component, index) => (
@@ -71,17 +77,6 @@ export default memo(function ChatQueue({
 						{component}
 					</RenderErrorBoundary>
 				))}
-				{liveQueuedComponents.length > 0 && (
-					<Box flexDirection="column">
-						{liveQueuedComponents.map((component, index) => (
-							<RenderErrorBoundary
-								key={componentKey(component, `live-${index}`)}
-							>
-								{component}
-							</RenderErrorBoundary>
-						))}
-					</Box>
-				)}
 			</Box>
 		);
 	}

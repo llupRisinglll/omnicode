@@ -31,6 +31,7 @@ Preferences follow the same location hierarchy as configuration files:
 | `trustedDirectories` | Directories you've approved through the first-run security disclaimer |
 | `lastUpdateCheck` | Timestamp of the last update check (used to avoid checking too frequently) |
 | `alternateScreen` | When `true`, starts in fullscreen mode (alternate screen buffer with in-app scrolling) by default. The `--alt-screen`/`--no-alt-screen` CLI flags override this for a single run. See [CLI Options](../getting-started/index.md#cli-options). |
+| `semanticMemoryEnabled` | Enables semantic memory across sessions. Set to `false` or use `/settings` → **Advanced** → **Semantic Memory** to keep agents stateless. |
 
 ### Paste Configuration
 

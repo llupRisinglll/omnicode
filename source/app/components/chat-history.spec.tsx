@@ -1,4 +1,5 @@
 import test from 'ava';
+import {Box, Text} from 'ink';
 import React from 'react';
 import {wheelEvents} from '@/utils/terminal-mouse';
 import {renderWithTheme} from '../../test-utils/render-with-theme';
@@ -173,6 +174,31 @@ test('mouse wheel ticks do not throw when active in fullscreen mode', async t =>
 		wheelEvents.emit('wheel', 'down');
 	});
 	await tick();
+	unmount();
+});
+
+test('mouse wheel scrolls an overflowing fullscreen transcript', async t => {
+	const props = createDefaultProps({
+		fullscreen: true,
+		scrollActive: true,
+		queuedComponents: Array.from({length: 60}, (_, index) => (
+			<Text key={index}>{`overflow-row-${index}`}</Text>
+		)),
+	});
+	const {lastFrame, unmount} = renderWithTheme(
+		<Box height={10} flexDirection="column">
+			<ChatHistory {...props} />
+		</Box>,
+	);
+	const before = lastFrame() ?? '';
+	for (let index = 0; index < 20; index++) {
+		wheelEvents.emit('wheel', 'up');
+	}
+	await tick();
+	const after = lastFrame() ?? '';
+	t.not(before, after);
+	t.regex(after, /↑ 51 rows/);
+	t.regex(after, /overflow-row-0/);
 	unmount();
 });
 

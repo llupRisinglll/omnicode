@@ -75,6 +75,7 @@ function parseCondition(raw: unknown): SteeringCondition | undefined {
 	if (o.intentClass) cond.intentClass = asString(o.intentClass) as never;
 	if (o.userTriggeredSkill)
 		cond.userTriggeredSkill = asString(o.userTriggeredSkill);
+	if (o.userTaskKind) cond.userTaskKind = asString(o.userTaskKind) as never;
 	if (o.pathMatches) cond.pathMatches = asString(o.pathMatches);
 	if (o.cwdIn) {
 		const arr = asStringArray(o.cwdIn);
@@ -85,6 +86,7 @@ function parseCondition(raw: unknown): SteeringCondition | undefined {
 			.map(sub => parseCondition(sub))
 			.filter((c): c is SteeringCondition => c !== undefined);
 	}
+	if (o.not) cond.not = parseCondition(o.not);
 	return Object.keys(cond).length > 0 ? cond : undefined;
 }
 
@@ -224,8 +226,11 @@ export function parseSteeringRule(filePath: string): SteeringRule | undefined {
 	};
 	if (injectSkill) rule.injectSkill = injectSkill;
 	if (meta.maxFires !== undefined) rule.maxFires = asNumber(meta.maxFires, 0);
+	if (meta.onExhaustion === 'dormant' || meta.onExhaustion === 'stop')
+		rule.onExhaustion = meta.onExhaustion;
 	if (meta.cooldownTurns !== undefined)
 		rule.cooldownTurns = asNumber(meta.cooldownTurns, 0);
+	if (meta.priority !== undefined) rule.priority = asNumber(meta.priority, 0);
 	return rule;
 }
 

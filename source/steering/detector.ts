@@ -49,7 +49,11 @@ export function modelMatchesGlob(modelId: string, glob: string): boolean {
 
 /** True if `modelId` matches any glob in the list. */
 export function modelMatchesAny(modelId: string, globs: string[]): boolean {
-	return globs.some(g => modelMatchesGlob(modelId, g));
+	const normalized = modelId.trim().toLowerCase();
+	const tail = normalized.split('/').pop() ?? normalized;
+	return [normalized, tail].some(candidate =>
+		globs.some(g => modelMatchesGlob(candidate, g.toLowerCase())),
+	);
 }
 
 /**
@@ -106,6 +110,9 @@ export function conditionMatches(
 	) {
 		return false;
 	}
+	if (condition.userTaskKind && fact.userTaskKind !== condition.userTaskKind) {
+		return false;
+	}
 	if (condition.cwdIn && fact.cwd) {
 		if (!modelMatchesAny(fact.cwd, condition.cwdIn)) return false;
 	} else if (condition.cwdIn && !fact.cwd) {
@@ -124,6 +131,9 @@ export function conditionMatches(
 		if (!condition.anyOf.some(sub => conditionMatches(sub, modelId, fact))) {
 			return false;
 		}
+	}
+	if (condition.not && conditionMatches(condition.not, modelId, fact)) {
+		return false;
 	}
 	return true;
 }
@@ -278,7 +288,9 @@ export function evaluateRules(
 		});
 	}
 
-	return candidates;
+	return candidates.sort(
+		(a, b) => (b.rule.priority ?? 0) - (a.rule.priority ?? 0),
+	);
 }
 
 /**
@@ -441,6 +453,7 @@ export function detectConstraintViolations(
 	facts: TurnFact[],
 	rules: SteeringRule[],
 	modelId: string,
+	afterRuleId?: string,
 ): {
 	rule: SteeringRule;
 	constraint: SteeringToolConstraint;
@@ -466,6 +479,24 @@ export function detectConstraintViolations(
 		}
 	}
 	if (constraints.length === 0) return null;
+	constraints.sort((a, b) => (b.rule.priority ?? 0) - (a.rule.priority ?? 0));
+	const previous = constraints.findIndex(item => item.rule.id === afterRuleId);
+	if (previous >= 0) {
+		const priority = constraints[previous].rule.priority ?? 0;
+		const group = constraints.filter(
+			item => (item.rule.priority ?? 0) === priority,
+		);
+		const groupPrevious = group.findIndex(item => item.rule.id === afterRuleId);
+		const rotated = [
+			...group.slice(groupPrevious + 1),
+			...group.slice(0, groupPrevious + 1),
+		];
+		constraints.splice(
+			constraints.findIndex(item => (item.rule.priority ?? 0) === priority),
+			group.length,
+			...rotated,
+		);
+	}
 
 	for (const tc of latest.toolCalls) {
 		for (const {rule, c} of constraints) {

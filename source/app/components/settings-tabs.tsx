@@ -1,11 +1,8 @@
-import {existsSync} from 'node:fs';
 import chalk from 'chalk';
 import {Box, Text, useInput} from 'ink';
 import type {ReactElement} from 'react';
 import {useEffect, useMemo, useRef, useState} from 'react';
-import TextInput from '@/components/text-input';
 import {StyledTitle} from '@/components/ui/styled-title';
-import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
 import {getAppConfig, loadDefaultMode, reloadAppConfig} from '@/config/index';
 import {
 	getAlternateScreen,
@@ -15,22 +12,20 @@ import {
 	getPasteThreshold,
 	getPrivacyPreference,
 	getReasoningExpanded,
+	getSemanticMemoryEnabled,
 	getSteeringEnabled,
 	getSteeringVerbose,
-	getSubagentModelPreference,
 	loadPreferences,
 	updateAlternateScreen,
+	updateSemanticMemoryEnabled,
 	updateSteeringEnabled,
 	updateSteeringVerbose,
 } from '@/config/preferences';
-import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
+import {useResponsiveTerminal, useTerminalRows} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
-import {
-	buildAgentMarkdown,
-	sanitizeAgentFileName,
-	writeProjectAgentDefinition,
-} from '@/subagents/agent-file';
+import {SteeringRuleLoader} from '@/steering/loader';
+import type {SteeringRule} from '@/steering/types';
 import {getSubagentLoader} from '@/subagents/subagent-loader';
 import type {SubagentConfigWithSource} from '@/subagents/types';
 import type {SettingsTabId} from '@/types/settings';
@@ -39,15 +34,14 @@ import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
 import {SettingsAutoCompactPanel} from './settings-auto-compact';
 import {SettingsDefaultModePanel} from './settings-default-mode';
 import {SettingsEnvironmentPanel} from './settings-environment';
+import {SettingsInnerDaemonListPanel} from './settings-innerdaemon-list';
 import {SettingsJsonConfigPanel} from './settings-json-config';
 import {SettingsMcpListPanel} from './settings-mcp-list';
 import {SettingsProvidersListPanel} from './settings-providers-list';
 import {SettingsReasoningTracesPanel} from './settings-reasoning-traces';
-import type {
-	ManagedSettingsPanel,
-	SettingsSelectorProps,
-} from './settings-selector';
+import type {SettingsSelectorProps} from './settings-selector';
 import {
+	SettingsDeveloperModePanel,
 	SettingsDisplayPanel,
 	SettingsInnerDaemonModelPanel,
 	SettingsNanocoderShapePanel,
@@ -55,7 +49,12 @@ import {
 	SettingsPasteThresholdPanel,
 	SettingsPrivacyPanel,
 	SettingsStatusLinePanel,
+	SettingsSubagentCreatePanel,
+	SettingsSubagentDescriptionPanel,
+	SettingsSubagentEditPanel,
+	SettingsSubagentListPanel,
 	SettingsSubagentModelPanel,
+	SettingsSubagentToolsPanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
 } from './settings-selector';
@@ -72,32 +71,40 @@ const TABS: TabDefinition[] = [
 	{id: 'appearance', label: 'Appearance'},
 	{id: 'input', label: 'Input'},
 	{id: 'behavior', label: 'Behavior'},
-	{id: 'agents', label: 'Agents'},
+	{id: 'agents', label: 'Capabilities'},
 	{id: 'providers', label: 'Providers'},
 	{id: 'advanced', label: 'Advanced'},
 ];
 
 type SettingRow =
 	| {
+			kind: 'header';
+			id: string;
+			label: string;
+	  }
+	| {
 			kind: 'boolean';
 			id: string;
 			label: string;
 			value: boolean;
 			onToggle: () => void;
+			indent?: boolean;
 	  }
 	| {
 			kind: 'number';
 			id: string;
 			label: string;
 			value: number;
-			panel: ManagedSettingsPanel;
+			panel: string;
+			indent?: boolean;
 	  }
 	| {
 			kind: 'managed';
 			id: string;
 			label: string;
 			value: string;
-			panel: ManagedSettingsPanel;
+			panel: string;
+			indent?: boolean;
 	  }
 	| {
 			// Launches an app-level flow (e.g. the tune / IDE wizards) rather than
@@ -107,9 +114,9 @@ type SettingRow =
 			label: string;
 			value: string;
 			onAction: () => void;
+			indent?: boolean;
 	  };
 
-const MAX_VISIBLE_ROWS = 4;
 const SEARCH_PLACEHOLDER = 'Search settings…';
 
 interface RowActions {
@@ -122,6 +129,8 @@ function buildRowsForTab(
 	currentTheme: string,
 	currentTitleShape: string,
 	actions: RowActions = {},
+	agents: SubagentConfigWithSource[] = [],
+	innerDaemonRules: SteeringRule[] = [],
 ): SettingRow[] {
 	switch (tabId) {
 		case 'appearance': {
@@ -160,7 +169,17 @@ function buildRowsForTab(
 					id: 'alternate-screen',
 					label: 'Alternate Screen',
 					value: getAlternateScreen(),
-					onToggle: () => updateAlternateScreen(!getAlternateScreen()),
+					onToggle: () => {
+						const newValue = !getAlternateScreen();
+						updateAlternateScreen(newValue);
+						if (process.stdout.isTTY) {
+							if (newValue) {
+								process.stdout.write('\x1B[?1049h');
+							} else {
+								process.stdout.write('\x1B[?1049l');
+							}
+						}
+					},
 				},
 			];
 		}
@@ -224,14 +243,17 @@ function buildRowsForTab(
 					panel: 'sessions',
 				},
 			];
-		case 'agents':
-			return [
+		case 'agents': {
+			const agentRows: SettingRow[] = [
 				{
 					kind: 'managed',
-					id: 'explore-model',
-					label: 'explore Model',
-					value: formatSubagentModelValue('explore'),
-					panel: 'subagent-model-explore',
+					id: 'subagent-list',
+					label: 'Subagents',
+					value: (() => {
+						const count = agents.filter(a => a.name !== 'innerdaemon').length;
+						return count === 1 ? '1 agent' : `${count} agents`;
+					})(),
+					panel: 'subagent-list',
 				},
 				{
 					kind: 'boolean',
@@ -240,21 +262,38 @@ function buildRowsForTab(
 					value: getSteeringEnabled(),
 					onToggle: () => updateSteeringEnabled(!getSteeringEnabled()),
 				},
-				{
-					kind: 'managed',
-					id: 'innerdaemon-model',
-					label: 'innerdaemon Model',
-					value: formatSubagentModelValue('innerdaemon'),
-					panel: 'subagent-model-innerdaemon',
-				},
-				{
-					kind: 'boolean',
-					id: 'innerdaemon-verbose',
-					label: 'InnerDaemon Verbose',
-					value: getSteeringVerbose(),
-					onToggle: () => updateSteeringVerbose(!getSteeringVerbose()),
-				},
+				// Child rows: indented and hidden when InnerDaemon is off
+				...(getSteeringEnabled()
+					? [
+							{
+								kind: 'managed',
+								id: 'innerdaemon-model',
+								label: 'Model',
+								value: getInnerDaemonModel() ?? 'default (main agent)',
+								panel: 'innerdaemon-model',
+								indent: true,
+							} as SettingRow,
+							{
+								kind: 'boolean',
+								id: 'innerdaemon-verbose',
+								label: 'Verbose Logging',
+								value: getSteeringVerbose(),
+								onToggle: () => updateSteeringVerbose(!getSteeringVerbose()),
+								indent: true,
+							} as SettingRow,
+							{
+								kind: 'managed',
+								id: 'innerdaemon-list',
+								label: 'InnerDaemons',
+								value: `${innerDaemonRules.length} loaded`,
+								panel: 'innerdaemon-list',
+								indent: true,
+							} as SettingRow,
+						]
+					: []),
 			];
+			return agentRows;
+		}
 		case 'providers':
 			return [
 				{
@@ -299,6 +338,21 @@ function buildRowsForTab(
 				},
 				{
 					kind: 'managed',
+					id: 'developer-mode',
+					label: 'Developer Mode',
+					value: '',
+					panel: 'developer-mode',
+				},
+				{
+					kind: 'boolean',
+					id: 'semantic-memory',
+					label: 'Semantic Memory',
+					value: getSemanticMemoryEnabled(),
+					onToggle: () =>
+						updateSemanticMemoryEnabled(!getSemanticMemoryEnabled()),
+				},
+				{
+					kind: 'managed',
 					id: 'json-config',
 					label: 'Edit Config Files',
 					value: 'agents.config.json',
@@ -333,18 +387,6 @@ function buildRowsForTab(
 			return rows;
 		}
 	}
-}
-
-function formatSubagentModelValue(agentName: string): string {
-	const preference = getSubagentModelPreference(agentName);
-	if (preference) {
-		return `${preference.provider} / ${preference.model}`;
-	}
-	if (agentName === 'innerdaemon') {
-		const legacyModel = getInnerDaemonModel();
-		if (legacyModel) return `${legacyModel} (current provider)`;
-	}
-	return 'inherit';
 }
 
 /**
@@ -384,6 +426,8 @@ function useTabRows(
 	tabId: SettingsTabId,
 	version: number,
 	actions: RowActions,
+	agents: SubagentConfigWithSource[],
+	innerDaemonRules: SteeringRule[],
 ): SettingRow[] {
 	const {currentTheme} = useTheme();
 	const {currentTitleShape} = useTitleShape();
@@ -396,8 +440,10 @@ function useTabRows(
 				currentTheme,
 				currentTitleShape ?? 'pill',
 				actions,
+				agents,
+				innerDaemonRules,
 			),
-		[version, tabId, currentTheme, currentTitleShape],
+		[version, tabId, currentTheme, currentTitleShape, agents, innerDaemonRules],
 	);
 }
 
@@ -413,15 +459,38 @@ function SettingRowLine({
 	isNarrow: boolean;
 }) {
 	const {colors} = useTheme();
+
+	if (row.kind === 'header') {
+		return (
+			<Box flexDirection="column" marginTop={1}>
+				{/* Subtle section separator line */}
+				<Box marginBottom={0}>
+					<Text color={colors.secondary} dimColor>
+						{'\u2500\u2500\u2500'}
+					</Text>
+				</Box>
+				<Box flexDirection="row">
+					<Text color={colors.secondary} bold dimColor>
+						{row.label}
+					</Text>
+				</Box>
+			</Box>
+		);
+	}
+
 	const valueText =
 		row.kind === 'boolean' ? (row.value ? 'true' : 'false') : String(row.value);
 	const rowColor = selected ? colors.info : colors.text;
 
+	const isIndented = 'indent' in row && row.indent === true;
 	return (
 		<Box flexDirection="row">
-			<Text color={rowColor}>{selected ? '> ' : '  '}</Text>
+			<Box minWidth={2}>
+				<Text color={rowColor}>{selected ? '❯' : ' '}</Text>
+			</Box>
 			<Box width={labelWidth}>
 				<Text color={rowColor} wrap={isNarrow ? 'truncate' : undefined}>
+					{isIndented ? '  ' : ''}
 					{row.label}
 				</Text>
 			</Box>
@@ -433,10 +502,87 @@ function SettingRowLine({
 }
 
 function renderManagedPanel(
-	panel: ManagedSettingsPanel,
+	panel: string,
 	onBack: () => void,
 	onMcpChanged?: () => void | Promise<void>,
+	agentName?: string,
+	onAgentChanged?: (preferredName?: string) => Promise<void>,
+	toolNames?: string[],
+	onOpenPanel?: (panel: string) => void,
+	currentSessionId?: string,
+	messageCount?: number,
+	onActivateDeveloperMode?: () => void,
+	innerDaemonRules: SteeringRule[] = [],
 ): ReactElement {
+	// Handle subagent list panel (collapsed subagent listing)
+	if (panel === 'subagent-list') {
+		return (
+			<SettingsSubagentListPanel
+				onBack={onBack}
+				onCancel={onBack}
+				onOpenPanel={onOpenPanel ?? (() => {})}
+				onAgentChanged={onAgentChanged}
+			/>
+		);
+	}
+
+	// Handle dynamic subagent-edit panels
+	if (panel.startsWith('subagent-edit:')) {
+		return (
+			<SettingsSubagentEditPanel
+				agentName={agentName ?? ''}
+				onBack={onBack}
+				onCancel={() => onOpenPanel?.('subagent-list')}
+				onOpenPanel={onOpenPanel ?? (() => {})}
+			/>
+		);
+	}
+
+	// Handle subagent model panel (routed from edit panel menu)
+	if (panel.startsWith('subagent-model:') && agentName) {
+		// ESC goes back to the edit panel, not the list
+		const goToEdit = () => {
+			if (onOpenPanel) onOpenPanel(`subagent-edit:${agentName}`);
+			else onBack();
+		};
+		return (
+			<SettingsSubagentModelPanel
+				agentName={agentName}
+				onBack={onBack}
+				onCancel={goToEdit}
+			/>
+		);
+	}
+	// Handle subagent tools panel
+	if (panel.startsWith('subagent-tools:') && agentName) {
+		const goToEdit = () => {
+			if (onOpenPanel) onOpenPanel(`subagent-edit:${agentName}`);
+			else onBack();
+		};
+		return (
+			<SettingsSubagentToolsPanel
+				agentName={agentName}
+				toolNames={toolNames}
+				onBack={onBack}
+				onCancel={goToEdit}
+			/>
+		);
+	}
+	// Handle subagent description panel
+	if (panel.startsWith('subagent-description:') && agentName) {
+		const goToEdit = () => {
+			if (onOpenPanel) onOpenPanel(`subagent-edit:${agentName}`);
+			else onBack();
+		};
+		return (
+			<SettingsSubagentDescriptionPanel
+				agentName={agentName}
+				onBack={onBack}
+				onCancel={goToEdit}
+			/>
+		);
+	}
+
 	switch (panel) {
 		case 'theme':
 			return <SettingsThemePanel onBack={onBack} onCancel={onBack} />;
@@ -474,6 +620,14 @@ function renderManagedPanel(
 			return (
 				<SettingsInnerDaemonModelPanel onBack={onBack} onCancel={onBack} />
 			);
+		case 'innerdaemon-list':
+			return (
+				<SettingsInnerDaemonListPanel
+					rules={innerDaemonRules}
+					onBack={onBack}
+					onCancel={onBack}
+				/>
+			);
 		case 'json-config':
 			return <SettingsJsonConfigPanel onBack={onBack} onCancel={onBack} />;
 		case 'web-search':
@@ -500,6 +654,26 @@ function renderManagedPanel(
 					onMcpChanged={onMcpChanged}
 				/>
 			);
+		case 'developer-mode':
+			return (
+				<SettingsDeveloperModePanel
+					onBack={onBack}
+					onCancel={onBack}
+					onActivateDeveloperMode={onActivateDeveloperMode}
+					currentSessionId={currentSessionId}
+					messageCount={messageCount}
+				/>
+			);
+		case 'subagent-create':
+			return (
+				<SettingsSubagentCreatePanel
+					onBack={onBack}
+					onCancel={onBack}
+					onCreated={onAgentChanged}
+				/>
+			);
+		default:
+			return <Text>Unknown panel: {panel}</Text>;
 	}
 }
 
@@ -515,416 +689,6 @@ function renderManagedPanel(
 // ---------------------------------------------------------------------------
 
 type TabFocus = 'header' | 'search' | 'list';
-
-type AgentManagerMode = 'list' | 'model' | 'tools' | 'description' | 'create';
-
-function truncateText(value: string, width: number): string {
-	if (value.length <= width) return value;
-	if (width <= 1) return '…';
-	return `${value.slice(0, Math.max(0, width - 1))}…`;
-}
-
-function sourceLabel(agent: SubagentConfigWithSource): string {
-	if (agent.source.isBuiltIn) return 'built-in';
-	if (agent.source.priority === 2) return 'project';
-	if (agent.ownerSkill) return `skill:${agent.ownerSkill}`;
-	return 'user';
-}
-
-function formatAgentModel(agent: SubagentConfigWithSource): string {
-	const preference = getSubagentModelPreference(agent.name);
-	if (preference) return `${preference.provider} / ${preference.model}`;
-	if (agent.provider && agent.model && agent.model !== 'inherit') {
-		return `${agent.provider} / ${agent.model}`;
-	}
-	if (agent.model && agent.model !== 'inherit') return agent.model;
-	return 'inherit';
-}
-
-function defaultAgentPrompt(name: string): string {
-	return `You are ${name}, a custom Nanocoder subagent. Complete the delegated task using the tools you are allowed to use, then report the result concisely with any relevant files, commands, or blockers.`;
-}
-
-function makeEditableAgent(
-	agent: SubagentConfigWithSource,
-): Parameters<typeof buildAgentMarkdown>[0] {
-	return {
-		name: agent.name,
-		title: agent.title,
-		description: agent.description,
-		provider: agent.provider,
-		model: agent.model ?? 'inherit',
-		contextWindow: agent.contextWindow,
-		tools: agent.tools,
-		disallowedTools: agent.disallowedTools,
-		internal: agent.internal,
-		systemPrompt: agent.systemPrompt,
-	};
-}
-
-function SettingsAgentsPanel({
-	onCancel,
-	onOpenTab,
-	toolNames,
-	onChanged,
-}: {
-	onCancel: () => void;
-	onOpenTab: (tab: SettingsTabId) => void;
-	toolNames: string[];
-	onChanged: () => void;
-}) {
-	const {colors} = useTheme();
-	const {boxWidth, isNarrow} = useResponsiveTerminal();
-	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
-	const [selectedIndex, setSelectedIndex] = useState(0);
-	const [toolIndex, setToolIndex] = useState(0);
-	const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-	const [mode, setMode] = useState<AgentManagerMode>('list');
-	const [editValue, setEditValue] = useState('');
-	const [notice, setNotice] = useState<string | null>(null);
-
-	const reloadAgents = async (preferredName?: string) => {
-		const loader = getSubagentLoader();
-		await loader.reload();
-		const loaded = await loader.listSubagents();
-		setAgents(loaded);
-		if (preferredName) {
-			const index = loaded.findIndex(agent => agent.name === preferredName);
-			if (index >= 0) setSelectedIndex(index);
-		}
-		onChanged();
-	};
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: load the manager's agent list once when the tab mounts; mutations call reloadAgents explicitly.
-	useEffect(() => {
-		void reloadAgents();
-	}, []);
-
-	const current =
-		agents[Math.min(selectedIndex, Math.max(0, agents.length - 1))];
-	const visibleTools =
-		toolNames.length > 0
-			? toolNames
-			: [
-					'read_file',
-					'search_file_contents',
-					'find_files',
-					'list_directory',
-					'execute_bash',
-					'write_file',
-					'string_replace',
-					'diff_edit',
-				];
-	const configurableToolNames = visibleTools.filter(
-		tool => !current?.disallowedTools?.includes(tool),
-	);
-	const toolWindowStart = Math.max(0, toolIndex - 3);
-	const toolWindow = configurableToolNames.slice(
-		toolWindowStart,
-		toolWindowStart + 7,
-	);
-
-	const saveAgent = async (
-		agent: SubagentConfigWithSource,
-		overrides: Parameters<typeof buildAgentMarkdown>[1],
-		message: string,
-	) => {
-		writeProjectAgentDefinition(
-			process.cwd(),
-			makeEditableAgent(agent),
-			overrides,
-		);
-		setNotice(message);
-		await reloadAgents(agent.name);
-	};
-
-	const createAgent = async (rawName: string) => {
-		const safeName = sanitizeAgentFileName(rawName);
-		if (!safeName) {
-			setNotice('Agent name must include letters, numbers, _ or -');
-			return;
-		}
-		const filePath = `${process.cwd()}/.nanocoder/agents/${safeName}.md`;
-		if (existsSync(filePath)) {
-			setNotice(`${safeName} already exists`);
-			return;
-		}
-		writeProjectAgentDefinition(process.cwd(), {
-			name: safeName,
-			title: rawName.trim() || safeName,
-			description:
-				'Custom subagent. Edit this description to teach Nanocoder when to delegate here.',
-			model: 'inherit',
-			tools: [
-				'read_file',
-				'search_file_contents',
-				'find_files',
-				'list_directory',
-			],
-			systemPrompt: defaultAgentPrompt(safeName),
-		});
-		setMode('list');
-		setNotice(`Created .nanocoder/agents/${safeName}.md`);
-		await reloadAgents(safeName);
-	};
-
-	useInput((input, key) => {
-		if (mode === 'model') return;
-		if (key.escape) {
-			if (mode === 'list') onCancel();
-			else setMode('list');
-			return;
-		}
-		if (mode === 'description' || mode === 'create') return;
-		if (mode === 'tools') {
-			if (!current) return;
-			if (key.shift && key.tab) {
-				setMode('list');
-				return;
-			}
-			if (key.upArrow) setToolIndex(prev => Math.max(0, prev - 1));
-			if (key.downArrow) {
-				setToolIndex(prev =>
-					Math.max(0, Math.min(configurableToolNames.length - 1, prev + 1)),
-				);
-			}
-			if (key.return || input === ' ') {
-				const tool = configurableToolNames[toolIndex];
-				if (!tool) return;
-				setSelectedTools(prev => {
-					const next = new Set(prev);
-					if (next.has(tool)) next.delete(tool);
-					else next.add(tool);
-					return next;
-				});
-			}
-			if (input === 'a') {
-				setSelectedTools(new Set(configurableToolNames));
-			}
-			if (input === 'c') {
-				setSelectedTools(new Set());
-			}
-			if (input === 's') {
-				void saveAgent(
-					current,
-					{tools: Array.from(selectedTools).sort()},
-					`Saved tools for ${current.name}`,
-				).then(() => setMode('list'));
-			}
-			return;
-		}
-		if (key.leftArrow) onOpenTab('behavior');
-		if (key.rightArrow) onOpenTab('providers');
-		if (key.upArrow) setSelectedIndex(prev => Math.max(0, prev - 1));
-		if (key.downArrow) {
-			setSelectedIndex(prev => Math.min(agents.length - 1, prev + 1));
-		}
-		if (!current) return;
-		if (input === 'm') setMode('model');
-		if (input === 't') {
-			setSelectedTools(new Set(current.tools ?? configurableToolNames));
-			setToolIndex(0);
-			setMode('tools');
-		}
-		if (input === 'd') {
-			setEditValue(current.description);
-			setMode('description');
-		}
-		if (input === 'n') {
-			setEditValue('');
-			setMode('create');
-		}
-		if (input === 'r') void reloadAgents(current.name);
-	});
-
-	if (mode === 'model' && current) {
-		return (
-			<SettingsSubagentModelPanel
-				agentName={current.name}
-				onBack={() => {
-					setMode('list');
-					setNotice(`Saved model for ${current.name}`);
-					void reloadAgents(current.name);
-				}}
-				onCancel={() => setMode('list')}
-			/>
-		);
-	}
-
-	if (mode === 'description' && current) {
-		return (
-			<TitledBoxWithPreferences
-				title={`${current.title ?? current.name} Description`}
-				width={isNarrow ? '100%' : boxWidth}
-				borderColor={colors.primary}
-				paddingX={2}
-				paddingY={1}
-				flexDirection="column"
-				marginBottom={1}
-			>
-				<Text color={colors.secondary}>Enter save · Esc cancel</Text>
-				<Box marginTop={1}>
-					<TextInput
-						value={editValue}
-						onChange={setEditValue}
-						onSubmit={value => {
-							void saveAgent(
-								current,
-								{description: value.trim() || current.description},
-								`Saved description for ${current.name}`,
-							).then(() => setMode('list'));
-						}}
-						placeholder="When should Nanocoder delegate to this agent?"
-						wrapWidth={Math.max(20, boxWidth - 8)}
-					/>
-				</Box>
-			</TitledBoxWithPreferences>
-		);
-	}
-
-	if (mode === 'create') {
-		return (
-			<TitledBoxWithPreferences
-				title="Create Agent"
-				width={isNarrow ? '100%' : boxWidth}
-				borderColor={colors.primary}
-				paddingX={2}
-				paddingY={1}
-				flexDirection="column"
-				marginBottom={1}
-			>
-				<Text color={colors.secondary}>Enter create · Esc cancel</Text>
-				<Box marginTop={1}>
-					<TextInput
-						value={editValue}
-						onChange={setEditValue}
-						onSubmit={value => void createAgent(value)}
-						placeholder="agent-name"
-					/>
-				</Box>
-				{notice && <Text color={colors.warning}>{notice}</Text>}
-			</TitledBoxWithPreferences>
-		);
-	}
-
-	const selected = current;
-	const toolsSummary = selected?.tools?.length
-		? selected.tools.join(', ')
-		: 'all available tools';
-	const agentWindowStart = Math.max(
-		0,
-		Math.min(selectedIndex - 3, agents.length - 8),
-	);
-	const displayAgents = agents.slice(agentWindowStart, agentWindowStart + 8);
-
-	return (
-		<TitledBoxWithPreferences
-			title="Agents"
-			width={isNarrow ? '100%' : boxWidth}
-			borderColor={colors.primary}
-			paddingX={2}
-			paddingY={1}
-			flexDirection="column"
-			marginBottom={1}
-		>
-			<Box marginBottom={1}>
-				<Text color={colors.secondary}>
-					↑↓ select · m model · t tools · d description · n new · r reload · ← →
-					tabs · Esc close
-				</Text>
-			</Box>
-			{agents.length === 0 ? (
-				<Text color={colors.secondary}>No agents found.</Text>
-			) : (
-				<Box flexDirection="column">
-					{agentWindowStart > 0 && (
-						<Text color={colors.secondary}>… {agentWindowStart} above</Text>
-					)}
-					{displayAgents.map((agent, index) => {
-						const absoluteIndex = agentWindowStart + index;
-						const selectedRow = absoluteIndex === selectedIndex;
-						return (
-							<Text
-								key={agent.name}
-								color={selectedRow ? colors.primary : colors.text}
-								bold={selectedRow}
-								wrap="truncate"
-							>
-								{selectedRow ? '> ' : '  '}
-								{agent.title ?? agent.name}
-								<Text color={colors.secondary}>
-									{' '}
-									({agent.name}) · {sourceLabel(agent)} ·{' '}
-									{formatAgentModel(agent)}
-								</Text>
-							</Text>
-						);
-					})}
-					{agentWindowStart + displayAgents.length < agents.length && (
-						<Text color={colors.secondary}>
-							+{agents.length - agentWindowStart - displayAgents.length} more
-							agents
-						</Text>
-					)}
-					{selected && (
-						<Box flexDirection="column" marginTop={1} marginLeft={2}>
-							<Text color={colors.primary} bold>
-								{selected.title ?? selected.name}
-								<Text color={colors.secondary}> ({selected.name})</Text>
-							</Text>
-							<Text color={colors.secondary}>
-								model: {formatAgentModel(selected)} · tools:{' '}
-								{selected.tools?.length ?? visibleTools.length}
-								{selected.internal ? ' · internal' : ''}
-							</Text>
-							<Text color={colors.text}>
-								{truncateText(
-									selected.description,
-									Math.max(24, boxWidth - 42),
-								)}
-							</Text>
-							<Text color={colors.secondary}>
-								tools: {truncateText(toolsSummary, Math.max(24, boxWidth - 42))}
-							</Text>
-							{selected.source.filePath && (
-								<Text color={colors.secondary}>
-									file:{' '}
-									{truncateText(
-										selected.source.filePath.replace(process.cwd(), '.'),
-										Math.max(24, boxWidth - 42),
-									)}
-								</Text>
-							)}
-							{notice && <Text color={colors.warning}>{notice}</Text>}
-						</Box>
-					)}
-				</Box>
-			)}
-			{mode === 'tools' && selected && (
-				<Box flexDirection="column" marginTop={1}>
-					<Text color={colors.primary}>Tools for {selected.name}</Text>
-					<Text color={colors.secondary}>
-						Space toggle · a all · c clear · s save · Shift+Tab back
-					</Text>
-					{toolWindow.map((tool, offset) => {
-						const absoluteIndex = toolWindowStart + offset;
-						return (
-							<Text
-								key={tool}
-								color={absoluteIndex === toolIndex ? colors.info : colors.text}
-							>
-								{absoluteIndex === toolIndex ? '> ' : '  '}
-								{selectedTools.has(tool) ? '✓' : ' '}
-								{'  '}
-								{tool}
-							</Text>
-						);
-					})}
-				</Box>
-			)}
-		</TitledBoxWithPreferences>
-	);
-}
 
 function TabBar({
 	activeTab,
@@ -980,20 +744,51 @@ export function SettingsSelector({
 	onLaunchTune,
 	onLaunchIde,
 	onMcpChanged,
+	currentSessionId,
+	messageCount,
+	onActivateDeveloperMode,
 }: SettingsSelectorProps) {
 	const {colors} = useTheme();
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const terminalRows = useTerminalRows();
+	const OVERHEAD_ROWS = 9;
+	const MAX_VISIBLE_ROWS = Math.min(
+		6,
+		Math.max(3, terminalRows - OVERHEAD_ROWS),
+	);
 
 	const [activeTab, setActiveTab] = useState<SettingsTabId>(
 		initialTab ?? 'appearance',
 	);
 	const [focus, setFocus] = useState<TabFocus>('header');
-	const [openPanel, setOpenPanel] = useState<ManagedSettingsPanel | null>(null);
+	const [openPanel, setOpenPanel] = useState<string | null>(null);
 
 	const [version, setVersion] = useState(0);
 	const [query, setQuery] = useState('');
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [scrollOffset, setScrollOffset] = useState(0);
+	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
+	const [innerDaemonRules] = useState(() =>
+		new SteeringRuleLoader(process.cwd()).loadRules(),
+	);
+
+	const reloadAgents = async (preferredName?: string) => {
+		const loader = getSubagentLoader();
+		await loader.reload();
+		const loaded = await loader.listSubagents();
+		setAgents(loaded);
+		if (preferredName) {
+			const index = loaded.findIndex(agent => agent.name === preferredName);
+			if (index >= 0) setSelectedIndex(index);
+		}
+		setVersion(v => v + 1);
+	};
+
+	// Load agents on mount and when the agents tab is active
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reloadAgents is stable
+	useEffect(() => {
+		void reloadAgents();
+	}, []);
 
 	// Ink delivers every keypress event parsed out of one stdin chunk
 	// synchronously in the same tick (see ink's `App.handleReadable`), so a
@@ -1046,7 +841,13 @@ export function SettingsSelector({
 		updateFocus('header');
 	}, [activeTab]);
 
-	const allRows = useTabRows(activeTab, version, {onLaunchTune, onLaunchIde});
+	const allRows = useTabRows(
+		activeTab,
+		version,
+		{onLaunchTune, onLaunchIde},
+		agents,
+		innerDaemonRules,
+	);
 	const filteredRows = useMemo(
 		() => filterRows(allRows, query),
 		[allRows, query],
@@ -1065,9 +866,30 @@ export function SettingsSelector({
 		selectedIndexRef.current = clamped;
 		setSelectedIndex(clamped);
 		setScrollOffset(prevOffset => {
-			if (clamped < prevOffset) return clamped;
-			if (clamped >= prevOffset + MAX_VISIBLE_ROWS) {
-				return clamped - MAX_VISIBLE_ROWS + 1;
+			// Map selectable index to filtered index (headers don't count)
+			const selToFiltered = (selIdx: number): number => {
+				let count = -1;
+				for (let i = 0; i < filteredRows.length; i++) {
+					if (filteredRows[i].kind !== 'header') count++;
+					if (count === selIdx) return i;
+				}
+				return Math.max(0, filteredRows.length - 1);
+			};
+			// Compare in filtered-row coordinates, not selectable coordinates
+			const filteredIdx = selToFiltered(clamped);
+			const windowEnd = prevOffset + MAX_VISIBLE_ROWS;
+
+			if (filteredIdx < prevOffset) {
+				// Moving up: scroll so selected is at the top
+				return Math.max(0, filteredIdx);
+			}
+			if (filteredIdx >= windowEnd) {
+				// Moving down: scroll so selected is at the bottom
+				const target = filteredIdx - MAX_VISIBLE_ROWS + 1;
+				return Math.min(
+					Math.max(0, target),
+					Math.max(0, filteredRows.length - MAX_VISIBLE_ROWS),
+				);
 			}
 			return prevOffset;
 		});
@@ -1080,13 +902,18 @@ export function SettingsSelector({
 	};
 
 	const activateRow = (row: SettingRow) => {
+		if (row.kind === 'header') return;
 		if (row.kind === 'boolean') {
 			row.onToggle();
 			setVersion(v => v + 1);
 			return;
 		}
 		if (row.kind === 'action') {
-			row.onAction();
+			if (row.id === 'add-subagent') {
+				setOpenPanel('subagent-create');
+			} else {
+				row.onAction();
+			}
 			return;
 		}
 		setOpenPanel(row.panel);
@@ -1164,9 +991,10 @@ export function SettingsSelector({
 
 		// focus === 'list'
 		const effectiveRows = filterRows(allRows, queryRef.current);
+		const selectableRows = effectiveRows.filter(r => r.kind !== 'header');
 		const effectiveClampedIndex = Math.min(
 			selectedIndexRef.current,
-			Math.max(0, effectiveRows.length - 1),
+			Math.max(0, selectableRows.length - 1),
 		);
 
 		if (key.escape || input === '/') {
@@ -1177,16 +1005,16 @@ export function SettingsSelector({
 			if (effectiveClampedIndex === 0) {
 				updateFocus('search');
 			} else {
-				moveSelection(effectiveClampedIndex - 1, effectiveRows.length);
+				moveSelection(effectiveClampedIndex - 1, selectableRows.length);
 			}
 			return;
 		}
 		if (key.downArrow) {
-			moveSelection(effectiveClampedIndex + 1, effectiveRows.length);
+			moveSelection(effectiveClampedIndex + 1, selectableRows.length);
 			return;
 		}
 		if (key.return || input === ' ') {
-			const row = effectiveRows[effectiveClampedIndex];
+			const row = selectableRows[effectiveClampedIndex];
 			if (row) activateRow(row);
 		}
 	};
@@ -1219,7 +1047,7 @@ export function SettingsSelector({
 			}
 			handleKey(input, key);
 		},
-		{isActive: !openPanel && activeTab !== 'agents'},
+		{isActive: !openPanel},
 	);
 
 	if (openPanel) {
@@ -1231,20 +1059,28 @@ export function SettingsSelector({
 			setVersion(v => v + 1);
 			setOpenPanel(null);
 		};
-		return renderManagedPanel(openPanel, onBack, onMcpChanged);
-	}
-
-	if (activeTab === 'agents') {
-		return (
-			<>
-				<TabBar activeTab={activeTab} headerFocused={true} />
-				<SettingsAgentsPanel
-					onCancel={onCancel}
-					onOpenTab={setActiveTab}
-					toolNames={toolManager?.getToolNames().sort() ?? []}
-					onChanged={() => setVersion(v => v + 1)}
-				/>
-			</>
+		// Extract agent name from subagent-*:agentName panel identifiers
+		const agentName = openPanel.startsWith('subagent-edit:')
+			? openPanel.slice('subagent-edit:'.length)
+			: openPanel.startsWith('subagent-model:')
+				? openPanel.slice('subagent-model:'.length)
+				: openPanel.startsWith('subagent-tools:')
+					? openPanel.slice('subagent-tools:'.length)
+					: openPanel.startsWith('subagent-description:')
+						? openPanel.slice('subagent-description:'.length)
+						: undefined;
+		return renderManagedPanel(
+			openPanel,
+			onBack,
+			onMcpChanged,
+			agentName,
+			reloadAgents,
+			toolManager?.getToolNames().sort(),
+			setOpenPanel,
+			currentSessionId,
+			messageCount,
+			onActivateDeveloperMode,
+			innerDaemonRules,
 		);
 	}
 
@@ -1254,11 +1090,13 @@ export function SettingsSelector({
 		scrollOffset,
 		scrollOffset + MAX_VISIBLE_ROWS,
 	);
-	const moreAbove = scrollOffset;
-	const moreBelow = Math.max(
-		0,
-		filteredRows.length - scrollOffset - MAX_VISIBLE_ROWS,
-	);
+	// Count only selectable (non-header) rows above/below the visible window
+	const moreAbove = filteredRows
+		.slice(0, scrollOffset)
+		.filter(r => r.kind !== 'header').length;
+	const moreBelow = filteredRows
+		.slice(scrollOffset + MAX_VISIBLE_ROWS)
+		.filter(r => r.kind !== 'header').length;
 
 	const footerHint =
 		focus === 'header'
@@ -1337,15 +1175,26 @@ export function SettingsSelector({
 				{visibleRows.length === 0 && (
 					<Text color={colors.secondary}>No settings match "{query}"</Text>
 				)}
-				{visibleRows.map((row, i) => (
-					<SettingRowLine
-						key={row.id}
-						row={row}
-						selected={focus === 'list' && scrollOffset + i === clampedIndex}
-						labelWidth={labelWidth}
-						isNarrow={isNarrow}
-					/>
-				))}
+				{visibleRows.map((row, i) => {
+					// Compute selectable index for this row (skip headers)
+					const selectableIndex =
+						filteredRows
+							.slice(0, scrollOffset + i + 1)
+							.filter(r => r.kind !== 'header').length - 1;
+					return (
+						<SettingRowLine
+							key={row.id}
+							row={row}
+							selected={
+								focus === 'list' &&
+								row.kind !== 'header' &&
+								selectableIndex === clampedIndex
+							}
+							labelWidth={labelWidth}
+							isNarrow={isNarrow}
+						/>
+					);
+				})}
 				{moreBelow > 0 && (
 					<Text color={colors.secondary} dimColor>
 						↓ {moreBelow} more below

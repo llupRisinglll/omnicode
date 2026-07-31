@@ -317,7 +317,7 @@ const GetDiagnosticsFormatter = React.memo(
 
 		const messageContent = (
 			<Box flexDirection="column">
-				<Text color={colors.tool}>⚒ get_diagnostics</Text>
+				<Text color={colors.tool}>✦ get_diagnostics</Text>
 
 				{args.path ? (
 					<Box>

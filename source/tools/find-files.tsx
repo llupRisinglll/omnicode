@@ -113,7 +113,7 @@ const FindFilesFormatter = React.memo(
 
 		const messageContent = (
 			<Box flexDirection="column">
-				<Text color={colors.tool}>⚒ find_files</Text>
+				<Text color={colors.tool}>✦ find_files</Text>
 
 				<Box>
 					<Text color={colors.secondary}>Pattern: </Text>

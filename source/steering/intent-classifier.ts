@@ -12,7 +12,7 @@
  * runtime-setup death-spiral are the two canonical cases v1 must detect.
  */
 
-import type {IntentClass} from '@/steering/types';
+import type {IntentClass, UserTaskKind} from '@/steering/types';
 import type {ToolCall} from '@/types/core';
 
 /** Serialize a tool call's arguments to a searchable string. */
@@ -303,6 +303,21 @@ function matchesReproduce(toolCalls: ToolCall[]): boolean {
 export function classifyIntent(toolCalls: ToolCall[]): IntentClass {
 	if (!toolCalls || toolCalls.length === 0) return 'unknown';
 
+	// An explicit investigation delegation is the strongest reproduce-phase
+	// signal. Its prompt commonly repeats setup details such as
+	// `worktree-create.sh` or `node_modules`; those incidental words must not
+	// reclassify the delegation as setup and bypass reproduction-first guards.
+	if (
+		toolCalls.every(tc => {
+			const name = (tc.function?.name ?? '').toLowerCase();
+			if (name !== 'agent') return false;
+			const args = serializeToolArgs(tc.function?.arguments).toLowerCase();
+			return args.includes('explore') || args.includes('plan');
+		})
+	) {
+		return 'reproduce';
+	}
+
 	// Build per-call blobs once.
 	const blobs = toolCalls.map(toolCallBlob);
 
@@ -346,6 +361,30 @@ export function classifyIntent(toolCalls: ToolCall[]): IntentClass {
 	return 'unknown';
 }
 
+/** Classify the original request once; unlike tool intent this stays stable. */
+export function classifyUserTask(message: string): UserTaskKind {
+	const text = message.toLowerCase();
+	if (
+		/\b(bug|broken|regression|not working|fails?|error)\b/.test(text) &&
+		/\b(reproduce|replicate|investigate|debug|fix|look at|take a look)\b/.test(
+			text,
+		)
+	) {
+		return 'bug-reproduction';
+	}
+	if (/\b(review|audit|inspect changes|code review)\b/.test(text))
+		return 'review';
+	if (/\b(deploy|production|server|release|ci|pipeline|rollback)\b/.test(text))
+		return 'operations';
+	if (/\b(document|documentation|readme|agents\.md|claude\.md)\b/.test(text))
+		return 'documentation';
+	if (/\b(implement|build|create|add|change|refactor|update|fix)\b/.test(text))
+		return 'implementation';
+	if (/^\s*(what|why|how|where|when|who|is|are|can|does|do)\b/.test(text))
+		return 'question';
+	return 'unknown';
+}
+
 /**
  * Check whether a single tool call violates a substring constraint
  * (used by `watch.alsoBlock`). Returns the matched keyword or null.
@@ -359,6 +398,7 @@ export function matchingArgSubstring(
 	if (name !== toolName) return null;
 	const blob = toolCallBlob(toolCall);
 	for (const sub of substrings) {
+		if (sub === '*') return sub;
 		if (blob.includes(sub.toLowerCase())) return sub;
 	}
 	return null;

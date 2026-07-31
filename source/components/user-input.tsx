@@ -39,6 +39,9 @@ import type {
 	SubmittedInputDraft,
 } from '@/types/hooks';
 import {Completion, CustomCommandCompletionSource} from '@/types/index';
+
+const EMPTY_CUSTOM_COMMANDS: CustomCommandCompletionSource[] = [];
+
 import type {Colors} from '@/types/ui';
 import {
 	extractImageReferences,
@@ -82,14 +85,21 @@ interface ChatProps {
 	sessionName?: string; // Optional session name for display
 	tune?: TuneConfig; // Model mode configuration
 	currentModel?: string; // Active model id — resolves the 'auto' tune profile for display
+	backgroundCount?: number;
 	statusInfo?: DevelopmentModeStatusInfo;
 	statusLineSlot?: ReactNode;
 	busyStatus?: ReactNode;
 	activeEditor?: ActiveEditorState | null; // VS Code active file + optional selection
 	onDismissActiveEditor?: () => void; // Dismiss the active editor pill on clear/escape
 	forceFocus?: boolean; // Force focus for testing (bypasses useFocus)
+	suppressBuiltInCompletions?: boolean; // When true, hide built-in commands from completions
 	onSubmittedDraft?: (draft: SubmittedInputDraft) => void;
 	restoreSubmittedDraft?: RestoredInputDraft | null;
+	onDownAtBottom?: () => void;
+	submitBlocked?: boolean;
+	bgHighlighted?: boolean;
+	agentCount?: number;
+	agentHighlighted?: boolean;
 }
 
 export default function UserInput({
@@ -98,7 +108,7 @@ export default function UserInput({
 	queuedMessages = [],
 	onRemoveQueuedMessage,
 	placeholder,
-	customCommands = [],
+	customCommands = EMPTY_CUSTOM_COMMANDS,
 	disabled = false,
 	isBusy = false,
 	onToggleMode,
@@ -111,14 +121,21 @@ export default function UserInput({
 	sessionName,
 	tune,
 	currentModel,
+	backgroundCount,
 	statusInfo,
 	statusLineSlot,
 	busyStatus,
 	activeEditor,
 	onDismissActiveEditor,
 	forceFocus = false,
+	suppressBuiltInCompletions = false,
 	onSubmittedDraft,
 	restoreSubmittedDraft = null,
+	onDownAtBottom,
+	submitBlocked = false,
+	bgHighlighted = false,
+	agentCount = 0,
+	agentHighlighted = false,
 }: ChatProps) {
 	const {isFocused, focus} = useFocus({autoFocus: !disabled, id: 'user-input'});
 
@@ -136,6 +153,8 @@ export default function UserInput({
 	const effectiveFocus = forceFocus || isFocused;
 	const {colors} = useTheme();
 	const inputState = useInputState();
+	const submitBlockedRef = useRef(submitBlocked);
+	submitBlockedRef.current = submitBlocked;
 	const uiState = useUIStateContext();
 	const {boxWidth, isNarrow, actualWidth, truncate} = useResponsiveTerminal();
 	// boxWidth floors at 40, which exceeds the real width of terminals narrower
@@ -342,7 +361,9 @@ export default function UserInput({
 
 		const commandPrefix = input.slice(1).split(' ')[0];
 
-		const builtInCompletions = commandRegistry.getCompletions(commandPrefix);
+		const builtInCompletions = suppressBuiltInCompletions
+			? []
+			: commandRegistry.getCompletions(commandPrefix);
 		const customCompletions = customCommands
 			.filter(cmd => {
 				// Include all when no prefix, otherwise filter by prefix
@@ -365,7 +386,13 @@ export default function UserInput({
 				description: cmd.description,
 			})),
 		] as Completion[];
-	}, [input, isCommandMode, isFileAutocompleteMode, customCommands]);
+	}, [
+		input,
+		isCommandMode,
+		isFileAutocompleteMode,
+		customCommands,
+		suppressBuiltInCompletions,
+	]);
 
 	// Update UI state for command completions
 	useEffect(() => {
@@ -577,6 +604,17 @@ export default function UserInput({
 	// History navigation
 	const handleHistoryNavigation = useCallback(
 		(direction: 'up' | 'down') => {
+			// Down on the live input (or a recalled draft) hands focus to the
+			// status-line indicators. Guard on historyIndex alone so an empty
+			// prompt history still lets ↓ reach the badges.
+			if (
+				direction === 'down' &&
+				(historyIndex === -1 || historyIndex === -2)
+			) {
+				onDownAtBottom?.();
+				return;
+			}
+
 			const history = promptHistory.getHistory();
 			if (history.length === 0) return;
 
@@ -603,38 +641,22 @@ export default function UserInput({
 					setInputState(savedDraftRef.current);
 					setTextInputKey(prev => prev + 1);
 				} else if (historyIndex === -2) {
-					// At draft, cycle back to last history item
-					savedDraftRef.current = currentState;
-					setHistoryIndex(history.length - 1);
-					setInputState(history[history.length - 1]);
+					// Returning from draft cycling — restore original state
+					setHistoryIndex(-1);
+					setInputState(savedDraftRef.current);
 					setTextInputKey(prev => prev + 1);
 				}
+			} else if (historyIndex < history.length - 1) {
+				// Move forward in history
+				const newIndex = historyIndex + 1;
+				setHistoryIndex(newIndex);
+				setInputState(history[newIndex]);
+				setTextInputKey(prev => prev + 1);
 			} else {
-				if (historyIndex === -1) {
-					// Save draft, go to draft cycling state (visually a no-op)
-					savedDraftRef.current = currentState;
-					setOriginalInput(input);
-					setHistoryIndex(-2);
-					setInputState(savedDraftRef.current);
-					setTextInputKey(prev => prev + 1);
-				} else if (historyIndex === -2) {
-					// At draft, cycle to first history item
-					savedDraftRef.current = currentState;
-					setHistoryIndex(0);
-					setInputState(history[0]);
-					setTextInputKey(prev => prev + 1);
-				} else if (historyIndex >= 0 && historyIndex < history.length - 1) {
-					// Move forward in history
-					const newIndex = historyIndex + 1;
-					setHistoryIndex(newIndex);
-					setInputState(history[newIndex]);
-					setTextInputKey(prev => prev + 1);
-				} else if (historyIndex === history.length - 1) {
-					// At last history item, restore saved draft
-					setHistoryIndex(-2);
-					setInputState(savedDraftRef.current);
-					setTextInputKey(prev => prev + 1);
-				}
+				// At last history item, restore saved draft
+				setHistoryIndex(-2);
+				setInputState(savedDraftRef.current);
+				setTextInputKey(prev => prev + 1);
 			}
 		},
 		[
@@ -644,6 +666,7 @@ export default function UserInput({
 			setHistoryIndex,
 			setOriginalInput,
 			setInputState,
+			onDownAtBottom,
 		],
 	);
 
@@ -745,6 +768,14 @@ export default function UserInput({
 		// mounted. Here we only swallow Escape while busy so it doesn't fall
 		// through to the clear-input double-press.
 		if (key.escape && (isBusy || disabled)) {
+			return;
+		}
+
+		// While a status-line indicator holds focus (submitBlocked), every key
+		// belongs to that navigation — the owning section's useInput routes
+		// arrows/Enter/Escape, so this handler must not also act on them (↑ here
+		// would otherwise start history navigation under the focus).
+		if (submitBlockedRef.current) {
 			return;
 		}
 
@@ -890,19 +921,30 @@ export default function UserInput({
 		) {
 			const selected = completions[selectedCompletionIndex];
 			const completedText = `/${selected.name}`;
-			completionJustSelectedRef.current = true;
-			setInputState({
-				displayValue: completedText,
-				placeholderContent: {},
-			});
-			setShowCompletions(false);
-			setSelectedCompletionIndex(-1);
-			setTextInputKey(prev => prev + 1);
-			return;
+			// If input already matches the completion, skip selection and submit
+			if (
+				completedText === input ||
+				completedText === currentStateRef.current.displayValue
+			) {
+				setShowCompletions(false);
+				setCompletions([]);
+				setSelectedCompletionIndex(-1);
+				// Fall through to submit below
+			} else {
+				completionJustSelectedRef.current = true;
+				setInputState({
+					displayValue: completedText,
+					placeholderContent: {},
+				});
+				setShowCompletions(false);
+				setSelectedCompletionIndex(-1);
+				setTextInputKey(prev => prev + 1);
+				return;
+			}
 		}
 
 		// Handle Enter to submit (fallthrough - if completion handler didn't return)
-		if (key.return && !key.shift) {
+		if (key.return && !key.shift && !submitBlockedRef.current) {
 			if (loadSelectedQueuedMessage()) {
 				return;
 			}
@@ -1058,6 +1100,10 @@ export default function UserInput({
 					sessionName={sessionName}
 					tune={tune}
 					currentModel={currentModel}
+					backgroundCount={backgroundCount}
+					bgHighlighted={bgHighlighted}
+					agentCount={agentCount}
+					agentHighlighted={agentHighlighted}
 					statusInfo={statusInfo}
 				/>
 				{statusLineSlot}
@@ -1318,6 +1364,10 @@ export default function UserInput({
 					sessionName={sessionName}
 					tune={tune}
 					currentModel={currentModel}
+					backgroundCount={backgroundCount}
+					bgHighlighted={bgHighlighted}
+					agentCount={agentCount}
+					agentHighlighted={agentHighlighted}
 					statusInfo={statusInfo}
 					activeEditor={activeEditor}
 				/>

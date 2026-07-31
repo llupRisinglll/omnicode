@@ -131,7 +131,7 @@ const AskQuestionFormatter = React.memo(
 
 		const messageContent = (
 			<Box flexDirection="column">
-				<Text color={colors.tool}>⚒ ask_user</Text>
+				<Text color={colors.tool}>✦ ask_user</Text>
 				<Box flexDirection="column" marginBottom={1}>
 					<Text color={colors.secondary}>Question:</Text>
 					<Box marginLeft={2}>

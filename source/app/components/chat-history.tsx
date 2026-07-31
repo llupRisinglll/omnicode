@@ -1,10 +1,24 @@
-import {Box, measureElement, Text, useInput} from 'ink';
+import {Box, type DOMElement, measureElement, Text, useInput} from 'ink';
 import React from 'react';
 import ChatQueue from '@/components/chat-queue';
 import {RenderErrorBoundary} from '@/components/render-error-boundary';
 import {useTerminalRows} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {wheelEvents} from '@/utils/terminal-mouse';
+
+function measureNaturalHeight(node: DOMElement): number {
+	const ownHeight = measureElement(node).height;
+	const children = node.childNodes.filter(
+		(child): child is DOMElement => child.nodeName !== '#text',
+	);
+	if (children.length === 0) return ownHeight;
+	const childHeights = children.map(measureNaturalHeight);
+	const childrenHeight =
+		node.style.flexDirection === 'row'
+			? Math.max(0, ...childHeights)
+			: childHeights.reduce((total, height) => total + height, 0);
+	return Math.max(ownHeight, childrenHeight);
+}
 
 export interface ChatHistoryProps {
 	/** Whether the chat has started (ready to display) */
@@ -61,16 +75,24 @@ export const ChatHistory = React.memo(function ChatHistory({
 }: ChatHistoryProps): React.ReactElement {
 	const {colors} = useTheme();
 	const terminalRows = useTerminalRows();
-	const viewportRef = React.useRef(null);
-	const contentRef = React.useRef(null);
+	const viewportRef = React.useRef<DOMElement>(null);
+	const contentRef = React.useRef<DOMElement>(null);
 	const [scrollOffset, setScrollOffset] = React.useState(0);
 
 	// New content or a vertical resize snaps the view back to the bottom
 	// (sticky scroll) — matching every chat TUI's behavior.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the deps are intentional TRIGGERS (new chat content / resize), not values read inside the effect.
+	// Live components may rerender every 100ms while tools stream. Reset only
+	// when transcript membership changes, or a clear/resize occurs, so a user
+	// can remain scrolled up during active work.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: these are intentional growth/reset triggers.
 	React.useEffect(() => {
 		setScrollOffset(0);
-	}, [queuedComponents, liveComponent, terminalRows]);
+	}, [
+		clearKey,
+		queuedComponents.length,
+		staticComponents.length,
+		terminalRows,
+	]);
 
 	// Scroll by `delta` rows (positive = towards older content), clamped to
 	// the measured content extent. Shared by PageUp/PageDown and the mouse
@@ -79,12 +101,16 @@ export const ChatHistory = React.memo(function ChatHistory({
 		const viewport = viewportRef.current
 			? measureElement(viewportRef.current)
 			: undefined;
-		const content = contentRef.current
-			? measureElement(contentRef.current)
-			: undefined;
 		const viewportHeight = viewport?.height ?? 0;
-		const contentHeight = content?.height ?? 0;
-		const maxOffset = Math.max(0, contentHeight - viewportHeight);
+		const contentHeight = contentRef.current
+			? measureNaturalHeight(contentRef.current)
+			: 0;
+		// Once scrolled, the indicator consumes one viewport row. Include it in
+		// the initial clamp so the oldest transcript row remains reachable.
+		const maxOffset = Math.max(
+			0,
+			contentHeight - viewportHeight + (contentHeight > viewportHeight ? 1 : 0),
+		);
 		const step = halfPage
 			? Math.max(1, Math.floor(viewportHeight / 2)) * Math.sign(delta)
 			: delta;

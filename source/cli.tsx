@@ -121,6 +121,11 @@ function isValidOutputFormat(value: unknown): value is 'text' | 'json' {
 	return value === 'text' || value === 'json';
 }
 
+const ENABLE_ALT_SCREEN_MOUSE =
+	'\x1B[?1049h\x1B[2J\x1B[H\x1B[?1000h\x1B[?1002h\x1B[?1003h\x1B[?1006h';
+const DISABLE_ALT_SCREEN_MOUSE =
+	'\x1B[?1006l\x1B[?1003l\x1B[?1002l\x1B[?1000l\x1B[?1049l';
+
 async function main(): Promise<void> {
 	// Dynamic imports so the fast-path flag handlers above never pay for them.
 	const [{render}, {parseContextLimit}, {setSessionContextLimit}] =
@@ -139,8 +144,59 @@ async function main(): Promise<void> {
 		const {SubagentsPreviewApp} = await import(
 			'@/app/previews/subagents-preview'
 		);
-		const result = render(<SubagentsPreviewApp />, {exitOnCtrlC: false});
-		await result.waitUntilExit();
+		process.stdout.write(ENABLE_ALT_SCREEN_MOUSE);
+		const {setTerminalSize} = await import('@/utils/selection');
+		setTerminalSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
+		const updatePreviewTerminalSize = () => {
+			setTerminalSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
+		};
+		process.stdout.on('resize', updatePreviewTerminalSize);
+		const {createOutputOverlay} = await import('@/utils/output-overlay');
+		const previewOutputOverlay = createOutputOverlay();
+		previewOutputOverlay.attach();
+		const {PassThrough} = await import('node:stream');
+		const {stripMouseSequences, wheelEvents, pointerEvents} = await import(
+			'@/utils/terminal-mouse'
+		);
+		const previewFiltered = new PassThrough();
+		let previewCarry = '';
+		const forwardPreview = (chunk: Buffer | string) => {
+			const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+			const result = stripMouseSequences(text, previewCarry);
+			previewCarry = result.carry;
+			for (const direction of result.wheel) {
+				wheelEvents.emit('wheel', direction);
+			}
+			for (const pointer of result.pointers) {
+				pointerEvents.emit('pointer', pointer);
+			}
+			if (result.clean) {
+				previewFiltered.write(result.clean);
+			}
+		};
+		process.stdin.on('data', forwardPreview);
+		const previewStdin = Object.assign(previewFiltered, {
+			isTTY: true,
+			setRawMode: (mode: boolean) => {
+				process.stdin.setRawMode?.(mode);
+				return previewStdin;
+			},
+			ref: () => process.stdin.ref(),
+			unref: () => process.stdin.unref(),
+		}) as unknown as NodeJS.ReadStream;
+		const result = render(<SubagentsPreviewApp />, {
+			exitOnCtrlC: false,
+			stdin: previewStdin,
+		});
+		try {
+			await result.waitUntilExit();
+		} finally {
+			process.stdin.off('data', forwardPreview);
+			process.stdin.pause();
+			process.stdout.off('resize', updatePreviewTerminalSize);
+			previewOutputOverlay.detach();
+			process.stdout.write(DISABLE_ALT_SCREEN_MOUSE);
+		}
 		return;
 	}
 
@@ -525,23 +581,19 @@ async function main(): Promise<void> {
 		// Fullscreen (alt screen + in-app scroll) is opt-in via --alt-screen
 		// or the alternateScreen:true preference; --no-alt-screen forces
 		// inline regardless of the preference.
-		const {loadPreferences} = await import('@/config/preferences');
+		const {getAlternateScreen} = await import('@/config/preferences');
 		const altScreenAllowed =
 			!args.includes('--no-alt-screen') &&
-			(args.includes('--alt-screen') ||
-				loadPreferences().alternateScreen === true);
+			(args.includes('--alt-screen') || getAlternateScreen());
 		const useAltScreen =
 			process.stdout.isTTY && !nonInteractiveMode && altScreenAllowed;
 		let inkStdin: NodeJS.ReadStream | undefined;
 		let stopInputForwarding: (() => void) | undefined;
-		if (useAltScreen) {
-			process.stdout.write('\x1B[?1049h'); // Enter alternate screen
-			// SGR mouse reporting so wheel scrolling reaches the app. The alt
-			// screen has no native scrollback, so the terminal's own wheel /
-			// scrollbar can't work — the app must receive wheel events itself.
-			// (Text selection needs Shift+drag while mouse reporting is on.)
-			process.stdout.write('\x1B[?1000h\x1B[?1003h\x1B[?1006h');
+		let outputOverlay:
+			| {attach: () => void; detach: () => void; flush: () => void}
+			| undefined;
 
+		if (useAltScreen) {
 			// Wipe the screen on resize BEFORE Ink repaints (this listener is
 			// registered first, so it runs first). When the terminal GROWS,
 			// Ink's diff path only erases the old smaller frame and rewrites
@@ -551,13 +603,23 @@ async function main(): Promise<void> {
 				process.stdout.write('\x1B[2J\x1B[H');
 			});
 
-			// Ink must never see the raw mouse sequences (its keypress parser
-			// would leak them into the chat input as text), so it reads from a
-			// filtered proxy stream: mouse reports are stripped, wheel ticks
-			// are re-emitted on the wheelEvents bus for the chat viewport.
+			process.stdout.write(ENABLE_ALT_SCREEN_MOUSE);
+			const {setTerminalSize} = await import('@/utils/selection');
+			setTerminalSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
+			process.stdout.on('resize', () => {
+				setTerminalSize(
+					process.stdout.columns ?? 80,
+					process.stdout.rows ?? 24,
+				);
+			});
+
+			// Filtered stdin proxy: strip SGR mouse sequences so they never reach
+			// Ink's keypress parser (which would leak them as text into the input).
+			// Mouse events are re-emitted on the selection / wheel event buses.
 			const {PassThrough} = await import('node:stream');
-			const {clickEvents, pointerEvents, stripMouseSequences, wheelEvents} =
-				await import('@/utils/terminal-mouse');
+			const {stripMouseSequences, wheelEvents, pointerEvents} = await import(
+				'@/utils/terminal-mouse'
+			);
 			const filtered = new PassThrough();
 			let carry = '';
 			const forwardInput = (chunk: Buffer | string) => {
@@ -566,9 +628,6 @@ async function main(): Promise<void> {
 				carry = result.carry;
 				for (const direction of result.wheel) {
 					wheelEvents.emit('wheel', direction);
-				}
-				for (const click of result.clicks) {
-					clickEvents.emit('click', click);
 				}
 				for (const pointer of result.pointers) {
 					pointerEvents.emit('pointer', pointer);
@@ -582,8 +641,6 @@ async function main(): Promise<void> {
 				process.stdin.off('data', forwardInput);
 				process.stdin.pause();
 			};
-			// TTY facade: Ink checks isTTY for raw-mode support and calls
-			// setRawMode/ref/unref — delegate those to the real stdin.
 			inkStdin = Object.assign(filtered, {
 				isTTY: true,
 				setRawMode: (mode: boolean) => {
@@ -593,6 +650,11 @@ async function main(): Promise<void> {
 				ref: () => process.stdin.ref(),
 				unref: () => process.stdin.unref(),
 			}) as unknown as NodeJS.ReadStream;
+
+			// Output overlay: wraps Ink's stdout to inject selection highlights.
+			const {createOutputOverlay} = await import('@/utils/output-overlay');
+			outputOverlay = createOutputOverlay();
+			outputOverlay.attach();
 		} else if (process.stdout.isTTY && !nonInteractiveMode) {
 			// INLINE mode needs the same wipe-before-repaint guard as the alt
 			// screen, because a horizontal resize is even more destructive there:
@@ -641,18 +703,17 @@ async function main(): Promise<void> {
 				...(inkStdin ? {stdin: inkStdin} : {}),
 			},
 		);
-
 		let terminalRestored = false;
+
 		const restoreTerminal = () => {
 			if (terminalRestored) return;
 			terminalRestored = true;
-			stopInputForwarding?.();
 			if (useAltScreen) {
-				// Mouse reporting off, then back to the main screen buffer.
-				process.stdout.write('\x1B[?1006l\x1B[?1003l\x1B[?1000l\x1B[?1049l');
+				stopInputForwarding?.();
+				outputOverlay?.detach();
+				process.stdout.write(DISABLE_ALT_SCREEN_MOUSE);
 			}
 		};
-
 		// On ANY graceful shutdown (Ctrl+C, /exit, fatal error): erase the
 		// live Ink region (input box, status lines — the Static transcript
 		// stays in the terminal), stop Ink from repainting, restore the

@@ -1,8 +1,46 @@
 import test from 'ava';
-import {classifyIntent} from './intent-classifier';
+import {
+	classifyIntent,
+	classifyUserTask,
+	matchingArgSubstring,
+} from './intent-classifier';
 import type {ToolCall} from '@/types/core';
 
 console.log('\nsteering/intent-classifier.spec.ts');
+
+test('classifyUserTask keeps reproduction distinct from general investigation', t => {
+	t.is(
+		classifyUserTask('Please reproduce and fix this broken login flow'),
+		'bug-reproduction',
+	);
+	t.is(classifyUserTask('Review the authentication implementation'), 'review');
+	t.is(classifyUserTask('How does authentication work?'), 'question');
+});
+
+test('explore delegation stays reproduce despite setup keywords in its prompt', t => {
+	t.is(
+		classifyIntent([
+			{
+				id: 'explore-1',
+				function: {
+					name: 'agent',
+					arguments: {
+						subagent_type: 'explore',
+						prompt:
+							'Inspect the worktree-create.sh output and node_modules before reproducing.',
+					},
+				},
+			},
+		]),
+		'reproduce',
+	);
+});
+
+test('constraint wildcard matches any call arguments for an exact tool', t => {
+	const call = edit('tests/unit/chains.test.ts', 'synthetic fixture');
+	t.is(matchingArgSubstring(call, 'write_file', ['*']), '*');
+	t.is(matchingArgSubstring(call, 'string_replace', ['*']), null);
+});
 
 const bash = (command: string): ToolCall => ({
 	id: 'a',

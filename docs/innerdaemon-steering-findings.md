@@ -15,8 +15,8 @@ Context: live Hilinga counter-availment simulation (mimo-v2.5, `--mode yolo`, ve
 | 6 | Yolo mode over-prompts for tool confirmation on BENIGN read-only bash commands (`curl`/`lsof`/`ss`) — should only prompt on genuinely dangerous ones | High | **Fixed** (InnerDaemon executor mode wiring) |
 | 10 | InnerDaemon subagent uses `model: inherit` (no thinking-off, no fast model) — slow + strict-output-unreliable when it fires | High | OPEN (architecture) |
 | 11 | The `/release-branch-to-prod` six lens-reviewer subagents could not run ("model not in this deployment") — release-flow review silently degraded to manual | Medium | OPEN (tooling) |
-| 12 | New `reproduction-first` rule false-fires during worktree-setup (and any read-heavy non-reproduce phase): the `reproduce` intent proxy classifies ANY read-only turn as reproduce, and its explore-block fired during worktree creation | High | OPEN (regression from rule activation) |
-| 13 | Activated `workspace-select-before-reproduce` never fires — starved by `reproduction-first` (identical condition, "first action wins") AND its `uiDrivenOrAppRun` criterion goes dormant the moment the browser is driven, which is exactly when the wrong-workspace problem appears | High | OPEN (regression from activation) |
+| 12 | New `reproduction-first` rule false-fires during worktree-setup (and any read-heavy non-reproduce phase): the `reproduce` intent proxy classifies ANY read-only turn as reproduce, and its explore-block fired during worktree creation | High | **Fixed** (`userTaskKind` condition) |
+| 13 | Activated `workspace-select-before-reproduce` never fires — starved by `reproduction-first` (identical condition, "first action wins") AND its `uiDrivenOrAppRun` criterion goes dormant the moment the browser is driven, which is exactly when the wrong-workspace problem appears | High | **Partially fixed** (priority + equal-priority rotation; criterion remains rule-specific) |
 
 ---
 
@@ -157,7 +157,7 @@ Drafted under `docs/steering-drafts/` (outside the live `.nanocoder/steering/` s
 
 **Net:** findings #7–#9 plus the three drafts converge on two engine investments — (a) the loop-stateful "artifact/progress produced this task" primitive, and (b) **moving the engine off a pure turn-boundary/turn-count model toward time/effort-aware and mid-turn-capable evaluation.** (b) is the architectural change; without it, steering will keep missing the slowest, most expensive spirals.
 
-**Implemented (tractable slice):** two of the above are now in the engine. (1) **Time/effort-aware budgets** — `SteeringRuleWatch.maxWallClockMsWithoutSuccess` makes a rule a candidate when the wall-clock elapsed across the same consecutive in-scope window (`latest.wallClockMs − windowStart.wallClockMs`) reaches the budget, OR-ed with the existing turn count; a met success criterion resets both counters in lockstep. Note this is evaluated at the **turn boundary**, so it is **retroactive** — it catches "the window that just ended took too long," not a turn that is still running. (2) **Escalation ladder on relapse** — a per-rule `escalationLevel` (derived from the fire count) is threaded into the InnerDaemon request and used at the top level to make a repeated `inject` progressively firmer and eventually a `block`, with the `maxFires → stop` backstop unchanged. **Still deferred:** true **within-turn interruption** — aborting a turn WHILE it burns past a time budget — remains out of scope; it requires a watchdog/timer in the streaming conversation loop that runs OUTSIDE the turn-boundary `await evaluate()` (the biggest structural change of §9, high-risk), so the engine can act before a boundary that a single ~28-minute reasoning turn never reaches.
+**Implemented:** time/effort-aware budgets, a relapse escalation ladder, and a streaming-loop watchdog now cover both turn-boundary and within-turn stalls. `maxFires` exhaustion makes advisory rules dormant by default; only explicit safety rules opt into `onExhaustion: stop`, preventing a coaching rule from terminating a task while the model is already recovering.
 
 ---
 
@@ -206,7 +206,7 @@ Drafted under `docs/steering-drafts/` (outside the live `.nanocoder/steering/` s
 
 ---
 
-## 13. `workspace-select-before-reproduce` never fires — starved + mis-scoped — OPEN (regression from activation)
+## 13. `workspace-select-before-reproduce` never fires — starved + mis-scoped — PARTIALLY FIXED
 
 **Observed live (same from-scratch validation run):** across the reproduce phase, `reproduction-first` fired 4×, `runtime-setup-budget` 3×, `worktree-supervision` 1× — and `workspace-select-before-reproduce` fired **0×**. The finding-#7 rule, as activated, is inert. Two independent causes:
 

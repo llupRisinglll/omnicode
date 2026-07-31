@@ -22,7 +22,11 @@ import {
 import {generateKey} from '@/session/key-generator';
 import {classifyIntent} from '@/steering/intent-classifier';
 import type {SteeringEngine} from '@/steering/steering-engine';
-import type {SteeringDiagnostic, TurnFact} from '@/steering/types';
+import type {
+	SteeringDiagnostic,
+	TurnFact,
+	UserTaskKind,
+} from '@/steering/types';
 import {recoverAndRecord} from '@/tool-call-recovery-host/recover-and-record';
 import {
 	parseToolCalls,
@@ -160,6 +164,8 @@ interface ProcessAssistantResponseParams {
 	 * steering rules keyed on `userTriggeredSkill`.
 	 */
 	userTriggeredSkill?: string;
+	/** Stable classification of the original user request. */
+	userTaskKind?: UserTaskKind;
 }
 
 // Module-level flag: show XML fallback notice only once per process lifetime.
@@ -309,6 +315,7 @@ export const processAssistantResponse = async (
 		steeringVerbose = false,
 		turnFacts = [],
 		userTriggeredSkill,
+		userTaskKind,
 	} = params;
 
 	const startTime = conversationStartTime ?? Date.now();
@@ -424,27 +431,59 @@ export const processAssistantResponse = async (
 	const maxMessages = sessionConfig?.maxMessages ?? 1000;
 	const cappedMessages = capMessagesForModel(messages, maxMessages);
 
-	const result = await client.chat(
-		[systemMessage, ...cappedMessages],
-		tools,
-		{
-			onToken: (token: string) => {
-				streamedContent += token;
-				setStreamingContent(streamedContent);
-				// Feed the in-flight reply into the context-usage estimate so the
-				// `~%` indicator climbs as the model writes, instead of only
-				// stepping up once the finished message is committed to history.
-				setTokenCount(calculateTokens(streamedContent));
+	const watchdog = steeringEngine?.getWithinTurnWatchdog(turnFacts);
+	const requestController = watchdog ? new AbortController() : controller;
+	const forwardAbort = () => requestController.abort(controller.signal.reason);
+	if (watchdog) controller.signal.addEventListener('abort', forwardAbort);
+	const watchdogTimer = watchdog
+		? setTimeout(() => requestController.abort(watchdog), watchdog.timeoutMs)
+		: null;
+	watchdogTimer?.unref?.();
+	let result;
+	try {
+		result = await client.chat(
+			[systemMessage, ...cappedMessages],
+			tools,
+			{
+				onToken: (token: string) => {
+					streamedContent += token;
+					setStreamingContent(streamedContent);
+					// Feed the in-flight reply into the context-usage estimate so the
+					// `~%` indicator climbs as the model writes, instead of only
+					// stepping up once the finished message is committed to history.
+					setTokenCount(calculateTokens(streamedContent));
+				},
+				onReasoningToken: (token: string) => {
+					streamedReasoning += token;
+					setStreamingReasoning(streamedReasoning);
+				},
+				onPrivacyEvent,
 			},
-			onReasoningToken: (token: string) => {
-				streamedReasoning += token;
-				setStreamingReasoning(streamedReasoning);
-			},
-			onPrivacyEvent,
-		},
-		controller.signal,
-		modeOverrides,
-	);
+			requestController.signal,
+			modeOverrides,
+		);
+	} catch (error) {
+		if (
+			watchdog &&
+			requestController.signal.aborted &&
+			!controller.signal.aborted
+		) {
+			addToChatQueue(
+				<InnerDaemonDetails
+					key={generateKey('steering-watchdog')}
+					message={watchdog.message}
+					urgency="firm"
+					ruleId={watchdog.ruleId}
+					model={currentModel}
+				/>,
+			);
+			throw new Error(watchdog.message);
+		}
+		throw error;
+	} finally {
+		if (watchdogTimer) clearTimeout(watchdogTimer);
+		if (watchdog) controller.signal.removeEventListener('abort', forwardAbort);
+	}
 
 	// If Esc landed while the stream was resolving, stop now — never commit an
 	// aborted partial to history or start its tool calls.
@@ -883,10 +922,17 @@ export const processAssistantResponse = async (
 		// Count consecutive identical signatures and stop once the cap is hit so
 		// we surface an actionable error instead of looping until abort.
 		const currentToolSignature = computeToolCallSignature(validToolCalls);
+		const onlyMonitoring = validToolCalls.every(
+			call => call.function.name === 'monitor',
+		);
 		const currentRepeatedCount =
-			currentToolSignature && currentToolSignature === lastToolSignature
+			!onlyMonitoring &&
+			currentToolSignature &&
+			currentToolSignature === lastToolSignature
 				? repeatedToolCallCount + 1
-				: 1;
+				: onlyMonitoring
+					? 0
+					: 1;
 
 		if (currentRepeatedCount >= MAX_REPEATED_TOOL_CALLS) {
 			await flushAll();
@@ -908,6 +954,64 @@ export const processAssistantResponse = async (
 				onConversationComplete();
 			}
 			return;
+		}
+
+		// Hard steering constraints must run before tool dispatch. The regular
+		// turn-boundary steering pass happens after execution, which is too late
+		// for expensive forbidden calls such as a premature explore subagent.
+		if (steeringEngine) {
+			const preflightFact: TurnFact = {
+				turnIndex: turnFacts.length,
+				wallClockMs: Date.now() - startTime,
+				toolCalls: validToolCalls,
+				toolResults: [],
+				intentClass: classifyIntent(validToolCalls),
+				cwd: process.cwd(),
+				hadError: false,
+				userTriggeredSkill,
+				userTaskKind,
+			};
+			const constraint = steeringEngine.evaluateConstraints([
+				...turnFacts,
+				preflightFact,
+			]);
+			if (constraint?.type === 'block') {
+				const cancellationResults = createCancellationResults(validToolCalls);
+				const blockedFact: TurnFact = {
+					...preflightFact,
+					toolResults: cancellationResults,
+					hadError: true,
+					errorMessageDigest: constraint.message.split('\n')[0],
+				};
+				const builder = new MessageBuilder(updatedMessages);
+				builder.addToolResults(cancellationResults);
+				builder.addMessage({role: 'user', content: constraint.message});
+				const nextMessages = builder.build();
+				setMessages(nextMessages);
+				addToChatQueue(
+					<InnerDaemonDetails
+						key={generateKey('steering-preflight-block')}
+						message={constraint.message}
+						urgency={constraint.urgency ?? 'light'}
+						ruleId={constraint.ruleId}
+						model={constraint.model}
+					/>,
+				);
+				await processAssistantResponse({
+					...params,
+					abortController: controller,
+					messages: nextMessages,
+					conversationStartTime: startTime,
+					emptyTurnCount: 0,
+					malformedRetryCount: 0,
+					lastToolSignature: undefined,
+					repeatedToolCallCount: 0,
+					turnFacts: [...turnFacts, blockedFact],
+					userTriggeredSkill,
+					userTaskKind,
+				});
+				return;
+			}
 		}
 
 		// The SDK never auto-executes tools (execute is stripped). We evaluate
@@ -1142,17 +1246,18 @@ export const processAssistantResponse = async (
 					r =>
 						r.isError ||
 						r.content.startsWith('Error: ') ||
-						r.content.startsWith('⚒ Validation failed'),
+						r.content.startsWith('✦ Validation failed'),
 				),
 				errorMessageDigest: turnResults
 					.find(
 						r =>
 							r.isError ||
 							r.content.startsWith('Error: ') ||
-							r.content.startsWith('⚒ Validation failed'),
+							r.content.startsWith('✦ Validation failed'),
 					)
 					?.content.split('\n')[0],
 				userTriggeredSkill,
+				userTaskKind,
 			};
 			const nextTurnFacts = [...turnFacts, currentFact];
 
@@ -1268,10 +1373,11 @@ export const processAssistantResponse = async (
 				conversationStartTime: startTime,
 				emptyTurnCount: 0,
 				malformedRetryCount: 0,
-				lastToolSignature: currentToolSignature,
+				lastToolSignature: onlyMonitoring ? undefined : currentToolSignature,
 				repeatedToolCallCount: currentRepeatedCount,
 				turnFacts: nextTurnFacts,
 				userTriggeredSkill,
+				userTaskKind,
 			});
 			return;
 		}

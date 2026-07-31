@@ -9,6 +9,7 @@ import {
 	useUserSubmit,
 	useVSCodePromptDispatcher,
 } from '@/app/hooks/useVSCodePromptHandling';
+import {SubagentsPreviewApp} from '@/app/previews/subagents-preview';
 import {InteractiveApp} from '@/app/sections/interactive-app';
 import type {AppProps} from '@/app/types';
 import AssistantReasoning from '@/components/assistant-reasoning';
@@ -17,6 +18,7 @@ import SecurityDisclaimer from '@/components/security-disclaimer';
 import StreamingMessage from '@/components/streaming-message';
 import StreamingReasoning from '@/components/streaming-reasoning';
 import {SubagentView} from '@/components/subagent-view';
+import {TextSelection} from '@/components/TextSelection';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {
 	shouldPromptExtensionInstall,
@@ -50,10 +52,8 @@ import {createPinoLogger} from '@/utils/logging/pino-logger';
 import {setGlobalMessageQueue} from '@/utils/message-queue';
 import {setNotificationsConfig} from '@/utils/notifications';
 import {getShutdownManager} from '@/utils/shutdown';
-import {pointerEvents} from '@/utils/terminal-mouse';
 import {
 	getCompactToolRunningSummary,
-	getLiveCompactToolExpandHitboxColumns,
 	LiveCompactCounts,
 	LiveCompactRunningSummary,
 } from '@/utils/tool-result-display';
@@ -82,7 +82,7 @@ export default function App({
 	const initialDevelopmentMode = useMemo(
 		() =>
 			cliMode ??
-			(nonInteractiveMode ? 'auto-accept' : (loadDefaultMode() ?? 'normal')),
+			(nonInteractiveMode ? 'auto-accept' : (loadDefaultMode() ?? 'yolo')),
 		[cliMode, nonInteractiveMode],
 	);
 	// Memoize the logger to prevent recreation on every render
@@ -90,8 +90,12 @@ export default function App({
 
 	// Use extracted hooks
 	const appState = useAppState(initialDevelopmentMode);
-	const [compactExpandHintHovered, setCompactExpandHintHovered] =
-		React.useState(false);
+	const exitPreviewRef = React.useRef<() => void>(() => {});
+	exitPreviewRef.current = () => {
+		appState.setActiveMode(null);
+		appState.setSettingsInitialTab('advanced');
+		setTimeout(() => appState.setIsSettingsMode(true), 0);
+	};
 	const userMessageQueue = useUserMessageQueue();
 	const queuedUserSubmitRef = React.useRef<
 		| ((
@@ -791,7 +795,6 @@ export default function App({
 			<LiveCompactCounts
 				counts={appState.compactToolCounts}
 				expanded={!appState.compactToolDisplay}
-				expandHintHovered={compactExpandHintHovered}
 			/>
 		) : null;
 	const liveCompactStatus = appState.compactToolCounts ? (
@@ -799,36 +802,6 @@ export default function App({
 			<LiveCompactRunningSummary counts={appState.compactToolCounts} />
 		) : null
 	) : null;
-
-	React.useEffect(() => {
-		const counts = appState.compactToolCounts;
-		if (!altScreenActive || !counts || Object.keys(counts).length === 0) {
-			setCompactExpandHintHovered(false);
-			return;
-		}
-
-		const hitbox = getLiveCompactToolExpandHitboxColumns(
-			counts,
-			!appState.compactToolDisplay,
-		);
-		if (!hitbox) return;
-
-		const onPointer = ({x}: {x: number; y: number}) => {
-			// Stock Ink does not expose rendered row coordinates. This keeps the
-			// affordance precise horizontally and leaves ctrl-o as the exact
-			// keyboard fallback in non-mouse terminals.
-			setCompactExpandHintHovered(x >= hitbox.start && x <= hitbox.end);
-		};
-
-		pointerEvents.on('pointer', onPointer);
-		return () => {
-			pointerEvents.off('pointer', onPointer);
-		};
-	}, [
-		altScreenActive,
-		appState.compactToolCounts,
-		appState.compactToolDisplay,
-	]);
 
 	const streamingLiveComponent =
 		chatHandler.isGenerating &&
@@ -859,9 +832,10 @@ export default function App({
 		) : null;
 
 	const interactiveLiveComponent =
-		appState.liveComponent || streamingLiveComponent ? (
+		liveCompactCounts || appState.liveComponent || streamingLiveComponent ? (
 			<>
-				{appState.liveComponent}
+				{liveCompactCounts}
+				{!liveCompactCounts && appState.liveComponent}
 				{streamingLiveComponent}
 			</>
 		) : null;
@@ -892,6 +866,11 @@ export default function App({
 				</TitleShapeContext.Provider>
 			</ThemeContext.Provider>
 		);
+	}
+
+	// Preview mode: render SubagentsPreviewApp as full app
+	if (appState.activeMode === 'preview') {
+		return <SubagentsPreviewApp onExit={exitPreviewRef.current} />;
 	}
 
 	// Main application render
@@ -936,6 +915,7 @@ export default function App({
 						/>
 					)}
 				</PrivacyContext.Provider>
+				<TextSelection />
 			</TitleShapeContext.Provider>
 		</ThemeContext.Provider>
 	);

@@ -16,6 +16,9 @@ export interface ModalSelectorsProps {
 	onLaunchTune?: () => void;
 	onLaunchIde?: () => void;
 	onMcpChanged?: () => void | Promise<void>;
+	currentSessionId?: string;
+	messageCount?: number;
+	onActivateDeveloperMode?: () => void;
 	activeMode: ActiveMode;
 	isSettingsMode: boolean;
 	settingsInitialTab?: SettingsTabId;
@@ -90,6 +93,9 @@ export function ModalSelectors({
 	onLaunchTune,
 	onLaunchIde,
 	onMcpChanged,
+	currentSessionId,
+	messageCount,
+	onActivateDeveloperMode,
 	tuneConfig,
 	onTuneSelect,
 	onTuneCancel,
@@ -124,6 +130,9 @@ export function ModalSelectors({
 				onLaunchTune={onLaunchTune}
 				onLaunchIde={onLaunchIde}
 				onMcpChanged={onMcpChanged}
+				currentSessionId={currentSessionId}
+				messageCount={messageCount}
+				onActivateDeveloperMode={onActivateDeveloperMode}
 			/>
 		);
 	}

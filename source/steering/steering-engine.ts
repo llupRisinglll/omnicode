@@ -20,12 +20,13 @@
  */
 
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {join, relative, resolve} from 'node:path';
 import {
 	DEFAULT_STEERING_COOLDOWN_TURNS,
 	DEFAULT_STEERING_MAX_FIRES,
 } from '@/constants';
 import {
+	conditionMatches,
 	describeInScope,
 	detectConstraintViolations,
 	evaluateRules,
@@ -36,6 +37,11 @@ import {
 	invokeInnerDaemon,
 } from '@/steering/innerdaemon';
 import {serializeToolArgs} from '@/steering/intent-classifier';
+import {
+	recordSteeringAction,
+	recordSteeringConditionMatch,
+	recordSteeringRecovery,
+} from '@/steering/telemetry';
 import {
 	type InnerDaemonRequest,
 	type InnerDaemonResponse,
@@ -69,6 +75,12 @@ export interface EvaluateOptions {
 	onDiagnostic?: (diagnostic: SteeringDiagnostic) => void;
 }
 
+export interface SteeringWatchdog {
+	ruleId: string;
+	timeoutMs: number;
+	message: string;
+}
+
 /**
  * Escalation ladder (finding #9 — "no escalation on relapse"). Repeated firing
  * of the SAME rule without its success criterion being met is a RELAPSE; each
@@ -82,14 +94,11 @@ export interface EvaluateOptions {
  *   level ≥ {@link ESCALATE_BLOCK_LEVEL} (persistent relapse):
  *                                upgrade inject → block   — stop re-nudging.
  *
- * The `maxFires → stop` backstop is UNCHANGED and is consulted BEFORE this
- * ladder: once `count ≥ maxFires` the candidate is a hard `stop`. So a rule
- * with the default maxFires (3) climbs nudge → firm → firm → stop, and only
- * rules with a larger maxFires reach the block rung — which keeps the existing
- * maxFires-backstop behavior (three injects then stop) intact. A non-`inject`
- * action (a native InnerDaemon block/stop) is already terminal and passes
- * through unescalated. `escalationLevel` is ALSO threaded into the InnerDaemon
- * request so InnerDaemon can raise its OWN message firmness independently.
+ * Exhaustion is consulted before this ladder. Advisory rules become dormant
+ * at maxFires; only rules declaring `onExhaustion: stop` terminate the loop.
+ * A non-`inject` action (a native InnerDaemon block/stop) is already terminal
+ * and passes through unescalated. `escalationLevel` is ALSO threaded into the
+ * InnerDaemon request so InnerDaemon can raise its OWN firmness independently.
  */
 const ESCALATE_BLOCK_LEVEL = 3;
 
@@ -137,7 +146,11 @@ export interface SteeringEngineOptions {
  */
 interface EngineState {
 	/** Per-rule fire tracking, keyed by rule id. */
-	fires: Map<string, {count: number; lastFireTurn: number}>;
+	fires: Map<
+		string,
+		{count: number; lastFireTurn: number; firstFireWallClockMs: number}
+	>;
+	lastActionRuleId?: string;
 }
 
 export class SteeringEngine {
@@ -204,11 +217,48 @@ export class SteeringEngine {
 	setRules(rules: SteeringRule[]): void {
 		this.rules = rules;
 		this.state.fires.clear();
+		this.state.lastActionRuleId = undefined;
 	}
 
 	/** Reset all fire/cooldown state (e.g. at the start of a new user turn). */
 	resetFireState(): void {
 		this.state.fires.clear();
+		this.state.lastActionRuleId = undefined;
+	}
+
+	/**
+	 * Return the shortest active within-turn budget. A watchdog is armed only
+	 * after at least one fact exists, so intent/path conditions are established
+	 * rather than guessed from the user prompt.
+	 */
+	getWithinTurnWatchdog(facts: TurnFact[]): SteeringWatchdog | null {
+		if (facts.length === 0) return null;
+		const latest = facts[facts.length - 1];
+		const eligible = this.rules
+			.filter(
+				rule =>
+					(rule.watch?.maxWallClockMsWithoutSuccess ?? 0) > 0 &&
+					(!rule.condition ||
+						conditionMatches(rule.condition, this.modelId, latest)) &&
+					(!rule.watch?.successCriterion ||
+						rule.watch.successCriterion === 'none' ||
+						!this.checker(rule.watch.successCriterion, latest, facts)),
+			)
+			.sort(
+				(a, b) =>
+					(a.watch?.maxWallClockMsWithoutSuccess ?? Infinity) -
+					(b.watch?.maxWallClockMsWithoutSuccess ?? Infinity),
+			);
+		const rule = eligible[0];
+		if (!rule) return null;
+		const timeoutMs = rule.watch?.maxWallClockMsWithoutSuccess ?? 0;
+		return {
+			ruleId: rule.id,
+			timeoutMs,
+			message: `InnerDaemon interrupted this turn after ${Math.round(
+				timeoutMs / 1000,
+			)}s because steering rule '${rule.id}' exceeded its within-turn budget. Reassess the approach or report the blocker before continuing.`,
+		};
 	}
 
 	/**
@@ -241,12 +291,37 @@ export class SteeringEngine {
 			}
 			return null;
 		}
+		const latest = facts[facts.length - 1];
+		for (const rule of this.rules) {
+			const fired = this.state.fires.get(rule.id);
+			const criterion = rule.watch?.successCriterion;
+			if (
+				fired &&
+				criterion &&
+				criterion !== 'none' &&
+				this.checker(criterion, latest, facts)
+			) {
+				recordSteeringRecovery(
+					rule.id,
+					Math.max(0, latest.wallClockMs - fired.firstFireWallClockMs),
+				);
+				this.state.fires.delete(rule.id);
+			}
+		}
+		for (const rule of this.rules) {
+			if (
+				!rule.condition ||
+				conditionMatches(rule.condition, this.modelId, latest)
+			)
+				recordSteeringConditionMatch(rule.id);
+		}
 
 		// 1. Instant hard-constraint violations (detector-only, no budget).
 		const violation = detectConstraintViolations(
 			facts,
 			this.rules,
 			this.modelId,
+			this.state.lastActionRuleId,
 		);
 		if (violation) {
 			logger.info('steering: constraint violation → block', {
@@ -254,6 +329,8 @@ export class SteeringEngine {
 				matched: violation.matched,
 			});
 			if (emit) emit(this.buildDiagnostic(facts, 'block'));
+			this.state.lastActionRuleId = violation.rule.id;
+			recordSteeringAction(violation.rule.id, 'block');
 			return {
 				type: 'block',
 				toolCallIds: [violation.toolCallId],
@@ -277,16 +354,85 @@ export class SteeringEngine {
 		}
 
 		// 3. Apply the first eligible candidate (respecting cooldown + maxFires).
-		for (const candidate of candidates) {
+		const orderedCandidates = this.rotateEqualPriorityCandidates(candidates);
+		for (const candidate of orderedCandidates) {
 			const action = await this.evaluateCandidate(candidate, facts, signal);
 			// A noop candidate is skipped — try the next one. A real action wins.
 			if (action && action.type !== 'noop') {
+				this.state.lastActionRuleId = candidate.rule.id;
+				recordSteeringAction(candidate.rule.id, action.type);
 				if (emit) emit(this.buildDiagnostic(facts, mapDecision(action.type)));
 				return action;
+			}
+			if (action?.type === 'noop') {
+				recordSteeringAction(candidate.rule.id, 'noop');
 			}
 		}
 		if (emit) emit(this.buildDiagnostic(facts, 'noop'));
 		return null;
+	}
+
+	/**
+	 * Evaluate hard tool constraints before dispatch. Unlike evaluate(), this
+	 * performs no budget or InnerDaemon work and is safe on a fact whose tool
+	 * calls have not executed yet.
+	 */
+	evaluateConstraints(facts: TurnFact[]): SteeringAction | null {
+		const latest = facts[facts.length - 1];
+		const activeRules = this.rules.filter(rule => {
+			const criterion = rule.watch?.successCriterion;
+			return (
+				!latest ||
+				!criterion ||
+				criterion === 'none' ||
+				!this.checker(criterion, latest, facts)
+			);
+		});
+		const violation = detectConstraintViolations(
+			facts,
+			activeRules,
+			this.modelId,
+			this.state.lastActionRuleId,
+		);
+		if (!violation) return null;
+		this.state.lastActionRuleId = violation.rule.id;
+		recordSteeringAction(violation.rule.id, 'block');
+		return {
+			type: 'block',
+			toolCallIds: [violation.toolCallId],
+			message: violation.constraint.message,
+			urgency: 'light',
+			ruleId: violation.rule.id,
+			model: this.innerDaemonModelId(),
+		};
+	}
+
+	private rotateEqualPriorityCandidates(
+		candidates: SteeringCandidate[],
+	): SteeringCandidate[] {
+		const previous = candidates.findIndex(
+			candidate => candidate.rule.id === this.state.lastActionRuleId,
+		);
+		if (previous < 0) return candidates;
+		const priority = candidates[previous].rule.priority ?? 0;
+		const start = candidates.findIndex(
+			candidate => (candidate.rule.priority ?? 0) === priority,
+		);
+		let end = start;
+		for (let i = start + 1; i < candidates.length; i++) {
+			if ((candidates[i].rule.priority ?? 0) !== priority) break;
+			end = i;
+		}
+		const group = candidates.slice(start, end + 1);
+		const groupPrevious = group.findIndex(
+			candidate => candidate.rule.id === this.state.lastActionRuleId,
+		);
+		return [
+			...candidates.slice(0, start),
+			...group.slice(groupPrevious + 1),
+			...group.slice(0, groupPrevious + 1),
+			...candidates.slice(end + 1),
+		];
 	}
 
 	/**
@@ -335,6 +481,7 @@ export class SteeringEngine {
 		const st = this.state.fires.get(rule.id) ?? {
 			count: 0,
 			lastFireTurn: -Infinity,
+			firstFireWallClockMs: facts[facts.length - 1]?.wallClockMs ?? 0,
 		};
 
 		// announce rules: proactive one-shot scenario-context injection. The moment
@@ -352,7 +499,11 @@ export class SteeringEngine {
 			) {
 				return null;
 			}
-			this.recordFire(rule.id, candidate.turnIndex);
+			this.recordFire(
+				rule.id,
+				candidate.turnIndex,
+				facts[facts.length - 1]?.wallClockMs ?? 0,
+			);
 			return {
 				type: 'inject',
 				message: rule.body ?? '',
@@ -368,12 +519,15 @@ export class SteeringEngine {
 		// the top level (see escalateAction).
 		const escalationLevel = st.count;
 
-		// Escalation: rule already fired maxFires times → hard stop.
+		// Exhaustion is dormant by default: steering should stop nagging, not stop
+		// the user's entire task. Hard termination is opt-in for safety rules.
 		if (st.count >= maxFires) {
-			logger.info('steering: maxFires exceeded → stop', {
+			logger.info('steering: maxFires exhausted', {
 				ruleId: rule.id,
 				fires: st.count,
+				onExhaustion: rule.onExhaustion ?? 'dormant',
 			});
+			if (rule.onExhaustion !== 'stop') return null;
 			return {
 				type: 'stop',
 				reason: `Steering rule '${rule.id}' fired ${st.count} times without progress. Stopping to avoid an unproductive loop. Last nudge was not followed.`,
@@ -387,7 +541,11 @@ export class SteeringEngine {
 
 		// detector-only rules act directly (no InnerDaemon call).
 		if (rule.mode === 'detector-only') {
-			this.recordFire(rule.id, candidate.turnIndex);
+			this.recordFire(
+				rule.id,
+				candidate.turnIndex,
+				facts[facts.length - 1]?.wallClockMs ?? 0,
+			);
 			return escalateAction(
 				{
 					type: 'inject',
@@ -414,19 +572,27 @@ export class SteeringEngine {
 		// Only count a fire if InnerDaemon actually steered (noop doesn't consume
 		// a fire slot — a false alarm shouldn't burn the escalation budget).
 		if (action.type !== 'noop') {
-			this.recordFire(rule.id, candidate.turnIndex);
+			this.recordFire(
+				rule.id,
+				candidate.turnIndex,
+				facts[facts.length - 1]?.wallClockMs ?? 0,
+			);
 			// Relapse upgrade: a repeated inject gets firmer / becomes a block as
-			// the escalation level climbs (the maxFires stop backstop already
-			// handled the terminal rung above).
+			// the escalation level climbs (the exhaustion policy was handled above).
 			return escalateAction(action, escalationLevel);
 		}
 		return action;
 	}
 
-	private recordFire(ruleId: string, turnIndex: number): void {
+	private recordFire(
+		ruleId: string,
+		turnIndex: number,
+		wallClockMs: number,
+	): void {
 		const st = this.state.fires.get(ruleId) ?? {
 			count: 0,
 			lastFireTurn: -Infinity,
+			firstFireWallClockMs: wallClockMs,
 		};
 		st.count += 1;
 		st.lastFireTurn = turnIndex;
@@ -751,6 +917,23 @@ export function createCriterionChecker(
 					f => f.toolCalls.some(isBrowserCall) || factHasAppRun(f),
 				);
 			}
+			case 'reproductionReported': {
+				const productWasDriven = scope.some(
+					f => f.toolCalls.some(isBrowserCall) || factHasAppRun(f),
+				);
+				if (!productWasDriven) return false;
+				return scope.some(f =>
+					f.toolCalls.some(tc => {
+						if (tc.function?.name !== 'report_reproduction') return false;
+						const result = resultFor(f, tc);
+						return Boolean(
+							result &&
+								!result.content.startsWith('Error:') &&
+								/REPRODUCTION_(RECORDED|BLOCKED)/.test(result.content),
+						);
+					}),
+				);
+			}
 			case 'artifactProducedThisTask': {
 				// Loop-stateful: met once ANY turn produced a concrete artifact — a
 				// `write_file`/`string_replace`, a `browser_*` call, or a test run.
@@ -784,8 +967,54 @@ export function createCriterionChecker(
 			}
 			case 'none':
 				return true;
-			default:
+			default: {
+				const cwd = resolve(fact.cwd ?? getCwd());
+				const safePath = (value: string): string | null => {
+					const target = resolve(cwd, value);
+					const rel = relative(cwd, target);
+					return rel === '' || (rel !== '..' && !rel.startsWith('../'))
+						? target
+						: null;
+				};
+				if (criterion.startsWith('fileExists:')) {
+					const target = safePath(criterion.slice('fileExists:'.length));
+					return target !== null && existsSync(target);
+				}
+				if (criterion.startsWith('fileContains:')) {
+					const [path, expected] = criterion
+						.slice('fileContains:'.length)
+						.split('::', 2);
+					const target = safePath(path);
+					if (!target || expected === undefined) return false;
+					try {
+						return readFileSync(target, 'utf8').includes(expected);
+					} catch {
+						return false;
+					}
+				}
+				if (criterion.startsWith('toolSucceeded:')) {
+					const tool = criterion.slice('toolSucceeded:'.length);
+					return scope.some(f =>
+						f.toolResults.some(r => r.name === tool && !r.isError),
+					);
+				}
+				if (criterion.startsWith('resultContains:')) {
+					const expected = criterion.slice('resultContains:'.length);
+					return scope.some(f =>
+						f.toolResults.some(r => r.content.includes(expected)),
+					);
+				}
+				if (criterion === 'gitChanged') {
+					return scope.some(f =>
+						f.toolCalls.some(tc =>
+							/^(git_add|git_commit|git_reset|git_checkout|git_merge|git_push)$/.test(
+								tc.function?.name ?? '',
+							),
+						),
+					);
+				}
 				return false;
+			}
 		}
 	};
 }

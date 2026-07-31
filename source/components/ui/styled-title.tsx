@@ -1,6 +1,6 @@
 import type {BoxProps} from 'ink';
 import {Box, Text} from 'ink';
-import {useTheme} from '@/hooks/useTheme';
+import {useOptionalTheme} from '@/hooks/useTheme';
 
 export type TitleShape =
 	| 'rounded'
@@ -197,7 +197,10 @@ export function StyledTitle({
 	...boxProps
 }: StyledTitleProps) {
 	const shapes = shapeCharacters[shape];
-	const {colors} = useTheme();
+	// Optional: StyledTitle also renders inline from low-level components
+	// (e.g. the status line's focus pill) that may sit outside a
+	// ThemeProvider in tests. Only the textColor fallback reads theme colors.
+	const {colors} = useOptionalTheme();
 
 	// Use provided textColor or fall back to theme's base color
 	const effectiveTextColor = textColor || colors.base;

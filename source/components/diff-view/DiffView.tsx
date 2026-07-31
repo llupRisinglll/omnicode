@@ -1,6 +1,7 @@
 import {Box, Text} from 'ink';
 import React from 'react';
 import {themes} from '@/config/themes';
+import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import type {Colors} from '@/types/ui';
 import type {DiffSegment} from '@/utils/inline-diff';
@@ -10,7 +11,7 @@ import {highlightCode, languageForPath} from './syntax.js';
 export interface DiffViewProps {
 	/** Flat, already-computed line list (see `computeDiffLines`). */
 	lines: DiffLine[];
-	/** Total terminal width available for the diff block. Default 80. */
+	/** Total width available for the diff block. Defaults to the viewport. */
 	width?: number;
 	/** Cap the number of logical diff lines rendered; unlimited when omitted. */
 	maxLines?: number;
@@ -21,8 +22,6 @@ export interface DiffViewProps {
 	 */
 	filePath?: string;
 }
-
-const DEFAULT_WIDTH = 80;
 
 type WrapPart = {type: DiffSegment['type']; text: string};
 
@@ -129,11 +128,13 @@ function wrapParts(parts: WrapPart[], width: number): WrapPart[][] {
  */
 export default function DiffView({
 	lines,
-	width = DEFAULT_WIDTH,
+	width,
 	maxLines,
 	filePath,
 }: DiffViewProps): React.ReactElement {
 	const {colors, currentTheme} = useTheme();
+	const {actualWidth} = useResponsiveTerminal();
+	const effectiveWidth = width ?? Math.max(1, actualWidth - 2);
 
 	// Contrast guard: cli-highlight's default theme assumes a dark terminal
 	// background. Only layer syntax token colors on dark themes — light
@@ -175,7 +176,7 @@ export default function DiffView({
 	// `{numberField} {sigil} ` — the number field, a space, the sigil, and a
 	// trailing space before content.
 	const gutterWidth = numberFieldWidth + 3;
-	const contentWidth = Math.max(width - gutterWidth, 1);
+	const contentWidth = Math.max(effectiveWidth - gutterWidth, 1);
 
 	const rowElements: React.ReactElement[] = [];
 
@@ -236,7 +237,7 @@ export default function DiffView({
 	});
 
 	return (
-		<Box flexDirection="column">
+		<Box flexDirection="column" width={effectiveWidth}>
 			{rowElements}
 			{hiddenCount > 0 && (
 				<Text color={colors.secondary}>

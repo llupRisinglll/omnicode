@@ -44,6 +44,7 @@ export type ActiveMode =
 	| 'checkpointLoad'
 	| 'sessionSelector'
 	| 'tune'
+	| 'preview'
 	| null;
 
 export function useAppState(

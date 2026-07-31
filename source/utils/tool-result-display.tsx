@@ -16,6 +16,8 @@ import {generateKey} from '@/session/key-generator';
 import {displayForFormat} from '@/tools/tool-aliases';
 import type {ToolManager} from '@/tools/tool-manager';
 import type {ToolCall, ToolResult} from '@/types/index';
+import {isScreenTextAt, isScreenTextBlockAt} from '@/utils/selection';
+import {clickEvents, pointerEvents} from '@/utils/terminal-mouse';
 import {parseToolArguments} from '@/utils/tool-args-parser';
 
 /**
@@ -141,19 +143,26 @@ function getCompactDisplayToolName(
 	return displayForFormat(toolName, 'claude-code');
 }
 
-function ToolGlyph({running = false}: {running?: boolean}) {
+export function ToolGlyph({running = false}: {running?: boolean}) {
 	const {colors} = useTheme();
+	const [visible, setVisible] = React.useState(true);
+	useEffect(() => {
+		if (!running) return;
+		const timer = setInterval(() => setVisible(v => !v), 500);
+		return () => clearInterval(timer);
+	}, [running]);
+	if (running) {
+		return <Text color={colors.secondary}>{visible ? '\u2726' : ' '} </Text>;
+	}
 	return (
 		<>
-			<Text color={running ? colors.secondary : colors.primary}>
-				{'\u2692'}{' '}
-			</Text>
+			<Text color={colors.success}>{'\u2726'}</Text>
 			<Text> </Text>
 		</>
 	);
 }
 
-/** Compact tool result display - shows "⚒  toolName ×N". */
+/** Compact tool result display - shows "✦  toolName ×N". */
 function CompactToolResult({
 	toolName,
 	count = 1,
@@ -237,10 +246,10 @@ export function getCompactToolCountsHeaderText(
 		normalizedEntries[0]?.[1].detail;
 
 	if (singleInline) {
-		return `⚒  ${formatToolNameWithCountText(normalizedEntries[0][0], normalizedEntries[0][1])}(${truncateDetail(normalizedEntries[0][1].detail ?? '')})`;
+		return `✦  ${formatToolNameWithCountText(normalizedEntries[0][0], normalizedEntries[0][1])}(${truncateDetail(normalizedEntries[0][1].detail ?? '')})`;
 	}
 
-	return `⚒  ${running ? 'Running ' : 'Ran '}${formatGroupedToolEntriesText(normalizedEntries)}`;
+	return `✦  ${running ? 'Running ' : 'Ran '}${formatGroupedToolEntriesText(normalizedEntries)}`;
 }
 
 function ToolNameWithCount({
@@ -287,7 +296,7 @@ function ToolNameWithCount({
 	);
 }
 
-/** Compact grouped tool display - shows "⚒ toolA ×N, toolB ×N". */
+/** Compact grouped tool display - shows "✦ toolA ×N, toolB ×N". */
 export function CompactToolCountsLine({
 	entries,
 	running = false,
@@ -461,61 +470,126 @@ export function getLiveCompactToolExpandHitboxColumns(
 	};
 }
 
-function CompactToolExpandHint({
-	expanded,
-	hovered = false,
-}: {
-	expanded: boolean;
-	hovered?: boolean;
-}) {
-	const {colors} = useTheme();
-	return (
-		<Text
-			color={hovered ? colors.text : colors.secondary}
-			backgroundColor={hovered ? colors.secondary : undefined}
-		>
-			{' '}
-			{getCompactToolExpandHintText(expanded)}
-		</Text>
-	);
-}
-
 function CompactToolActivityBlock({
 	entries,
 	expanded,
-	expandHintHovered = false,
 	running = false,
 }: {
 	entries: Array<[string, CompactToolActivity]>;
 	expanded: boolean;
-	expandHintHovered?: boolean;
 	running?: boolean;
 }) {
 	const {colors} = useTheme();
+	const [mouseExpansion, setMouseExpansion] = React.useState<{
+		base: boolean;
+		value: boolean;
+	} | null>(null);
+	const [mouseHovered, setMouseHovered] = React.useState(false);
+	const effectiveExpanded =
+		mouseExpansion?.base === expanded ? mouseExpansion.value : expanded;
 	const detailPreview = compactRunningDetailLines(entries, {
-		expanded,
+		expanded: effectiveExpanded,
 		runningOnly: running,
 	});
 	const failedAlreadyInTitle = entries.some(([, activity]) => activity.failed);
+	const headerText = getCompactToolCountsHeaderText(entries);
+	const collapsedSummary = `${
+		detailPreview.hiddenCount > 0
+			? `… +${detailPreview.hiddenCount} more ${
+					detailPreview.hiddenCount === 1
+						? detailPreview.footerNoun.slice(0, -1)
+						: detailPreview.footerNoun
+				}${detailPreview.footer ? ' · ' : ''}`
+			: ''
+	}${detailPreview.footer ?? ''}`;
+	// Footer text rendered on its own row — when hiddenCount > 0 the combined
+	// collapsedSummary spans two rows (header + footer), so we must check the
+	// footer text separately as well.
+	const collapsedFooterText =
+		detailPreview.hiddenCount > 0
+			? `… +${detailPreview.hiddenCount} more ${
+					detailPreview.hiddenCount === 1
+						? detailPreview.footerNoun.slice(0, -1)
+						: detailPreview.footerNoun
+				}${
+					detailPreview.footer ? ` · ${detailPreview.footer}` : ''
+				} (ctrl-o to ${effectiveExpanded ? 'collapse' : 'expand'})`
+			: '';
+	const expandedEndText =
+		detailPreview.footer ??
+		detailPreview.lines.at(-1)?.text ??
+		getCompactToolExpandHintText(effectiveExpanded);
+	const isMouseTarget = React.useCallback(
+		(x: number, y: number) => {
+			if (effectiveExpanded) {
+				return isScreenTextBlockAt(x, y, headerText, expandedEndText);
+			}
+			// Collapsed: check header expand hint and/or footer hidden-count text
+			if (isScreenTextAt(x, y, collapsedSummary)) return true;
+			if (collapsedFooterText && isScreenTextAt(x, y, collapsedFooterText))
+				return true;
+			return false;
+		},
+		[
+			collapsedFooterText,
+			collapsedSummary,
+			effectiveExpanded,
+			expandedEndText,
+			headerText,
+		],
+	);
+	const activeBackground = effectiveExpanded ? colors.secondary : undefined;
+
+	React.useEffect(() => {
+		const onClick = ({x, y}: {x: number; y: number}) => {
+			if (isMouseTarget(x, y)) {
+				setMouseExpansion(value => ({
+					base: expanded,
+					value: !(value?.base === expanded ? value.value : expanded),
+				}));
+			}
+		};
+		clickEvents.on('click', onClick);
+		return () => {
+			clickEvents.off('click', onClick);
+		};
+	}, [expanded, isMouseTarget]);
+
+	React.useEffect(() => {
+		const onPointer = ({x, y}: {x: number; y: number}) => {
+			const hovered = isMouseTarget(x - 1, y - 1);
+			setMouseHovered(value => (value === hovered ? value : hovered));
+		};
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [isMouseTarget]);
+
 	return (
-		<Box flexDirection="column">
-			<Text>
-				<CompactToolCountsLine entries={entries} running={running} />
-				{!running &&
-					detailPreview.state &&
-					!(detailPreview.state === 'failed' && failedAlreadyInTitle) && (
-						<Text color={colors.secondary}> {detailPreview.state}</Text>
-					)}
-				{running && <Text color={colors.secondary}> (running)</Text>}
-				<CompactToolExpandHint
-					expanded={expanded}
-					hovered={expandHintHovered}
-				/>
-			</Text>
+		<Box flexDirection="column" width="100%" backgroundColor={activeBackground}>
+			<Box>
+				<Text
+					color={effectiveExpanded ? colors.text : undefined}
+					backgroundColor={activeBackground}
+				>
+					<CompactToolCountsLine entries={entries} running={running} />
+					{!running &&
+						detailPreview.state &&
+						!(detailPreview.state === 'failed' && failedAlreadyInTitle) && (
+							<Text color={colors.secondary}> {detailPreview.state}</Text>
+						)}
+					{running && <Text color={colors.secondary}> (running)</Text>}
+				</Text>
+			</Box>
 			{detailPreview.lines.map((line, index) => (
-				<Text key={`${index}-${line.text.slice(0, 24)}`}>
+				<Text
+					key={`${index}-${line.text.slice(0, 24)}`}
+					color={effectiveExpanded ? colors.text : undefined}
+					backgroundColor={activeBackground}
+				>
 					<Text color={colors.secondary}>
-						{index === 0 ? '  └  ' : '     '}
+						{index === 0 ? '  \u2514  ' : '     '}
 					</Text>
 					<CompactDetailLineText toolName={line.toolName} text={line.text} />
 				</Text>
@@ -524,38 +598,57 @@ function CompactToolActivityBlock({
 				(running &&
 					detailPreview.footer &&
 					detailPreview.footerNoun === 'lines')) && (
-				<Text color={colors.secondary}>
-					{'     '}
-					{detailPreview.hiddenCount > 0 && (
-						<>
-							… +{detailPreview.hiddenCount} more{' '}
-							{detailPreview.hiddenCount === 1
-								? detailPreview.footerNoun.slice(0, -1)
-								: detailPreview.footerNoun}
-							{detailPreview.footer && ' · '}
-						</>
-					)}
-					{detailPreview.footer}
-				</Text>
+				<Box
+					width="100%"
+					backgroundColor={
+						mouseHovered || effectiveExpanded ? colors.secondary : undefined
+					}
+				>
+					<Text
+						color={
+							mouseHovered || effectiveExpanded ? colors.text : colors.secondary
+						}
+					>
+						{'     '}
+						{detailPreview.hiddenCount > 0 && (
+							<>
+								… +{detailPreview.hiddenCount} more{' '}
+								{detailPreview.hiddenCount === 1
+									? detailPreview.footerNoun.slice(0, -1)
+									: detailPreview.footerNoun}
+								{detailPreview.footer && ' \u00b7 '}
+							</>
+						)}
+						{detailPreview.footer}
+						{!running &&
+							` (ctrl-o to ${effectiveExpanded ? 'collapse' : 'expand'})`}
+					</Text>
+				</Box>
 			)}
 			{detailPreview.hiddenCount === 0 &&
 				detailPreview.footer &&
 				!(running && detailPreview.footerNoun === 'lines') && (
-					<Text color={colors.secondary}>
-						{'     '}
-						{detailPreview.footer}
-					</Text>
+					<Box
+						width="100%"
+						backgroundColor={
+							mouseHovered || effectiveExpanded ? colors.secondary : undefined
+						}
+					>
+						<Text
+							color={
+								mouseHovered || effectiveExpanded
+									? colors.text
+									: colors.secondary
+							}
+						>
+							{'     '}
+							{detailPreview.footer}
+						</Text>
+					</Box>
 				)}
 		</Box>
 	);
 }
-
-/**
- * Compact tool error display - shows "\u2692 toolName failed" in error red.
- * Used in compact display mode so failures don't dump the full verbose
- * error; the model still receives the full error in conversation history,
- * so this only trims what the user sees.
- */
 function CompactToolError({toolName}: {toolName: string}) {
 	return <CompactToolResult toolName={toolName} failed={true} />;
 }
@@ -579,6 +672,14 @@ function CompactFileResult({
 	newStr,
 }: CompactFileResultProps) {
 	const {colors} = useTheme();
+	const [mouseExpansion, setMouseExpansion] = React.useState<{
+		base: boolean;
+		value: boolean;
+	} | null>(null);
+	const [mouseHovered, setMouseHovered] = React.useState(false);
+
+	const effectiveExpanded =
+		mouseExpansion?.base === false ? mouseExpansion.value : false;
 
 	const newLines = newStr?.split('\n') ?? [];
 	const oldLines = oldStr?.split('\n') ?? [];
@@ -590,7 +691,8 @@ function CompactFileResult({
 
 	const displayName = toolName === 'write_file' ? 'Write' : 'Edit';
 
-	const terminalWidth = process.stdout.columns || DEFAULT_TERMINAL_COLUMNS;
+	const terminalWidth =
+		(process.stdout.columns || DEFAULT_TERMINAL_COLUMNS) - 2;
 	const configuredMaxLines = getCompactDiffMaxLines();
 	const maxLines = configuredMaxLines === 0 ? undefined : configuredMaxLines;
 
@@ -616,7 +718,9 @@ function CompactFileResult({
 		// there's nothing to diff against. Keep the existing first-N-lines
 		// preview rather than inventing snapshot plumbing to fabricate an
 		// all-additions diff.
-		const previewCount = Math.min(newLines.length, 3);
+		const previewCount = effectiveExpanded
+			? newLines.length
+			: Math.min(newLines.length, 3);
 		const previewElements: React.ReactElement[] = [];
 		for (let i = 0; i < previewCount; i++) {
 			const lineNumStr = String(i + 1).padStart(4, ' ');
@@ -628,15 +732,66 @@ function CompactFileResult({
 				</Box>,
 			);
 		}
-		if (newLines.length > 3) {
+		if (!effectiveExpanded && newLines.length > 3) {
+			const hidden = newLines.length - 3;
+			const moreText = `...${hidden} more line${hidden !== 1 ? 's' : ''}`;
 			previewElements.push(
-				<Text key="more" color={colors.secondary}>
-					...{newLines.length - 3} more lines
-				</Text>,
+				<Box
+					key="more"
+					width="100%"
+					backgroundColor={mouseHovered ? colors.secondary : undefined}
+				>
+					<Text
+						color={mouseHovered ? colors.text : colors.secondary}
+						backgroundColor={mouseHovered ? colors.secondary : undefined}
+					>
+						{moreText}
+					</Text>
+				</Box>,
 			);
 		}
 		diffBody = <Box flexDirection="column">{previewElements}</Box>;
 	}
+
+	// Mouse hit-target texts for collapsed toggling
+	const collapsedTarget =
+		!effectiveExpanded && newLines.length > 3
+			? `...${newLines.length - 3} more line${newLines.length - 3 !== 1 ? 's' : ''}`
+			: '';
+
+	const isMouseTarget = React.useCallback(
+		(x: number, y: number) => {
+			if (!collapsedTarget) return false;
+			return isScreenTextAt(x, y, collapsedTarget);
+		},
+		[collapsedTarget],
+	);
+
+	React.useEffect(() => {
+		const onClick = ({x, y}: {x: number; y: number}) => {
+			if (isMouseTarget(x, y)) {
+				setMouseExpansion(value => ({
+					base: false,
+					value: !(value?.base === false ? value.value : false),
+				}));
+			}
+		};
+		clickEvents.on('click', onClick);
+		return () => {
+			clickEvents.off('click', onClick);
+		};
+	}, [isMouseTarget]);
+
+	React.useEffect(() => {
+		const onPointer = ({x, y}: {x: number; y: number}) => {
+			const hovered = isMouseTarget(x - 1, y - 1);
+			setMouseHovered(value => (value === hovered ? value : hovered));
+		};
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [isMouseTarget]);
 
 	const message = (
 		<Box flexDirection="column">
@@ -669,8 +824,8 @@ function flattenToOneLine(value: string): string {
 
 /**
  * Extract the primary detail for omnicode's detailed compact tool lines:
- * "⚒ <tool_name>(<detail>)" (e.g. "⚒ git_diff(git diff --staged)",
- * "⚒ fetch_url(https://…)"). Returns null for tools with no meaningful single
+ * "✦ <tool_name>(<detail>)" (e.g. "✦ git_diff(git diff --staged)",
+ * "✦ fetch_url(https://…)"). Returns null for tools with no meaningful single
  * detail — those keep the count tally.
  */
 export function getCompactToolDetail(
@@ -770,7 +925,7 @@ const PREVIEW_COLLAPSED_LINES = 3;
 const PREVIEW_EXPANDED_LINES = 50;
 
 /**
- * Detailed compact display for omnicode: one "⚒ <toolName>(<detail>)" line
+ * Detailed compact display for omnicode: one "✦ <toolName>(<detail>)" line
  * (actual command / path / pattern / URL — the user's security-visibility
  * ask), optionally followed by a "⎿"-prefixed preview of the tool's output
  * and a "… +N lines (ctrl+r to expand)" hint when truncated. Single header
@@ -899,17 +1054,15 @@ export function LiveCompactRunningSummary({
 
 /**
  * Live display component for running compact tool counts.
- * Shows accumulated counts during execution (e.g. "⚒ read_file ×7").
+ * Shows accumulated counts during execution (e.g. "✦ read_file ×7").
  * Rendered in the live area (not Static) so it updates in-place.
  */
 export function LiveCompactCounts({
 	counts,
 	expanded = false,
-	expandHintHovered = false,
 }: {
 	counts: CompactToolCountsInput;
 	expanded?: boolean;
-	expandHintHovered?: boolean;
 }) {
 	const entries = normalizeCompactToolEntries(counts);
 	const {entries: mergedEntries, hasRunning} = mergeCompactToolEntries(entries);
@@ -936,18 +1089,18 @@ export function LiveCompactCounts({
 				<CompactToolActivityBlock
 					entries={regularEntries}
 					expanded={expanded}
-					expandHintHovered={expandHintHovered}
 					running={hasRegularRunning}
 				/>
 			)}
-			{agentEntries.map(([toolName, activity]) => (
-				<CompactToolActivityBlock
-					key={toolName}
-					entries={[[toolName, activity]]}
-					expanded={expanded}
-					expandHintHovered={expandHintHovered}
-					running={isCompactActivityRunning(activity)}
-				/>
+			{agentEntries.map(([toolName, activity], idx) => (
+				<React.Fragment key={toolName}>
+					<CompactToolActivityBlock
+						entries={[[toolName, activity]]}
+						expanded={expanded}
+						running={isCompactActivityRunning(activity)}
+					/>
+					{idx < agentEntries.length - 1 && <Box height={1} />}
+				</React.Fragment>
 			))}
 		</Box>
 	);
@@ -987,12 +1140,10 @@ export function CompactToolCountsSummaryBlock({
 	expanded,
 	entries,
 	indent,
-	expandHintHovered = false,
 }: {
 	expanded: boolean;
 	entries: Array<[string, number | CompactToolActivity]>;
 	indent: boolean;
-	expandHintHovered?: boolean;
 }) {
 	const {colors} = useTheme();
 	const normalizedEntries = entries.map(([toolName, value]) => [
@@ -1011,16 +1162,16 @@ export function CompactToolCountsSummaryBlock({
 				<CompactToolActivityBlock
 					entries={regularEntries}
 					expanded={expanded}
-					expandHintHovered={expandHintHovered}
 				/>
 			)}
-			{agentEntries.map(([toolName, activity]) => (
-				<CompactToolActivityBlock
-					key={toolName}
-					entries={[[toolName, activity]]}
-					expanded={expanded}
-					expandHintHovered={expandHintHovered}
-				/>
+			{agentEntries.map(([toolName, activity], idx) => (
+				<React.Fragment key={toolName}>
+					<CompactToolActivityBlock
+						entries={[[toolName, activity]]}
+						expanded={expanded}
+					/>
+					{idx < agentEntries.length - 1 && <Box height={1} />}
+				</React.Fragment>
 			))}
 		</Box>
 	);
@@ -1053,14 +1204,14 @@ export async function displayToolResult(
 	const iconTheme = iconDisplay?.iconTheme ?? false;
 	// Check if this is an error result. Generic failures are prefixed "Error: ";
 	// validation failures (bad arg types, failed per-tool validators) come back
-	// as "⚒ Validation failed: …" — both should render as a red error so the
+	// as "✦ Validation failed: …" — both should render as a red error so the
 	// user sees the same feedback the model gets.
-	const isValidationError = result.content.startsWith('⚒ Validation failed');
+	const isValidationError = result.content.startsWith('✦ Validation failed');
 	const isError = result.content.startsWith('Error: ') || isValidationError;
 
 	if (isError) {
 		// Compact mode: condense failures to a short red one-liner
-		// ("⚒ write_file ") instead of the full error output.
+		// ("✦ write_file ") instead of the full error output.
 		// The model still receives the full error in conversation history,
 		// so this only trims the user-facing display.
 		if (compact && !ALWAYS_EXPANDED_TOOLS.has(result.name)) {
@@ -1182,7 +1333,7 @@ export async function displayToolResult(
 					addToChatQueue(
 						<ToolMessage
 							key={generateKey(`tool-result-${result.tool_call_id}`)}
-							title={`⚒ ${result.name}`}
+							title={`✦ ${result.name}`}
 							message={String(formattedResult)}
 							hideBox={true}
 						/>,
@@ -1193,7 +1344,7 @@ export async function displayToolResult(
 				addToChatQueue(
 					<ToolMessage
 						key={generateKey(`tool-result-${result.tool_call_id}`)}
-						title={`⚒ ${result.name}`}
+						title={`✦ ${result.name}`}
 						message={result.content}
 						hideBox={true}
 					/>,
@@ -1204,7 +1355,7 @@ export async function displayToolResult(
 			addToChatQueue(
 				<ToolMessage
 					key={generateKey(`tool-result-${result.tool_call_id}`)}
-					title={`⚒ ${result.name}`}
+					title={`✦ ${result.name}`}
 					message={result.content}
 					hideBox={true}
 				/>,

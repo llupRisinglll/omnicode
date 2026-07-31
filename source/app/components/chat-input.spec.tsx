@@ -125,7 +125,7 @@ test('ChatInput keeps UserInput visible while a tool is executing', t => {
 	unmount();
 });
 
-test('ChatInput renders live compact counts above the input prompt', t => {
+test('ChatInput does not render live compact counts (they live in the chat area)', t => {
 	const props = createDefaultProps({
 		client: {},
 		isBusy: true,
@@ -135,13 +135,9 @@ test('ChatInput renders live compact counts above the input prompt', t => {
 
 	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
 	const output = lastFrame()!;
-	t.regex(output, /running-agent-strip/);
+	t.notRegex(output, /running-agent-strip/);
 	t.regex(output, /Working/);
 	t.regex(output, /0\/3 agents completed/);
-	t.true(
-		output.indexOf('running-agent-strip') <
-			output.indexOf('Working'),
-	);
 	unmount();
 });
 
@@ -233,7 +229,7 @@ test('ChatInput shows live task list when liveTaskList provided', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	// Note: marginLeft={-1} in the component cuts off the first character in tests
-	t.regex(output!, /asks/);
+	t.regex(output!, /1 done, 1 in progress, 1 open/);
 	t.regex(output!, /First task/);
 	t.regex(output!, /Second task/);
 	t.regex(output!, /Third task/);
