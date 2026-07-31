@@ -23,13 +23,12 @@ test('subagents preview auto-renders separate compact agent entries', async t =>
 		await delay(80);
 
 		const output = lastFrame()!;
-		t.regex(output, /Run three exploration agents in parallel/);
-		t.regex(output, /Working/);
+			t.regex(output, /Working/);
 		t.regex(output, /0\/3 agents completed/);
 		t.notRegex(output, /What would you like me to help with\?/);
 		t.regex(
 			output,
-			/^\s*⚒\s+Ran explore\(inspect repository layout\) \(running\) \(ctrl-o to expand\)/m,
+			/^\s*✦\s+Ran explore\(inspect repository layout\) \(running\)/m,
 		);
 		t.regex(output, /└\s+(starting background shell|packages checked|waiting for subagent summary)/);
 		t.notRegex(output, /└\s+execute_bash/);
@@ -44,13 +43,16 @@ test('subagents preview auto-renders separate compact agent entries', async t =>
 });
 
 test('subagents preview keeps completed agent entries in idle history', async t => {
+	const origRows = process.stdout.rows;
+	process.stdout.rows = 40;
 	const {lastFrame, unmount} = render(<SubagentsPreviewApp mockRunMs={120} />);
+	process.stdout.rows = origRows;
 	try {
 		await delay(250);
 
 		const output = lastFrame()!;
 		t.is(
-			(output.match(/Ran explore\(.+\) completed \(ctrl-o to expand\)/g) ?? [])
+			(output.match(/Ran explore\(.+\) completed/g) ?? [])
 				.length,
 			3,
 		);

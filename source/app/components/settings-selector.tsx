@@ -1,8 +1,12 @@
+import {existsSync} from 'node:fs';
+import chalk from 'chalk';
 import {Box, Text, useInput} from 'ink';
 import BigText from 'ink-big-text';
 import Gradient from 'ink-gradient';
 import SelectInput from 'ink-select-input';
-import {type ReactNode, useMemo, useState} from 'react';
+import {type ReactNode, useEffect, useMemo, useState} from 'react';
+import {FilterableSelectList} from '@/components/filterable-select-list';
+import TextInput from '@/components/text-input';
 import {StyledSelectInput} from '@/components/ui/styled-select-input';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
@@ -36,6 +40,12 @@ import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
+import {
+	sanitizeAgentFileName,
+	writeProjectAgentDefinition,
+} from '@/subagents/agent-file';
+import {getSubagentLoader} from '@/subagents/subagent-loader';
+import type {SubagentConfigWithSource} from '@/subagents/types';
 import type {ToolManager} from '@/tools/tool-manager';
 import type {NotificationsConfig} from '@/types/config';
 import type {SettingsTabId} from '@/types/settings';
@@ -61,6 +71,8 @@ export type ManagedSettingsPanel =
 	| 'status-line'
 	| 'subagent-model-explore'
 	| 'subagent-model-innerdaemon'
+	| 'subagent-edit'
+	| 'subagent-create'
 	| 'innerdaemon-model'
 	| 'json-config'
 	| 'web-search'
@@ -86,6 +98,9 @@ export interface SettingsSelectorProps {
 	 * this, servers added here only take effect on the next launch.
 	 */
 	onMcpChanged?: () => void | Promise<void>;
+	currentSessionId?: string;
+	messageCount?: number;
+	onActivateDeveloperMode?: () => void;
 }
 
 function ThemePreviewMessage({
@@ -162,8 +177,8 @@ function ThemeMiniPreview({
 			</Box>
 
 			<Box flexDirection="column" marginBottom={compact ? 0 : 1}>
-				<Text color={colors.tool}>⚒ read_file source/app.tsx</Text>
-				<Text color={colors.success}>⚒ Completed successfully</Text>
+				<Text color={colors.tool}>✦ read_file source/app.tsx</Text>
+				<Text color={colors.success}>✦ Completed successfully</Text>
 				{!compact && (
 					<Text color={colors.warning}>
 						⚠ Review generated changes before commit
@@ -956,7 +971,9 @@ export function SettingsPrivacyPanel({
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
 	const {colors} = useTheme();
 
-	const [enabled, setEnabled] = useState(getPrivacyPreference());
+	const [scrubbingEnabled, setScrubbingEnabled] = useState(
+		getPrivacyPreference(),
+	);
 
 	useInput((_, key) => {
 		if (key.escape) {
@@ -970,15 +987,15 @@ export function SettingsPrivacyPanel({
 	const items = useMemo(() => {
 		return [
 			{
-				label: `Prompt Scrubbing: ${enabled ? 'ON' : 'OFF'}`,
-				value: 'toggle',
+				label: `Prompt Scrubbing: ${scrubbingEnabled ? 'ON' : 'OFF'}`,
+				value: 'prompt-scrubbing',
 			},
 		];
-	}, [enabled]);
+	}, [scrubbingEnabled]);
 
 	const handleSelect = () => {
-		const next = !enabled;
-		setEnabled(next);
+		const next = !scrubbingEnabled;
+		setScrubbingEnabled(next);
 		updatePrivacyPreference(next);
 	};
 
@@ -1039,15 +1056,6 @@ export function SettingsInnerDaemonModelPanel({
 
 	const currentModel = getInnerDaemonModel(); // null = inherit (default)
 
-	useInput((_, key) => {
-		if (key.escape) {
-			onCancel();
-		}
-		if (key.shift && key.tab) {
-			onBack();
-		}
-	});
-
 	// Offer models from the current provider (the one the main agent runs on),
 	// since InnerDaemon inherits the parent provider and only switches the
 	// model — a model from another provider would not resolve at runtime. Fall
@@ -1060,19 +1068,20 @@ export function SettingsInnerDaemonModelPanel({
 			? providers.find(p => p.name === activeProvider)
 			: undefined;
 
-		const modelEntries: {label: string; value: string}[] = match
-			? (match.models ?? []).map(m => ({label: m, value: m}))
+		const modelItems = match
+			? (match.models ?? []).map(m => ({
+					label: m === currentModel ? `${m} (current)` : m,
+					value: m,
+				}))
 			: providers.flatMap(p =>
 					(p.models ?? []).map(m => ({
-						label: `${m} (${p.name})`,
+						label:
+							m === currentModel
+								? `${m} (current) (${p.name})`
+								: `${m} (${p.name})`,
 						value: m,
 					})),
 				);
-
-		const withMarker = ({label, value}: {label: string; value: string}) => ({
-			label: value === currentModel ? `${label} (current)` : label,
-			value,
-		});
 
 		return [
 			{
@@ -1082,20 +1091,14 @@ export function SettingsInnerDaemonModelPanel({
 						: 'Default: main agent model',
 				value: INNERDAEMON_INHERIT,
 			},
-			...modelEntries.map(withMarker),
+			...modelItems,
 		];
 	}, [currentModel]);
 
-	const initialIndex = useMemo(() => {
-		if (currentModel === null) return 0;
-		const idx = items.findIndex(item => item.value === currentModel);
-		return idx >= 0 ? idx : 0;
-	}, [items, currentModel]);
+	const currentValue = currentModel ?? INNERDAEMON_INHERIT;
 
-	const handleSelect = (item: {label: string; value: string}) => {
-		updateInnerDaemonModel(
-			item.value === INNERDAEMON_INHERIT ? null : item.value,
-		);
+	const handleSelect = (value: string) => {
+		updateInnerDaemonModel(value === INNERDAEMON_INHERIT ? null : value);
 		onBack();
 	};
 
@@ -1111,24 +1114,17 @@ export function SettingsInnerDaemonModelPanel({
 			flexDirection="column"
 			marginBottom={1}
 		>
-			{!isNarrow && (
-				<Box marginBottom={1}>
-					<Text color={colors.secondary}>
-						Model the InnerDaemon steering subagent runs on. Default inherits
-						the main agent model; pick a fast, thinking-off model so a steering
-						nudge doesn't stall on a heavy-thinking model. Enter to apply,
-						Shift+Tab back, Esc to go back.
-					</Text>
-				</Box>
-			)}
-			<StyledSelectInput
+			<FilterableSelectList
 				items={items}
-				initialIndex={initialIndex}
+				initialSelectedValue={currentValue}
 				onSelect={handleSelect}
+				onCancel={onCancel}
 			/>
-			{isNarrow && (
-				<Box marginTop={0}>
-					<Text color={colors.secondary}>Enter/Shift+Tab/Esc</Text>
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>
+						Type to filter · ↑↓ navigate · Enter select · Esc cancel
+					</Text>
 				</Box>
 			)}
 		</TitledBoxWithPreferences>
@@ -1147,15 +1143,6 @@ export function SettingsSubagentModelPanel({
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
 	const {colors} = useTheme();
 	const current = getSubagentModelPreference(agentName);
-
-	useInput((_, key) => {
-		if (key.escape) {
-			onCancel();
-		}
-		if (key.shift && key.tab) {
-			onBack();
-		}
-	});
 
 	const items = useMemo(() => {
 		const providerItems = loadAllProviderConfigs().flatMap(provider =>
@@ -1181,15 +1168,12 @@ export function SettingsSubagentModelPanel({
 		];
 	}, [current]);
 
-	const initialIndex = useMemo(() => {
-		if (!current) return 0;
-		const currentValue = JSON.stringify(current);
-		const idx = items.findIndex(item => item.value === currentValue);
-		return idx >= 0 ? idx : 0;
-	}, [items, current]);
+	const currentValue = current
+		? JSON.stringify(current)
+		: SUBAGENT_MODEL_INHERIT;
 
-	const handleSelect = (item: {label: string; value: string}) => {
-		if (item.value === SUBAGENT_MODEL_INHERIT) {
+	const handleSelect = (value: string) => {
+		if (value === SUBAGENT_MODEL_INHERIT) {
 			updateSubagentModelPreference(agentName, null);
 			if (agentName === 'innerdaemon') {
 				updateInnerDaemonModel(null);
@@ -1197,7 +1181,7 @@ export function SettingsSubagentModelPanel({
 			onBack();
 			return;
 		}
-		const selected = JSON.parse(item.value) as {
+		const selected = JSON.parse(value) as {
 			provider: string;
 			model: string;
 		};
@@ -1222,22 +1206,17 @@ export function SettingsSubagentModelPanel({
 			flexDirection="column"
 			marginBottom={1}
 		>
-			{!isNarrow && (
-				<Box marginBottom={1}>
-					<Text color={colors.secondary}>
-						Default inherits the main agent provider and model. Enter to apply,
-						Shift+Tab back, Esc to go back.
-					</Text>
-				</Box>
-			)}
-			<StyledSelectInput
+			<FilterableSelectList
 				items={items}
-				initialIndex={initialIndex}
+				initialSelectedValue={currentValue}
 				onSelect={handleSelect}
+				onCancel={onCancel}
 			/>
-			{isNarrow && (
-				<Box marginTop={0}>
-					<Text color={colors.secondary}>Enter/Shift+Tab/Esc</Text>
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>
+						Type to filter · ↑↓ navigate · Enter select · Esc cancel
+					</Text>
 				</Box>
 			)}
 		</TitledBoxWithPreferences>
@@ -1341,6 +1320,1017 @@ export function SettingsStatusLinePanel({
 			<Box marginTop={1}>
 				<Text color={colors.secondary}>Enter/Esc</Text>
 			</Box>
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Subagent Edit Panel - for editing a single subagent's settings
+export function SettingsSubagentEditPanel({
+	agentName,
+	onBack,
+	onCancel,
+	onOpenPanel,
+}: {
+	agentName: string;
+	onBack: () => void;
+	onCancel: () => void;
+	onOpenPanel: (panel: string) => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
+	const [selectedField, setSelectedField] = useState(0);
+
+	useEffect(() => {
+		const loader = getSubagentLoader();
+		void (async () => {
+			await loader.reload();
+			const loaded = await loader.listSubagents();
+			setAgents(loaded);
+		})();
+	}, []);
+
+	const agent = agents.find(a => a.name === agentName);
+
+	const modelSummary = agent
+		? (() => {
+				const pref = getSubagentModelPreference(agentName);
+				if (pref) return `${pref.provider} / ${pref.model}`;
+				if (agent.model && agent.model !== 'inherit') return agent.model;
+				return 'inherit';
+			})()
+		: 'inherit';
+
+	const toolsSummary = agent?.tools
+		? `${agent.tools.length} tools`
+		: 'all tools';
+
+	const descSummary = agent?.description
+		? agent.description.length > 50
+			? `${agent.description.slice(0, 47)}...`
+			: agent.description
+		: 'no description';
+
+	const fields = useMemo(
+		() => [
+			{
+				id: 'model',
+				label: 'Model',
+				value: modelSummary,
+				panel: `subagent-model:${agentName}`,
+			},
+			{
+				id: 'tools',
+				label: 'Tools',
+				value: toolsSummary,
+				panel: `subagent-tools:${agentName}`,
+			},
+			{
+				id: 'description',
+				label: 'Description',
+				value: descSummary,
+				panel: `subagent-description:${agentName}`,
+			},
+		],
+		[modelSummary, toolsSummary, descSummary, agentName],
+	);
+
+	const FIELD_COUNT = fields.length;
+
+	useInput((input, key) => {
+		if (key.escape) {
+			onCancel();
+			return;
+		}
+		if (key.shift && key.tab) {
+			onBack();
+			return;
+		}
+		if (key.upArrow) {
+			setSelectedField(prev => (prev > 0 ? prev - 1 : FIELD_COUNT - 1));
+			return;
+		}
+		if (key.downArrow) {
+			setSelectedField(prev => (prev < FIELD_COUNT - 1 ? prev + 1 : 0));
+			return;
+		}
+		if (key.return || input === ' ') {
+			const field = fields[selectedField];
+			if (field) onOpenPanel(field.panel);
+		}
+	});
+
+	if (!agent) {
+		return (
+			<TitledBoxWithPreferences
+				title={isNarrow ? agentName : `Edit ${agentName}`}
+				width={isNarrow ? '100%' : boxWidth}
+				borderColor={colors.primary}
+				paddingX={2}
+				paddingY={1}
+				flexDirection="column"
+				marginBottom={1}
+			>
+				<Text color={colors.secondary} italic>
+					Loading agent configuration…
+				</Text>
+			</TitledBoxWithPreferences>
+		);
+	}
+
+	const displayName = agent.title ?? agent.name;
+	const labelWidth = Math.min(16, Math.max(14, Math.floor(boxWidth * 0.2)));
+
+	return (
+		<TitledBoxWithPreferences
+			title={isNarrow ? displayName : `Edit ${displayName}`}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{/* Agent header card with title and description */}
+			<Box
+				marginBottom={1}
+				paddingX={1}
+				paddingY={1}
+				flexDirection="column"
+				borderStyle="round"
+				borderColor={colors.secondary}
+				borderDimColor
+			>
+				<Text color={colors.text} bold>
+					{displayName}
+				</Text>
+				{agent.description && (
+					<Text color={colors.secondary}>
+						{agent.description.length > 80
+							? `${agent.description.slice(0, 77)}...`
+							: agent.description}
+					</Text>
+				)}
+				{!agent.description && (
+					<Text color={colors.secondary} dimColor>
+						No description set
+					</Text>
+				)}
+			</Box>
+
+			{/* Editable fields */}
+			{fields.map((field, index) => {
+				const isSelected = index === selectedField;
+				return (
+					<Box key={field.id} flexDirection="row" marginBottom={0}>
+						<Box minWidth={2}>
+							<Text color={isSelected ? colors.primary : 'transparent'}>
+								{isSelected ? '❯' : ' '}
+							</Text>
+						</Box>
+						<Box width={labelWidth}>
+							<Text
+								color={isSelected ? colors.info : colors.text}
+								bold={isSelected}
+							>
+								{field.label}
+							</Text>
+						</Box>
+						<Box marginLeft={1} flexShrink={1}>
+							<Text
+								color={isSelected ? colors.text : colors.secondary}
+								wrap="truncate-end"
+							>
+								{field.value}
+							</Text>
+						</Box>
+					</Box>
+				);
+			})}
+
+			{/* Footer hint */}
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>
+						↑↓ navigate · Enter edit · Esc back
+					</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Subagent Tools Panel - checklist of tools for a subagent
+export function SettingsSubagentToolsPanel({
+	agentName,
+	toolNames,
+	onBack,
+	onCancel,
+}: {
+	agentName: string;
+	toolNames?: string[];
+	onBack: () => void;
+	onCancel: () => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
+	const [allowSet, setAllowSet] = useState<Set<string>>(new Set());
+	const [disallowSet, setDisallowSet] = useState<Set<string>>(new Set());
+	const [toolIndex, setToolIndex] = useState(0);
+	const [initialized, setInitialized] = useState(false);
+	const [filterQuery, setFilterQuery] = useState('');
+	const [isSearchMode, setIsSearchMode] = useState(false);
+
+	const allTools =
+		toolNames && toolNames.length > 0
+			? toolNames
+			: [
+					'read_file',
+					'search_file_contents',
+					'find_files',
+					'list_directory',
+					'execute_bash',
+					'write_file',
+					'string_replace',
+					'diff_edit',
+				];
+
+	// Filtered tool list for search
+	const visibleTools = useMemo(() => {
+		if (!filterQuery) return allTools;
+		const q = filterQuery.toLowerCase();
+		return allTools.filter(t => t.toLowerCase().includes(q));
+	}, [allTools, filterQuery]);
+
+	const MAX_TOOL_WINDOW = 7;
+	const toolWindowStart = Math.max(
+		0,
+		Math.min(toolIndex - 3, Math.max(0, visibleTools.length - MAX_TOOL_WINDOW)),
+	);
+	const toolWindow = visibleTools.slice(
+		toolWindowStart,
+		toolWindowStart + MAX_TOOL_WINDOW,
+	);
+	const safeToolIndex = Math.min(
+		toolIndex,
+		Math.max(0, visibleTools.length - 1),
+	);
+
+	const allowedCount = allowSet.size;
+	const disallowedCount = disallowSet.size;
+	const defaultCount = allTools.length - allowedCount - disallowedCount;
+
+	useEffect(() => {
+		const loader = getSubagentLoader();
+		void (async () => {
+			await loader.reload();
+			const loaded = await loader.listSubagents();
+			setAgents(loaded);
+			const agent = loaded.find(a => a.name === agentName);
+			if (agent) {
+				if (agent.disallowedTools && agent.disallowedTools.length > 0) {
+					setDisallowSet(new Set(agent.disallowedTools));
+				}
+				if (agent.tools && agent.tools.length > 0) {
+					setAllowSet(new Set(agent.tools));
+				}
+			}
+			setInitialized(true);
+		})();
+	}, [agentName]);
+
+	useInput((input, key) => {
+		if (isSearchMode) {
+			if (key.escape) {
+				setFilterQuery('');
+				setIsSearchMode(false);
+				return;
+			}
+			if (key.return || key.downArrow) {
+				setIsSearchMode(false);
+				return;
+			}
+			if (key.backspace || key.delete) {
+				setFilterQuery(prev => prev.slice(0, -1));
+				setToolIndex(0);
+				return;
+			}
+			if (input && !key.ctrl && !key.meta && !key.upArrow) {
+				setFilterQuery(prev => prev + input);
+				setToolIndex(0);
+			}
+			return;
+		}
+
+		if (key.escape) {
+			onCancel();
+			return;
+		}
+		if (key.shift && key.tab) {
+			onBack();
+			return;
+		}
+		if (key.upArrow) {
+			setToolIndex(prev => Math.max(0, prev - 1));
+			return;
+		}
+		if (key.downArrow) {
+			setToolIndex(prev => Math.min(visibleTools.length - 1, prev + 1));
+			return;
+		}
+		if (input === '/' || input === '') {
+			// / key or any non-control input starts search
+			if (input === '/') {
+				setIsSearchMode(true);
+				setFilterQuery('');
+				return;
+			}
+		}
+		if (key.return || input === ' ') {
+			// Cycle: default → allowed → disallowed → default
+			const tool = visibleTools[safeToolIndex];
+			if (!tool) return;
+			if (allowSet.has(tool)) {
+				setAllowSet(prev => {
+					const n = new Set(prev);
+					n.delete(tool);
+					return n;
+				});
+				setDisallowSet(prev => {
+					const n = new Set(prev);
+					n.add(tool);
+					return n;
+				});
+			} else if (disallowSet.has(tool)) {
+				setDisallowSet(prev => {
+					const n = new Set(prev);
+					n.delete(tool);
+					return n;
+				});
+			} else {
+				setAllowSet(prev => {
+					const n = new Set(prev);
+					n.add(tool);
+					return n;
+				});
+			}
+			return;
+		}
+		if (input === 'a') {
+			setAllowSet(new Set(allTools));
+			setDisallowSet(new Set());
+			return;
+		}
+		if (input === 'c') {
+			setAllowSet(new Set());
+			setDisallowSet(new Set());
+			return;
+		}
+		if (input === 's') {
+			const agent = agents.find(a => a.name === agentName);
+			if (agent) {
+				const allowed = Array.from(allowSet).sort();
+				const disallowed = Array.from(disallowSet).sort();
+				writeProjectAgentDefinition(
+					process.cwd(),
+					{
+						name: agent.name,
+						title: agent.title,
+						description: agent.description,
+						provider: agent.provider,
+						model: agent.model ?? 'inherit',
+						contextWindow: agent.contextWindow,
+						tools: agent.tools,
+						disallowedTools: agent.disallowedTools,
+						internal: agent.internal,
+						systemPrompt: agent.systemPrompt,
+					},
+					{
+						tools: allowed.length > 0 ? allowed : undefined,
+						disallowedTools: disallowed.length > 0 ? disallowed : undefined,
+					},
+				);
+			}
+			onCancel();
+			return;
+		}
+		// Printable character → start search
+		if (input && input.length === 1 && !key.ctrl && !key.meta) {
+			setIsSearchMode(true);
+			setFilterQuery(input);
+			setToolIndex(0);
+		}
+	});
+
+	if (!initialized) {
+		return (
+			<TitledBoxWithPreferences
+				title={`${agentName} Tools`}
+				width={isNarrow ? '100%' : boxWidth}
+				borderColor={colors.primary}
+				paddingX={2}
+				paddingY={1}
+				flexDirection="column"
+				marginBottom={1}
+			>
+				<Text color={colors.secondary} italic>
+					Loading tools…
+				</Text>
+			</TitledBoxWithPreferences>
+		);
+	}
+
+	return (
+		<TitledBoxWithPreferences
+			title={`${agentName} Tools`}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{/* Summary bar */}
+			<Box marginBottom={1} flexDirection="row" columnGap={2}>
+				<Text color={colors.success} bold>
+					{'●'} {allowedCount} allowed
+				</Text>
+				{disallowedCount > 0 && (
+					<Text color={colors.warning} bold>
+						{'✕'} {disallowedCount} blocked
+					</Text>
+				)}
+				{defaultCount > 0 && (
+					<Text color={colors.secondary}>
+						{'○'} {defaultCount} default
+					</Text>
+				)}
+			</Box>
+
+			{/* Search box */}
+			<Box
+				flexShrink={0}
+				borderStyle="round"
+				borderColor={isSearchMode ? colors.info : colors.secondary}
+				borderDimColor={!isSearchMode}
+				paddingX={1}
+				marginBottom={1}
+			>
+				<Text color={colors.secondary}>{'⌕ '}</Text>
+				{isSearchMode ? (
+					<Text>
+						{filterQuery.length === 0
+							? chalk.inverse('Type to filter…'[0]) +
+								chalk.hex(colors.info)('Type to filter…'.slice(1)) +
+								' '
+							: filterQuery + chalk.inverse(' ')}
+					</Text>
+				) : (
+					<Text color={colors.secondary}>Type to filter… </Text>
+				)}
+			</Box>
+
+			{/* Tool check list */}
+			{visibleTools.length === 0 && (
+				<Text color={colors.secondary}>No tools matching "{filterQuery}"</Text>
+			)}
+			{toolWindow.map((tool, offset) => {
+				const absoluteIndex = toolWindowStart + offset;
+				const isFocused = absoluteIndex === safeToolIndex;
+				const isAllowed = allowSet.has(tool);
+				const isDisallowed = disallowSet.has(tool);
+
+				let icon: string;
+				let iconColor: string;
+				if (isAllowed) {
+					icon = '●';
+					iconColor = colors.success;
+				} else if (isDisallowed) {
+					icon = '✕';
+					iconColor = colors.warning;
+				} else {
+					icon = '○';
+					iconColor = colors.secondary;
+				}
+
+				return (
+					<Box key={tool} flexDirection="row">
+						<Box minWidth={2}>
+							<Text color={isFocused ? colors.primary : 'transparent'}>
+								{isFocused ? '❯' : ' '}
+							</Text>
+						</Box>
+						<Box marginRight={1}>
+							<Text color={iconColor} bold={isAllowed || isDisallowed}>
+								{icon}
+							</Text>
+						</Box>
+						<Text
+							color={
+								isFocused
+									? colors.text
+									: isAllowed || isDisallowed
+										? colors.text
+										: colors.secondary
+							}
+							bold={isFocused && (isAllowed || isDisallowed)}
+						>
+							{tool}
+						</Text>
+					</Box>
+				);
+			})}
+
+			{/* Footer hints */}
+			{!isNarrow && (
+				<Box marginTop={1} flexDirection="column">
+					<Text color={colors.secondary}>
+						Space cycle: ○ default → ● allowed → ✕ blocked · / search
+					</Text>
+					<Text color={colors.secondary}>
+						a all · c clear · s save · Esc back
+					</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+export function SettingsSubagentDescriptionPanel({
+	agentName,
+	onBack,
+	onCancel,
+}: {
+	agentName: string;
+	onBack: () => void;
+	onCancel: () => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
+	const [editValue, setEditValue] = useState('');
+	const [initialized, setInitialized] = useState(false);
+
+	useEffect(() => {
+		const loader = getSubagentLoader();
+		void (async () => {
+			await loader.reload();
+			const loaded = await loader.listSubagents();
+			setAgents(loaded);
+			const agent = loaded.find(a => a.name === agentName);
+			setEditValue(agent?.description ?? '');
+			setInitialized(true);
+		})();
+	}, [agentName]);
+
+	useInput((_, key) => {
+		if (key.escape) {
+			onCancel();
+		}
+	});
+
+	const handleSave = (value: string) => {
+		const agent = agents.find(a => a.name === agentName);
+		if (agent) {
+			const newDescription = value.trim() || agent.description;
+			writeProjectAgentDefinition(
+				process.cwd(),
+				{
+					name: agent.name,
+					title: agent.title,
+					description: agent.description,
+					provider: agent.provider,
+					model: agent.model ?? 'inherit',
+					contextWindow: agent.contextWindow,
+					tools: agent.tools,
+					disallowedTools: agent.disallowedTools,
+					internal: agent.internal,
+					systemPrompt: agent.systemPrompt,
+				},
+				{description: newDescription},
+			);
+		}
+		// Go back to the edit panel, not the agents list
+		onCancel();
+	};
+
+	if (!initialized) {
+		return (
+			<TitledBoxWithPreferences
+				title={`${agentName} Description`}
+				width={isNarrow ? '100%' : boxWidth}
+				borderColor={colors.primary}
+				paddingX={2}
+				paddingY={1}
+				flexDirection="column"
+				marginBottom={1}
+			>
+				<Text color={colors.secondary} italic>
+					Loading description…
+				</Text>
+			</TitledBoxWithPreferences>
+		);
+	}
+
+	return (
+		<TitledBoxWithPreferences
+			title={`${agentName} Description`}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{!isNarrow && (
+				<Box marginBottom={1} flexDirection="column">
+					<Text color={colors.secondary}>
+						Describe when this agent should be delegated to (e.g. "Use for
+						network diagnostics and API debugging").
+					</Text>
+					<Text color={colors.secondary}>Enter save · Esc cancel</Text>
+				</Box>
+			)}
+			<Box marginTop={1}>
+				<TextInput
+					value={editValue}
+					onChange={setEditValue}
+					onSubmit={handleSave}
+					placeholder="When should Nanocoder delegate to this agent?"
+					wrapWidth={Math.max(20, boxWidth - 8)}
+				/>
+			</Box>
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Subagent List Panel - collapsed list of subagents (opened from Agents tab)
+// Pure, module-scope so the row memo below can depend on it without it
+// changing identity every render.
+function formatAgentModelForRow(agent: SubagentConfigWithSource): string {
+	const preference = getSubagentModelPreference(agent.name);
+	if (preference) return `${preference.provider} / ${preference.model}`;
+	if (agent.provider && agent.model && agent.model !== 'inherit') {
+		return `${agent.provider} / ${agent.model}`;
+	}
+	if (agent.model && agent.model !== 'inherit') return agent.model;
+	return 'inherit';
+}
+
+export function SettingsSubagentListPanel({
+	onBack,
+	onCancel,
+	onOpenPanel,
+	onAgentChanged,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+	onOpenPanel: (panel: string) => void;
+	onAgentChanged?: (preferredName?: string) => Promise<void>;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
+	const [selectedIdx, setSelectedIdx] = useState(0);
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		const loader = getSubagentLoader();
+		void (async () => {
+			await loader.reload();
+			const loaded = await loader.listSubagents();
+			setAgents(loaded.filter(a => a.name !== 'innerdaemon'));
+			setLoading(false);
+		})();
+	}, []);
+
+	const items = useMemo(() => {
+		const list: Array<{
+			id: string;
+			label: string;
+			value: string;
+			panel: string;
+		}> = agents.map(agent => ({
+			id: `agent-${agent.name}`,
+			label: agent.title ?? agent.name,
+			value: `model: ${formatAgentModelForRow(agent)} · tools: ${agent.tools ? agent.tools.length : 'all'}`,
+			panel: `subagent-edit:${agent.name}`,
+		}));
+		list.push({
+			id: 'add-subagent',
+			label: '+ New Subagent',
+			value: '',
+			panel: 'subagent-create',
+		});
+		return list;
+	}, [agents]);
+
+	const totalItems = items.length;
+	const labelWidth = Math.min(30, Math.max(14, Math.floor(boxWidth * 0.35)));
+
+	useInput((input, key) => {
+		if (key.escape) {
+			onCancel();
+			return;
+		}
+		if (key.shift && key.tab) {
+			onBack();
+			return;
+		}
+		if (key.upArrow)
+			setSelectedIdx(prev => (prev > 0 ? prev - 1 : totalItems - 1));
+		if (key.downArrow) {
+			setSelectedIdx(prev => (prev < totalItems - 1 ? prev + 1 : 0));
+		}
+		if (key.return || input === ' ') {
+			const item = items[selectedIdx];
+			if (!item) return;
+			if (item.panel === 'subagent-create') {
+				onOpenPanel('subagent-create');
+			} else {
+				onOpenPanel(item.panel);
+			}
+		}
+	});
+
+	if (loading) {
+		return (
+			<TitledBoxWithPreferences
+				title="Subagents"
+				width={isNarrow ? '100%' : boxWidth}
+				borderColor={colors.primary}
+				paddingX={2}
+				paddingY={1}
+				flexDirection="column"
+				marginBottom={1}
+			>
+				<Text color={colors.secondary} italic>
+					Loading subagents…
+				</Text>
+			</TitledBoxWithPreferences>
+		);
+	}
+
+	if (totalItems === 0) {
+		return (
+			<TitledBoxWithPreferences
+				title="Subagents"
+				width={isNarrow ? '100%' : boxWidth}
+				borderColor={colors.primary}
+				paddingX={2}
+				paddingY={1}
+				flexDirection="column"
+				marginBottom={1}
+			>
+				<Text color={colors.secondary}>No subagents configured.</Text>
+				<Box marginTop={1}>
+					<Text color={colors.text}>
+						Press Enter to create your first subagent.
+					</Text>
+				</Box>
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>Enter create · Esc back</Text>
+				</Box>
+			</TitledBoxWithPreferences>
+		);
+	}
+
+	return (
+		<TitledBoxWithPreferences
+			title="Subagents"
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{items.map((item, index) => {
+				const isSelected = index === selectedIdx;
+				const isAction = item.id === 'add-subagent';
+				return (
+					<Box key={item.id} flexDirection="row">
+						<Box minWidth={2}>
+							<Text color={isSelected ? colors.primary : 'transparent'}>
+								{isSelected ? '❯' : ' '}
+							</Text>
+						</Box>
+						<Box width={labelWidth}>
+							<Text
+								color={
+									isSelected
+										? colors.info
+										: isAction
+											? colors.text
+											: colors.text
+								}
+								bold={isSelected || isAction}
+							>
+								{item.label}
+							</Text>
+						</Box>
+						{item.value && (
+							<Box marginLeft={1} flexShrink={1}>
+								<Text
+									color={isSelected ? colors.text : colors.secondary}
+									wrap="truncate-end"
+								>
+									{item.value}
+								</Text>
+							</Box>
+						)}
+					</Box>
+				);
+			})}
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>
+						↑↓ navigate · Enter edit · Esc back
+					</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Subagent Create Panel - for creating a new subagent
+export function SettingsSubagentCreatePanel({
+	onBack,
+	onCancel,
+	onCreated,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+	onCreated?: (preferredName?: string) => Promise<void>;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+	const [name, setName] = useState('');
+	const [notice, setNotice] = useState<string | null>(null);
+
+	useInput((_, key) => {
+		if (key.escape) {
+			onCancel();
+		}
+		if (key.shift && key.tab) {
+			onBack();
+		}
+	});
+
+	const createAgent = (rawName: string) => {
+		const safeName = sanitizeAgentFileName(rawName);
+		if (!safeName) {
+			setNotice('Agent name must include letters, numbers, _ or -');
+			return;
+		}
+		const filePath = `${process.cwd()}/.nanocoder/agents/${safeName}.md`;
+		if (existsSync(filePath)) {
+			setNotice(`${safeName} already exists`);
+			return;
+		}
+		writeProjectAgentDefinition(process.cwd(), {
+			name: safeName,
+			title: rawName.trim() || safeName,
+			description:
+				'Custom subagent. Edit this description to teach Nanocoder when to delegate here.',
+			model: 'inherit',
+			// New agents get all tools by default; block subagent delegation
+			disallowedTools: ['agent'],
+			systemPrompt: `You are ${safeName}, a custom Nanocoder subagent. Complete the delegated task using the tools you are allowed to use, then report the result concisely with any relevant files, commands, or blockers.`,
+		});
+		void onCreated?.(safeName);
+		onBack();
+	};
+
+	const previewName = name.trim()
+		? sanitizeAgentFileName(name) || '?'
+		: 'agent-name';
+	const fileName = previewName !== '?' ? `${previewName}.md` : '';
+
+	return (
+		<TitledBoxWithPreferences
+			title="Create Agent"
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			{!isNarrow && (
+				<Box marginBottom={1} flexDirection="column">
+					<Text color={colors.secondary}>
+						Name your new subagent. It will be saved as a markdown file in{' '}
+						<Text color={colors.text}>.nanocoder/agents/</Text>.
+					</Text>
+				</Box>
+			)}
+			<Box marginTop={1}>
+				<TextInput
+					value={name}
+					onChange={setName}
+					onSubmit={value => createAgent(value)}
+					placeholder="agent-name"
+				/>
+			</Box>
+			{/* Live filename preview */}
+			{name.trim().length > 0 && fileName && (
+				<Box marginTop={0}>
+					<Text color={colors.secondary}>→ .nanocoder/agents/{fileName}</Text>
+				</Box>
+			)}
+			{notice && (
+				<Box marginTop={1}>
+					<Text color={colors.warning}>{notice}</Text>
+				</Box>
+			)}
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>Enter create · Esc cancel</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Developer Mode confirmation panel
+export function SettingsDeveloperModePanel({
+	onBack,
+	onCancel,
+	onActivateDeveloperMode,
+	currentSessionId,
+	messageCount,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+	onActivateDeveloperMode?: () => void;
+	currentSessionId?: string;
+	messageCount?: number;
+}) {
+	const {colors} = useTheme();
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+
+	useInput((input, key) => {
+		if (key.escape) {
+			onCancel();
+			return;
+		}
+		if (key.shift && key.tab) {
+			onBack();
+			return;
+		}
+		if (key.return || input === ' ') {
+			onActivateDeveloperMode?.();
+			onBack();
+		}
+	});
+
+	const hasMessages = (messageCount ?? 0) > 0;
+
+	return (
+		<TitledBoxWithPreferences
+			title="Settings · Developer Mode"
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			<Box marginBottom={1}>
+				<Text color={colors.secondary}>
+					Switch to developer mode? The app will enter preview mode for
+					rendering and testing UI components. Only preview commands will be
+					available.
+				</Text>
+			</Box>
+			{hasMessages && (
+				<Box marginBottom={1} flexDirection="column">
+					<Text color={colors.warning}>
+						Warning: The current conversation has {messageCount} message
+						{messageCount === 1 ? '' : 's'}. Switching to developer mode will
+						close this session.
+					</Text>
+					<Box marginTop={1}>
+						<Text color={colors.secondary}>
+							To resume later, use{' '}
+							<Text bold color={colors.text}>
+								/resume
+							</Text>
+							{' or '}
+							<Text bold color={colors.text}>
+								--resume {currentSessionId ?? '(id unknown)'}
+							</Text>
+						</Text>
+					</Box>
+				</Box>
+			)}
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>Enter confirm · Esc cancel</Text>
+				</Box>
+			)}
 		</TitledBoxWithPreferences>
 	);
 }

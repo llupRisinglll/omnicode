@@ -248,6 +248,23 @@ export function updatePrivacyPreference(value: boolean): void {
 }
 
 /**
+ * Get the semantic memory preference from preferences
+ */
+export function getSemanticMemoryEnabled(): boolean {
+	const preferences = loadPreferences();
+	return preferences.semanticMemoryEnabled ?? true;
+}
+
+/**
+ * Save the semantic memory preference
+ */
+export function updateSemanticMemoryEnabled(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.semanticMemoryEnabled = value;
+	savePreferences(preferences);
+}
+
+/**
  * Get the show-working-indicator preference from preferences
  */
 export function getShowWorkingIndicator(): boolean {
@@ -270,7 +287,7 @@ export function updateShowWorkingIndicator(value: boolean): void {
  */
 export function getAlternateScreen(): boolean {
 	const preferences = loadPreferences();
-	return preferences.alternateScreen ?? false;
+	return preferences.alternateScreen ?? true;
 }
 
 /**
@@ -279,6 +296,17 @@ export function getAlternateScreen(): boolean {
 export function updateAlternateScreen(value: boolean): void {
 	const preferences = loadPreferences();
 	preferences.alternateScreen = value;
+	savePreferences(preferences);
+}
+
+export function getDeveloperMode(): boolean {
+	const preferences = loadPreferences();
+	return preferences.developerMode ?? false;
+}
+
+export function updateDeveloperMode(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.developerMode = value;
 	savePreferences(preferences);
 }
 
@@ -291,6 +319,7 @@ export function updateAlternateScreen(value: boolean): void {
 
 type SteeringPrefsListener = () => void;
 const steeringPrefsListeners = new Set<SteeringPrefsListener>();
+let steeringRulesRevision = 0;
 
 /**
  * Subscribe to InnerDaemon preference changes. Returns an unsubscribe fn.
@@ -308,6 +337,17 @@ export function subscribeSteeringPrefs(
 
 function emitSteeringPrefsChanged(): void {
 	for (const listener of steeringPrefsListeners) listener();
+}
+
+/** Revision used to reload steering rules created or edited during a session. */
+export function getSteeringRulesRevision(): number {
+	return steeringRulesRevision;
+}
+
+/** Notify active chats that the on-disk steering rule set changed. */
+export function notifySteeringRulesChanged(): void {
+	steeringRulesRevision += 1;
+	emitSteeringPrefsChanged();
 }
 
 /** Whether auto-steering (InnerDaemon) is enabled. Default true. */

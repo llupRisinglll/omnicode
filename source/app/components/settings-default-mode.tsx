@@ -76,7 +76,7 @@ export function SettingsDefaultModePanel({
 			<Box marginBottom={1}>
 				<Text color={colors.secondary}>
 					Initial development mode for new sessions. Current:{' '}
-					{currentMode ?? '(not set — defaults to normal)'}
+					{currentMode ?? '(not set — defaults to yolo)'}
 				</Text>
 			</Box>
 			{/* Label and description are separate rows: as one long string they
