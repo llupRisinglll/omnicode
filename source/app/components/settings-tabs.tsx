@@ -6,6 +6,7 @@ import {StyledTitle} from '@/components/ui/styled-title';
 import {getAppConfig, loadDefaultMode, reloadAppConfig} from '@/config/index';
 import {
 	getAlternateScreen,
+	getInnerDaemonEffort,
 	getInnerDaemonModel,
 	getNanocoderShape,
 	getNotificationsPreference,
@@ -269,7 +270,12 @@ function buildRowsForTab(
 								kind: 'managed',
 								id: 'innerdaemon-model',
 								label: 'Model',
-								value: getInnerDaemonModel() ?? 'default (main agent)',
+								value: (() => {
+									const model = getInnerDaemonModel();
+									const effort = getInnerDaemonEffort();
+									if (!model) return 'default (main agent)';
+									return effort ? `${model} [${effort}]` : model;
+								})(),
 								panel: 'innerdaemon-model',
 								indent: true,
 							} as SettingRow,
@@ -494,7 +500,7 @@ function SettingRowLine({
 					{row.label}
 				</Text>
 			</Box>
-			<Text color={colors.secondary} wrap={isNarrow ? 'truncate' : undefined}>
+			<Text color={rowColor} wrap={isNarrow ? 'truncate' : undefined}>
 				{valueText}
 			</Text>
 		</Box>

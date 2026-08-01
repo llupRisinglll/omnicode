@@ -479,6 +479,7 @@ export interface UserPreferences {
 	 * finding #10).
 	 */
 	innerDaemonModel?: string | null;
+	innerDaemonEffort?: 'minimal' | 'low' | 'medium' | 'high';
 	/**
 	 * Per-subagent provider/model overrides. Missing agent entries default to the
 	 * subagent definition's own provider/model; built-ins use `model: inherit`,
@@ -489,6 +490,7 @@ export interface UserPreferences {
 		{
 			provider: string;
 			model: string;
+			effort?: 'minimal' | 'low' | 'medium' | 'high';
 		} | null
 	>;
 }

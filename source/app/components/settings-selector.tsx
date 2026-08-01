@@ -27,6 +27,7 @@ import {
 	savePreferences,
 	updateCompactDiffMaxLines,
 	updateCompactToolDisplay,
+	updateInnerDaemonEffort,
 	updateInnerDaemonModel,
 	updateNanocoderShape,
 	updateNotificationsPreference,
@@ -1122,8 +1123,11 @@ export function SettingsInnerDaemonModelPanel({
 				providers={groupedProviders}
 				currentProvider={groupedCurrentProvider}
 				currentModel={currentModel ?? ''}
-				onModelSelect={(_provider, model) => {
+				onModelSelect={(_provider, model, effort) => {
 					updateInnerDaemonModel(model);
+					if (effort !== undefined) {
+						updateInnerDaemonEffort(effort);
+					}
 					onBack();
 				}}
 				onCancel={onCancel}
@@ -1136,7 +1140,7 @@ export function SettingsInnerDaemonModelPanel({
 					updateInnerDaemonModel(null);
 					onBack();
 				}}
-				showEffort={false}
+				showEffort={true}
 			/>
 		);
 	}
@@ -1224,8 +1228,8 @@ export function SettingsSubagentModelPanel({
 				providers={groupedProviders}
 				currentProvider={current?.provider ?? ''}
 				currentModel={current?.model ?? ''}
-				onModelSelect={(provider, model) => {
-					updateSubagentModelPreference(agentName, {provider, model});
+				onModelSelect={(provider, model, effort) => {
+					updateSubagentModelPreference(agentName, {provider, model, effort});
 					if (agentName === 'innerdaemon') {
 						updateInnerDaemonModel(null);
 					}
@@ -1244,7 +1248,7 @@ export function SettingsSubagentModelPanel({
 					}
 					onBack();
 				}}
-				showEffort={false}
+				showEffort={true}
 			/>
 		);
 	}
@@ -2051,7 +2055,10 @@ export function SettingsSubagentDescriptionPanel({
 // changing identity every render.
 function formatAgentModelForRow(agent: SubagentConfigWithSource): string {
 	const preference = getSubagentModelPreference(agent.name);
-	if (preference) return `${preference.provider} / ${preference.model}`;
+	if (preference) {
+		const effortStr = preference.effort ? ` [${preference.effort}]` : '';
+		return `${preference.provider} / ${preference.model}${effortStr}`;
+	}
 	if (agent.provider && agent.model && agent.model !== 'inherit') {
 		return `${agent.provider} / ${agent.model}`;
 	}

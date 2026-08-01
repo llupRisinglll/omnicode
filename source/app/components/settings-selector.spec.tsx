@@ -158,6 +158,7 @@ test('SettingsSubagentModelPanel uses the grouped selector on omnicode themes', 
 		t.deepEqual(getSubagentModelPreference('explore'), {
 			provider: 'OpenAI',
 			model: 'gpt-5',
+			effort: undefined,
 		});
 		unmount();
 	} finally {
