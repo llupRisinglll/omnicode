@@ -6,6 +6,7 @@ import Gradient from 'ink-gradient';
 import SelectInput from 'ink-select-input';
 import {type ReactNode, useEffect, useMemo, useState} from 'react';
 import {FilterableSelectList} from '@/components/filterable-select-list';
+import {GroupedModelSelector} from '@/components/model-selector';
 import TextInput from '@/components/text-input';
 import {StyledSelectInput} from '@/components/ui/styled-select-input';
 import type {TitleShape} from '@/components/ui/styled-title';
@@ -1095,6 +1096,51 @@ export function SettingsInnerDaemonModelPanel({
 		];
 	}, [currentModel]);
 
+	// Omnicode themes swap the flat list for the grouped selector (same shape as
+	// /models) with an "inherit main agent model" row on top. All providers are
+	// listed; picking a cross-provider model is the user's call (the preference
+	// is a bare model string, matching the flat path's fallback). Memoized so
+	// the selector's context effect doesn't re-run on every render.
+	const groupedProviders = useMemo(() => loadAllProviderConfigs(), []);
+	// Determine which provider the current InnerDaemon model lives under.
+	// Prefer the provider that has the model; fall back to lastProvider.
+	const groupedCurrentProvider = useMemo(() => {
+		const lastProvider = loadPreferences().lastProvider;
+		if (currentModel) {
+			for (const p of groupedProviders) {
+				if ((p.models ?? []).includes(currentModel)) {
+					return p.name;
+				}
+			}
+		}
+		return lastProvider ?? '';
+	}, [groupedProviders, currentModel]);
+
+	if (colors.promptChar) {
+		return (
+			<GroupedModelSelector
+				providers={groupedProviders}
+				currentProvider={groupedCurrentProvider}
+				currentModel={currentModel ?? ''}
+				onModelSelect={(_provider, model) => {
+					updateInnerDaemonModel(model);
+					onBack();
+				}}
+				onCancel={onCancel}
+				inheritLabel={
+					currentModel === null
+						? 'Default: main agent model (current)'
+						: 'Default: main agent model'
+				}
+				onInherit={() => {
+					updateInnerDaemonModel(null);
+					onBack();
+				}}
+				showEffort={false}
+			/>
+		);
+	}
+
 	const currentValue = currentModel ?? INNERDAEMON_INHERIT;
 
 	const handleSelect = (value: string) => {
@@ -1167,6 +1213,41 @@ export function SettingsSubagentModelPanel({
 			...providerItems,
 		];
 	}, [current]);
+
+	// Omnicode themes get the grouped provider/model selector with an inherit
+	// row; the flat list stays for classic themes (byte-identical).
+	const groupedProviders = useMemo(() => loadAllProviderConfigs(), []);
+
+	if (colors.promptChar) {
+		return (
+			<GroupedModelSelector
+				providers={groupedProviders}
+				currentProvider={current?.provider ?? ''}
+				currentModel={current?.model ?? ''}
+				onModelSelect={(provider, model) => {
+					updateSubagentModelPreference(agentName, {provider, model});
+					if (agentName === 'innerdaemon') {
+						updateInnerDaemonModel(null);
+					}
+					onBack();
+				}}
+				onCancel={onCancel}
+				inheritLabel={
+					current
+						? 'Default: inherit main agent provider/model'
+						: 'Default: inherit main agent provider/model (current)'
+				}
+				onInherit={() => {
+					updateSubagentModelPreference(agentName, null);
+					if (agentName === 'innerdaemon') {
+						updateInnerDaemonModel(null);
+					}
+					onBack();
+				}}
+				showEffort={false}
+			/>
+		);
+	}
 
 	const currentValue = current
 		? JSON.stringify(current)

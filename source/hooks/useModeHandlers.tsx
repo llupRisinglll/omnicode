@@ -5,10 +5,12 @@ import {
 	SuccessMessage,
 	WarningMessage,
 } from '@/components/message-box';
+import type {EffortLevel} from '@/components/model-selector';
 import {reloadAppConfig} from '@/config/index';
 import {formatConfigLintIssue, lintProviderConfig} from '@/config/lint';
 import {loadAllProviderConfigs} from '@/config/mcp-config-loader';
-import {saveTune, updateLastUsed} from '@/config/preferences';
+import {loadPreferences, saveTune, updateLastUsed} from '@/config/preferences';
+import {resolveTune} from '@/config/tune';
 import type {ActiveMode} from '@/hooks/useAppState';
 import {getToolManager} from '@/message-handler';
 import {getModelContextLimit, getSessionContextLimit} from '@/models/index';
@@ -102,7 +104,23 @@ export function useModeHandlers({
 		selectedProvider: string,
 		selectedModel: string,
 		isProgrammatic: boolean = false,
+		effort?: EffortLevel,
 	) => {
+		// A model picked at an explicit reasoning effort records it as the
+		// session's ModelParameters (providers that don't support it ignore it).
+		if (effort !== undefined) {
+			const current = resolveTune(undefined, undefined, loadPreferences());
+			const next: TuneConfig = {
+				...current,
+				modelParameters: {
+					...current.modelParameters,
+					reasoningEffort: effort,
+				},
+			};
+			setTune(next);
+			saveTune(next);
+		}
+
 		const sameProvider = selectedProvider === currentProvider;
 
 		if (sameProvider && selectedModel === currentModel) {

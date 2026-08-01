@@ -359,16 +359,17 @@ export const DevelopmentModeIndicator = React.memo(
 						</>
 					)}
 				</Box>
-				{(!colors.promptChar && identityLabelFull) || statusInfo?.git ? (
+				{/* Identity + git ride on their own line for classic themes only.
+				    Icon themes drop the git line entirely — the identity already
+				    rides at the end of the mode line above. */}
+				{!colors.promptChar && (identityLabelFull || statusInfo?.git) ? (
 					<Box>
-						{!colors.promptChar && identityLabelFull && (
+						{identityLabelFull && (
 							<Text color={colors.secondary}>{identityLabelFull}</Text>
 						)}
 						{statusInfo?.git && (
 							<>
-								{!colors.promptChar && identityLabelFull && (
-									<Text color={colors.secondary}> </Text>
-								)}
+								{identityLabelFull && <Text color={colors.secondary}> </Text>}
 								<Text color={colors.info}>git:</Text>
 								<Text color={colors.secondary}>(</Text>
 								<Text color={colors.error}>{statusInfo.git.branch}</Text>
