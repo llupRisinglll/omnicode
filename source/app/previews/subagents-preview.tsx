@@ -1,4 +1,3 @@
-import {basename} from 'node:path';
 import {Box, Text, useApp, useInput} from 'ink';
 import React from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
@@ -9,6 +8,7 @@ import DiffView from '@/components/diff-view/DiffView';
 import {highlightCode} from '@/components/diff-view/syntax';
 import InnerDaemonDetails from '@/components/innerdaemon-details';
 import InnerDaemonTrace from '@/components/innerdaemon-trace';
+import ModelSelector from '@/components/model-selector';
 import {TextSelection} from '@/components/TextSelection';
 import {TaskListDisplay} from '@/components/task-list-display';
 import UserInput from '@/components/user-input';
@@ -20,6 +20,7 @@ import {getInitialTitleShape, TitleShapeContext} from '@/hooks/useTitleShape';
 import {UIStateProvider} from '@/hooks/useUIState';
 import type {SteeringDiagnostic} from '@/steering/types';
 import type {Task} from '@/tools/tasks/types';
+import type {ProviderConfig} from '@/types/config';
 import {isScreenTextAt} from '@/utils/selection';
 import {clickEvents, pointerEvents} from '@/utils/terminal-mouse';
 import type {
@@ -42,7 +43,8 @@ type PreviewScenario =
 	| 'diff'
 	| 'bg'
 	| 'agents'
-	| 'settings';
+	| 'settings'
+	| 'model';
 
 type TranscriptEntry =
 	| {type: 'user'; text: string}
@@ -69,6 +71,7 @@ const PREVIEW_COMMANDS = new Set([
 	'bg',
 	'agents',
 	'settings',
+	'model',
 ]);
 
 const SCENARIO_PROMPTS: Record<PreviewScenario, string> = {
@@ -84,7 +87,24 @@ const SCENARIO_PROMPTS: Record<PreviewScenario, string> = {
 	bg: 'Set mock background task count: /mock:bg 2',
 	settings: 'Open settings mock',
 	agents: 'Set mock agent count: /mock:agents 3',
+	model: 'Open the grouped model selector with mock providers',
 };
+
+// Mock providers for the /mock:model scenario — mirrors the grouped selector
+// example: active provider expanded with (Current), others collapsed, and a
+// right-aligned context column filled by the same models.dev resolver /status
+// uses. No contextWindows here: a hard-coded value would drift from the real
+// window the moment the model card changes upstream.
+const MOCK_PROVIDERS: ProviderConfig[] = [
+	{
+		name: 'Xiaomi',
+		models: ['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2.5-asr'],
+	},
+	{name: 'OmniRoute', models: ['omniroute-max', 'omniroute-flash']},
+	{name: 'OpenAI', models: ['gpt-5', 'gpt-5-mini']},
+	{name: 'Anthropic', models: ['claude-opus-5', 'claude-sonnet-5']},
+	{name: 'Google', models: ['gemini-3-pro']},
+];
 
 const SUBAGENTS = [
 	{
@@ -638,6 +658,9 @@ export function PreviewBody({
 	}, [counts, mockAgentCount]);
 
 	useInput((input, key) => {
+		// The model selector owns its own Esc/arrow handling (collapse →
+		// cancel); the preview must not close or exit underneath it.
+		if (scenario === 'model') return;
 		// Close settings or details panel before exiting
 		if (key.escape) {
 			if (scenario === 'settings') {
@@ -821,6 +844,12 @@ export function PreviewBody({
 			]);
 			setScenario(nextScenario);
 			startTimeRef.current = Date.now();
+
+			if (nextScenario === 'model') {
+				// Interactive panel — stays open until the user closes it via
+				// selection or Esc. No canned completion.
+				return;
+			}
 
 			completionTimerRef.current = setTimeout(() => {
 				if (runIdRef.current !== runId) return;
@@ -1242,85 +1271,129 @@ export function PreviewBody({
 					</Box>
 				</Box>
 			)}
+			{scenario === 'model' && (
+				<ModelSelector
+					providers={MOCK_PROVIDERS}
+					currentProvider="Xiaomi"
+					currentModel="mimo-v2.5-pro"
+					onModelSelect={(provider, model) => {
+						setScenario(null);
+						setTranscript(prev => [
+							...prev,
+							{
+								type: 'assistant',
+								text: `Selected ${provider} / ${model} (mocked — no real provider switch).`,
+							},
+						]);
+					}}
+					onAddProvider={() => {
+						setTranscript(prev => [
+							...prev,
+							{
+								type: 'assistant',
+								text: '＋ Add or connect provider (mocked — would launch the provider wizard).',
+							},
+						]);
+					}}
+					onCancel={() => {
+						setScenario(null);
+						setTranscript(prev => [
+							...prev,
+							{type: 'assistant', text: 'Model selector closed.'},
+						]);
+					}}
+				/>
+			)}
 			<Box flexDirection="column" flexShrink={0}>
-				{/* Any modal panel (agents/bg details or the mock settings view)
-				    unmounts the input so its ESC/arrow handlers can't reach the
-				    prompt (clear-message, history navigation) behind the modal. */}
-				{bgDetailsIndex === -1 && scenario !== 'settings' && (
-					<UserInput
-						forceFocus={true}
-						suppressBuiltInCompletions={true}
-						customCommands={[
-							{name: 'exit', description: 'Exit developer mode'},
-							{name: 'clear', description: 'Clear conversation'},
-							{name: 'mock:subagents', description: 'Mock subagents scenario'},
-							{name: 'mock:bash', description: 'Mock bash scenario'},
-							{name: 'mock:mixed', description: 'Mock mixed scenario'},
-							{name: 'mock:tasks', description: 'Mock tasks scenario'},
-							{
-								name: 'mock:innerdaemon',
-								description: 'Mock InnerDaemon scenario',
-							},
-							{name: 'mock:diff', description: 'Mock diff scenario'},
-							{
-								name: 'mock:bg',
-								description: 'Mock background task count: /mock:bg 2',
-							},
-							{name: 'mock:settings', description: 'Mock settings view'},
-							{
-								name: 'mock:agents',
-								description: 'Mock agent count: /mock:agents 3',
-							},
-						]}
-						disabled={false}
-						isBusy={Boolean(counts)}
-						busyStatus={
-							counts
-								? (getCompactToolRunningSummary(counts) ?? undefined)
-								: undefined
-						}
-						developmentMode="yolo"
-						contextPercentUsed={3}
-						contextSource="estimate"
-						tune={{
-							enabled: true,
-							toolProfile: 'full',
-							aggressiveCompact: false,
-						}}
-						statusInfo={{directory: basename(process.cwd())}}
-						currentModel="preview-model"
-						compactToolDisplay={!expanded}
-						onToggleCompactDisplay={() => setExpanded(value => !value)}
-						onToggleReasoningExpanded={() => setExpanded(value => !value)}
-						backgroundCount={mockBackgroundCount}
-						bgHighlighted={
-							(bgFocusIndex >= (agentCount > 0 ? 1 : 0) && bgFocusIndex >= 0) ||
-							statusHovered === 'bg'
-						}
-						agentCount={agentCount}
-						agentHighlighted={
-							(bgFocusIndex === 0 && agentCount > 0) ||
-							statusHovered === 'agents'
-						}
-						submitBlocked={bgFocusIndexRef.current >= 0}
-						onDownAtBottom={() => {
-							// ↓ at the bottom of the input (or its draft) focuses the
-							// first indicator — agents when present, else bg.
-							const hasItems = mockBackgroundCount > 0 || agentCount > 0;
-							if (hasItems) {
-								bgFocusIndexRef.current = 0;
-								setBgFocusIndex(0);
-								// Mark this keypress so the preview's own handler (which
-								// also runs for the same ↓) doesn't advance past item 0.
-								enteredFocusRef.current = true;
-								setTimeout(() => {
-									enteredFocusRef.current = false;
-								}, 0);
+				{/* Any modal panel (agents/bg details, the mock settings view, or
+				    the model selector) unmounts the input so its ESC/arrow
+				    handlers can't reach the prompt (clear-message, history
+				    navigation) behind the modal. */}
+				{bgDetailsIndex === -1 &&
+					scenario !== 'settings' &&
+					scenario !== 'model' && (
+						<UserInput
+							forceFocus={true}
+							suppressBuiltInCompletions={true}
+							customCommands={[
+								{name: 'exit', description: 'Exit developer mode'},
+								{name: 'clear', description: 'Clear conversation'},
+								{
+									name: 'mock:subagents',
+									description: 'Mock subagents scenario',
+								},
+								{name: 'mock:bash', description: 'Mock bash scenario'},
+								{name: 'mock:mixed', description: 'Mock mixed scenario'},
+								{name: 'mock:tasks', description: 'Mock tasks scenario'},
+								{
+									name: 'mock:innerdaemon',
+									description: 'Mock InnerDaemon scenario',
+								},
+								{name: 'mock:diff', description: 'Mock diff scenario'},
+								{
+									name: 'mock:bg',
+									description: 'Mock background task count: /mock:bg 2',
+								},
+								{name: 'mock:settings', description: 'Mock settings view'},
+								{
+									name: 'mock:model',
+									description: 'Mock grouped model selector',
+								},
+								{
+									name: 'mock:agents',
+									description: 'Mock agent count: /mock:agents 3',
+								},
+							]}
+							disabled={false}
+							isBusy={Boolean(counts)}
+							busyStatus={
+								counts
+									? (getCompactToolRunningSummary(counts) ?? undefined)
+									: undefined
 							}
-						}}
-						onSubmit={handleSubmit}
-					/>
-				)}
+							developmentMode="yolo"
+							contextPercentUsed={3}
+							contextSource="estimate"
+							tune={{
+								enabled: true,
+								toolProfile: 'full',
+								aggressiveCompact: false,
+							}}
+							statusInfo={{directory: process.cwd()}}
+							currentModel="preview-model"
+							compactToolDisplay={!expanded}
+							onToggleCompactDisplay={() => setExpanded(value => !value)}
+							onToggleReasoningExpanded={() => setExpanded(value => !value)}
+							backgroundCount={mockBackgroundCount}
+							bgHighlighted={
+								(bgFocusIndex >= (agentCount > 0 ? 1 : 0) &&
+									bgFocusIndex >= 0) ||
+								statusHovered === 'bg'
+							}
+							agentCount={agentCount}
+							agentHighlighted={
+								(bgFocusIndex === 0 && agentCount > 0) ||
+								statusHovered === 'agents'
+							}
+							submitBlocked={bgFocusIndexRef.current >= 0}
+							onDownAtBottom={() => {
+								// ↓ at the bottom of the input (or its draft) focuses the
+								// first indicator — agents when present, else bg.
+								const hasItems = mockBackgroundCount > 0 || agentCount > 0;
+								if (hasItems) {
+									bgFocusIndexRef.current = 0;
+									setBgFocusIndex(0);
+									// Mark this keypress so the preview's own handler (which
+									// also runs for the same ↓) doesn't advance past item 0.
+									enteredFocusRef.current = true;
+									setTimeout(() => {
+										enteredFocusRef.current = false;
+									}, 0);
+								}
+							}}
+							onSubmit={handleSubmit}
+						/>
+					)}
 			</Box>
 		</Box>
 	);

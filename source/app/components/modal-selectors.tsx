@@ -1,7 +1,7 @@
 import React from 'react';
 import {ModelDatabaseDisplay} from '@/commands/model-database';
 import CheckpointSelector from '@/components/checkpoint-selector';
-import ModelSelector from '@/components/model-selector';
+import ModelSelector, {type EffortLevel} from '@/components/model-selector';
 import SessionSelector from '@/components/session-selector';
 import type {ActiveMode} from '@/hooks/useAppState';
 import type {ToolManager} from '@/tools/tool-manager';
@@ -15,6 +15,8 @@ import {TuneSelector} from './tune-selector';
 export interface ModalSelectorsProps {
 	onLaunchTune?: () => void;
 	onLaunchIde?: () => void;
+	/** Launch the provider wizard from the model selector's add-provider row. */
+	onAddProvider?: () => void;
 	onMcpChanged?: () => void | Promise<void>;
 	currentSessionId?: string;
 	messageCount?: number;
@@ -34,7 +36,11 @@ export interface ModalSelectorsProps {
 	} | null;
 
 	// Handlers - Model Selection
-	onModelSelect: (provider: string, model: string) => Promise<unknown>;
+	onModelSelect: (
+		provider: string,
+		model: string,
+		effort?: EffortLevel,
+	) => Promise<unknown>;
 	onModelSelectionCancel: () => void;
 
 	// Handlers - Model Database
@@ -92,6 +98,7 @@ export function ModalSelectors({
 	onSettingsCancel,
 	onLaunchTune,
 	onLaunchIde,
+	onAddProvider,
 	onMcpChanged,
 	currentSessionId,
 	messageCount,
@@ -105,8 +112,11 @@ export function ModalSelectors({
 			<ModelSelector
 				currentProvider={currentProvider}
 				currentModel={currentModel}
-				onModelSelect={(provider, model) => void onModelSelect(provider, model)}
+				onModelSelect={(provider, model, effort) =>
+					void onModelSelect(provider, model, effort)
+				}
 				onCancel={onModelSelectionCancel}
+				onAddProvider={onAddProvider}
 			/>
 		);
 	}

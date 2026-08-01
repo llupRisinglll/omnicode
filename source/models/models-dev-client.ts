@@ -9,7 +9,18 @@ import type {AIProviderConfig, ProviderConfig} from '@/types/config';
 import {formatError} from '@/utils/error-formatter';
 import {getLogger} from '@/utils/logging';
 import {createSessionOverride} from '@/utils/session-override';
-import {readCache, writeCache} from './models-cache.js';
+import {
+	getCachedContextLimit,
+	readCache,
+	setCachedContextLimit,
+	writeCache,
+} from './models-cache.js';
+
+export {
+	getCachedContextLimit,
+	getCachedContextLimitSync,
+} from './models-cache.js';
+
 import type {
 	ModelInfo,
 	ModelsDevDatabase,
@@ -347,6 +358,7 @@ export type ContextLimitSource =
 	| 'provider-config'
 	| 'env'
 	| 'model-lookup'
+	| 'cache'
 	| 'unknown';
 
 export interface ModelContextLimitOptions {
@@ -442,6 +454,17 @@ export async function resolveModelContextLimit(
 				? modelId.slice(0, -6)
 				: modelId;
 
+		// Check persistent cache before doing models.dev lookup
+		if (options.providerConfig) {
+			const cached = await getCachedContextLimit(
+				options.providerConfig.name,
+				normalizedModelId,
+			);
+			if (cached) {
+				return {limit: cached.limit, source: 'cache'};
+			}
+		}
+
 		// Try models.dev exact ID match first (primary source)
 		let modelInfo = await findModelById(normalizedModelId);
 
@@ -452,18 +475,54 @@ export async function resolveModelContextLimit(
 
 		// If found in models.dev, return that
 		if (modelInfo) {
-			return {limit: modelInfo.contextLimit, source: 'model-lookup'};
+			const result: ResolvedContextLimit = {
+				limit: modelInfo.contextLimit,
+				source: 'model-lookup',
+			};
+			if (options.providerConfig) {
+				void setCachedContextLimit(
+					options.providerConfig.name,
+					normalizedModelId,
+					modelInfo.contextLimit,
+					'model-lookup',
+				);
+			}
+			return result;
 		}
 
 		// Fall back to hardcoded Ollama model defaults (offline fallback)
 		const ollamaLimitOriginal = getOllamaFallbackContextLimit(modelId);
 		if (ollamaLimitOriginal) {
-			return {limit: ollamaLimitOriginal, source: 'model-lookup'};
+			const result: ResolvedContextLimit = {
+				limit: ollamaLimitOriginal,
+				source: 'model-lookup',
+			};
+			if (options.providerConfig) {
+				void setCachedContextLimit(
+					options.providerConfig.name,
+					normalizedModelId,
+					ollamaLimitOriginal,
+					'model-lookup',
+				);
+			}
+			return result;
 		}
 
 		const ollamaLimit = getOllamaFallbackContextLimit(normalizedModelId);
 		if (ollamaLimit) {
-			return {limit: ollamaLimit, source: 'model-lookup'};
+			const result: ResolvedContextLimit = {
+				limit: ollamaLimit,
+				source: 'model-lookup',
+			};
+			if (options.providerConfig) {
+				void setCachedContextLimit(
+					options.providerConfig.name,
+					normalizedModelId,
+					ollamaLimit,
+					'model-lookup',
+				);
+			}
+			return result;
 		}
 
 		return {limit: null, source: 'unknown'};
@@ -483,6 +542,35 @@ export async function getModelContextLimit(
 ): Promise<number | null> {
 	const resolved = await resolveModelContextLimit(modelId, options);
 	return resolved.limit;
+}
+
+/**
+ * Pre-fetch context limits for all models across all providers.
+ * Called on app startup to warm the cache in background.
+ * Runs completely async and doesn't block the UI.
+ */
+export async function prefetchContextLimits(
+	providers: ProviderConfig[],
+): Promise<void> {
+	// Fire and forget - don't await
+	void (async () => {
+		try {
+			for (const provider of providers) {
+				for (const model of provider.models ?? []) {
+					// Check if already cached
+					const cached = await getCachedContextLimit(provider.name, model);
+					if (!cached) {
+						// Resolve and cache in background
+						void resolveModelContextLimit(model, {
+							providerConfig: provider,
+						});
+					}
+				}
+			}
+		} catch {
+			// Silently ignore - this is best-effort warming
+		}
+	})();
 }
 
 /**

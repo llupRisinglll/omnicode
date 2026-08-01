@@ -1,5 +1,4 @@
 import {userInfo} from 'node:os';
-import {basename} from 'node:path';
 import {Box, useInput} from 'ink';
 import React, {useMemo} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
@@ -301,7 +300,7 @@ export function InteractiveApp({
 
 		return {
 			user: userInfo().username,
-			directory: basename(process.cwd()),
+			directory: process.cwd(),
 			git,
 		};
 	}, []);
@@ -463,7 +462,9 @@ export function InteractiveApp({
 							currentModel={appState.currentModel}
 							currentProvider={appState.currentProvider}
 							checkpointLoadData={appState.checkpointLoadData}
-							onModelSelect={modeHandlers.handleModelSelect}
+							onModelSelect={(provider, model, effort) =>
+								modeHandlers.handleModelSelect(provider, model, false, effort)
+							}
 							onModelSelectionCancel={modeHandlers.handleModelSelectionCancel}
 							onModelDatabaseCancel={modeHandlers.handleModelDatabaseCancel}
 							onConfigWizardComplete={modeHandlers.handleConfigWizardComplete}
@@ -488,6 +489,11 @@ export function InteractiveApp({
 								launchedFromSettingsRef.current = true;
 								modeHandlers.handleSettingsCancel();
 								modeHandlers.enterIdeSelectionMode();
+							}}
+							onAddProvider={() => {
+								// Add-provider row in the model selector → provider wizard.
+								launchedFromSettingsRef.current = false;
+								modeHandlers.enterConfigWizardMode();
 							}}
 							tuneConfig={appState.tune}
 							onTuneSelect={config => {
