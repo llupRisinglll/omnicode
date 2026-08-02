@@ -23,6 +23,8 @@ import {
 	getReasoningExpanded,
 	getShowWorkingIndicator,
 	getSubagentModelPreference,
+	getVisionModel,
+	getVisionModelProvider,
 	loadPreferences,
 	savePreferences,
 	updateCompactDiffMaxLines,
@@ -37,6 +39,8 @@ import {
 	updateSelectedTheme,
 	updateShowWorkingIndicator,
 	updateSubagentModelPreference,
+	updateVisionModel,
+	updateVisionModelProvider,
 } from '@/config/preferences';
 import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
@@ -685,7 +689,7 @@ export function SettingsPasteThresholdPanel({
 	const title = isNarrow
 		? 'Paste Threshold'
 		: 'Set paste threshold (characters)';
-
+	const _providers = loadAllProviderConfigs();
 	return (
 		<TitledBoxWithPreferences
 			title={title}
@@ -1147,12 +1151,137 @@ export function SettingsInnerDaemonModelPanel({
 
 	const currentValue = currentModel ?? INNERDAEMON_INHERIT;
 
+	const _providers = loadAllProviderConfigs();
 	const handleSelect = (value: string) => {
 		updateInnerDaemonModel(value === INNERDAEMON_INHERIT ? null : value);
 		onBack();
 	};
 
 	const title = isNarrow ? 'InnerDaemon Model' : 'InnerDaemon Steering Model';
+
+	return (
+		<TitledBoxWithPreferences
+			title={title}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			<FilterableSelectList
+				items={items}
+				initialSelectedValue={currentValue}
+				onSelect={handleSelect}
+				onCancel={onCancel}
+			/>
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>
+						Type to filter · ↑↓ navigate · Enter select · Esc cancel
+					</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Vision Model settings panel.
+// Allows selecting a model for image processing (vision fallback).
+// The vision model is used to process images when the main model doesn't support vision.
+export function SettingsVisionModelPanel({
+	onBack,
+	onCancel,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+
+	const currentModel = getVisionModel();
+	const currentProvider = getVisionModelProvider();
+
+	// Offer all models from all providers
+	const groupedProviders = useMemo(() => loadAllProviderConfigs(), []);
+	const groupedCurrentProvider =
+		currentProvider ?? loadPreferences().lastProvider ?? '';
+
+	if (colors.promptChar) {
+		return (
+			<GroupedModelSelector
+				providers={groupedProviders}
+				currentProvider={groupedCurrentProvider}
+				currentModel={currentModel ?? ''}
+				onModelSelect={(provider, model) => {
+					updateVisionModel(model);
+					updateVisionModelProvider(provider);
+					onBack();
+				}}
+				onCancel={onCancel}
+				inheritLabel="none"
+				onInherit={() => {
+					updateVisionModel(null);
+					updateVisionModelProvider(null);
+					onBack();
+				}}
+				showEffort={false}
+			/>
+		);
+	}
+
+	const items = useMemo(() => {
+		const providers = loadAllProviderConfigs();
+		const activeProvider = loadPreferences().lastProvider;
+		const match = activeProvider
+			? providers.find(p => p.name === activeProvider)
+			: undefined;
+
+		const modelItems = match
+			? (match.models ?? []).map(m => ({
+					label: m === currentModel ? `${m} (current)` : m,
+					value: m,
+				}))
+			: providers.flatMap(p =>
+					(p.models ?? []).map(m => ({
+						label:
+							m === currentModel
+								? `${m} (current) (${p.name})`
+								: `${m} (${p.name})`,
+						value: m,
+					})),
+				);
+
+		return [
+			{
+				label: currentModel
+					? 'None (disable vision fallback)'
+					: 'None (enable vision fallback)',
+				value: '__none__',
+			},
+			...modelItems,
+		];
+	}, [currentModel]);
+
+	const currentValue = currentModel ?? '__none__';
+
+	const handleSelect = (value: string) => {
+		if (value === '__none__') {
+			updateVisionModel(null);
+			updateVisionModelProvider(null);
+			onBack();
+			return;
+		}
+		const provider = providers.find(p => (p.models ?? []).includes(value));
+		if (provider) {
+			updateVisionModel(value);
+			updateVisionModelProvider(provider.name);
+		}
+		onBack();
+	};
+
+	const title = isNarrow ? 'Vision Model' : 'Vision Fallback Model';
+	const providers = loadAllProviderConfigs();
 
 	return (
 		<TitledBoxWithPreferences

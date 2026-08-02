@@ -70,10 +70,13 @@ export type PlaceholderSpan = {
 };
 
 /**
- * All placeholder spans ([start, end) offsets) in the given text.
+ * All placeholder spans ([start, end) offsets) in the given text. Both the
+ * paste tokens (`[Paste #N: N chars]`) and the image tokens (`[Image #N]`)
+ * render in primary and delete atomically, so the cursor never lands inside
+ * one and backspace removes it whole.
  */
 export function getPlaceholderSpans(text: string): PlaceholderSpan[] {
-	const placeholderRegex = /\[Paste #\d+: \d+ chars\]/g;
+	const placeholderRegex = /\[Paste #\d+: \d+ chars\]|\[Image #\d+\]/g;
 	const spans: PlaceholderSpan[] = [];
 	let match;
 

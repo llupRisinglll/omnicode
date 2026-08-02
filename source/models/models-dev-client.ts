@@ -597,3 +597,62 @@ export async function getModelPricing(
 		return null;
 	}
 }
+
+export interface ModelCapabilities {
+	/** Whether the model accepts image input (vision). */
+	supportsVision: boolean;
+}
+
+/**
+ * Resolve a model's capabilities (currently just vision support) from the
+ * models.dev database. A model counts as vision-capable only when a provider
+ * entry lists `image` in `modalities.input` — models.dev's `attachment` flag
+ * is too loose (it also covers text/PDF/video attachments, e.g. a gateway
+ * that accepts PDFs but not images). Conservative default: unknown models are
+ * treated as text-only so the vision fallback kicks in rather than silently
+ * sending images to a model that can't read them.
+ */
+export async function getModelCapabilities(
+	modelId: string,
+	options: ModelContextLimitOptions = {},
+): Promise<ModelCapabilities> {
+	try {
+		// Provider config can pin a definitive answer; trust it when present.
+		const providerConfig = options.providerConfig;
+		if (providerConfig && 'supportsVision' in providerConfig) {
+			const pinned = (providerConfig as Record<string, unknown>).supportsVision;
+			if (typeof pinned === 'boolean') {
+				return {supportsVision: pinned};
+			}
+		}
+
+		const data = await getModelsData();
+		if (!data) return {supportsVision: false};
+
+		const normalized = modelId.toLowerCase();
+		// Strip a :cloud/-cloud suffix, matching resolveModelContextLimit.
+		const lookupId =
+			normalized.endsWith(':cloud') || normalized.endsWith('-cloud')
+				? normalized.slice(0, -6)
+				: normalized;
+
+		const hasImageInput = (model: ModelsDevModel): boolean =>
+			(model.modalities?.input ?? []).includes('image');
+
+		// Exact id match only. A false "vision-capable" is dangerous — it sends
+		// raw images to a text-only model and 400s — while a false "not
+		// vision-capable" is safe (it routes through the vision fallback). So
+		// we never fuzzy-match: a route keyword like `auto` that has no exact
+		// card resolves to text-only and the fallback handles it.
+		for (const provider of Object.values(data)) {
+			const model = provider?.models?.[lookupId];
+			if (model && hasImageInput(model)) {
+				return {supportsVision: true};
+			}
+		}
+
+		return {supportsVision: false};
+	} catch {
+		return {supportsVision: false};
+	}
+}

@@ -16,6 +16,8 @@ import {
 	getSemanticMemoryEnabled,
 	getSteeringEnabled,
 	getSteeringVerbose,
+	getVisionModel,
+	getVisionModelProvider,
 	loadPreferences,
 	updateAlternateScreen,
 	updateSemanticMemoryEnabled,
@@ -58,6 +60,7 @@ import {
 	SettingsSubagentToolsPanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
+	SettingsVisionModelPanel,
 } from './settings-selector';
 import {SettingsSessionsPanel} from './settings-sessions';
 import {SettingsToolApprovalPanel} from './settings-tool-approval';
@@ -297,6 +300,15 @@ function buildRowsForTab(
 							} as SettingRow,
 						]
 					: []),
+				{
+					kind: 'managed',
+					id: 'vision-model',
+					label: 'Vision Model',
+					value: getVisionModel()
+						? `${getVisionModel()} (${getVisionModelProvider() || 'current provider'})`
+						: 'not set',
+					panel: 'vision-model',
+				},
 			];
 			return agentRows;
 		}
@@ -626,6 +638,8 @@ function renderManagedPanel(
 			return (
 				<SettingsInnerDaemonModelPanel onBack={onBack} onCancel={onBack} />
 			);
+		case 'vision-model':
+			return <SettingsVisionModelPanel onBack={onBack} onCancel={onBack} />;
 		case 'innerdaemon-list':
 			return (
 				<SettingsInnerDaemonListPanel

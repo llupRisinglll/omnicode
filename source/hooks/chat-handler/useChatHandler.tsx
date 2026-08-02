@@ -4,7 +4,13 @@ import {appendToolDefinitionsToPrompt} from '@/ai-sdk-client/tools/system-prompt
 import {ConversationStateManager} from '@/app/utils/conversation-state';
 import AssistantMessage from '@/components/assistant-message';
 import AssistantReasoning from '@/components/assistant-reasoning';
+import {
+	ErrorMessage,
+	SuccessMessage,
+	WarningMessage,
+} from '@/components/message-box';
 import UserMessage from '@/components/user-message';
+import {VisionProcessingIndicator} from '@/components/vision-processing-indicator';
 import {getAppConfig} from '@/config/index';
 import {
 	getInnerDaemonModel,
@@ -12,10 +18,17 @@ import {
 	getSteeringRulesRevision,
 	getSteeringVerbose,
 	getSubagentModelPreference,
+	getVisionModel,
+	getVisionModelProvider,
 	subscribeSteeringPrefs,
 } from '@/config/preferences';
 import {CommandIntegration} from '@/custom-commands/command-integration';
 import {useTheme} from '@/hooks/useTheme';
+import {getModelCapabilities} from '@/models/index';
+import {
+	createVisionClient,
+	processImagesWithVisionModel,
+} from '@/models/vision';
 import {generateKey} from '@/session/key-generator';
 import {formatAvailableSkillsForPrompt} from '@/skills/prompt';
 import {
@@ -650,15 +663,148 @@ export function useChatHandler({
 		// Add user message to conversation history (single addition)
 		const builder = new MessageBuilder(messages);
 		builder.addUserMessage(message, images);
-		const updatedMessages = builder.build();
+		let updatedMessages = builder.build();
 		setMessages(updatedMessages);
+
+		// Signal "working" immediately — the vision fallback below can run for
+		// tens of seconds before the main conversation starts streaming, and the
+		// user needs feedback that the request is being processed.
+		setIsGenerating(true);
 
 		// Initialize conversation state if this is a new conversation
 		if (messages.length === 0) {
 			conversationStateManager.current.initializeState(message);
 		}
 
-		// Create abort controller for cancellation
+		// Vision fallback: when the active model can't read images, run the
+		// attached images through the configured vision model and hand the main
+		// model its text description instead of raw image parts. A text-only main
+		// model must NEVER receive raw image parts — that 400s on the provider —
+		// so every non-vision path here strips them and injects text.
+		if (images && images.length > 0) {
+			const activeProviderConfig = getAppConfig().providers?.find(
+				p => p.name === currentProvider,
+			);
+			const capabilities = await getModelCapabilities(currentModel, {
+				providerConfig: activeProviderConfig,
+			});
+			if (!capabilities.supportsVision) {
+				// A text-only main model must never receive an image part — that
+				// 400s/errors on the provider. Strip images from EVERY user message
+				// in the conversation (stale ones from earlier turns included), then
+				// append the vision text to the last user message.
+				const stripAllUserImages = (): Message[] =>
+					updatedMessages.map(m =>
+						m.role === 'user' && m.images ? {...m, images: undefined} : m,
+					);
+
+				const appendToLastUser = (extra: string): Message[] => {
+					for (let i = updatedMessages.length - 1; i >= 0; i--) {
+						if (updatedMessages[i].role === 'user') {
+							const original = updatedMessages[i];
+							return [
+								...updatedMessages.slice(0, i),
+								{
+									...original,
+									content: `${original.content}\n\n${extra}`.trim(),
+									images: undefined,
+								},
+								...updatedMessages.slice(i + 1),
+							];
+						}
+					}
+					return updatedMessages;
+				};
+
+				// Immediately strip all image parts from the outgoing history so a
+				// text-only main model never errors, even before the vision model
+				// finishes (or if it fails).
+				updatedMessages = stripAllUserImages();
+
+				const visionModel = getVisionModel();
+				if (visionModel) {
+					// Verbose progress, modeled on the "Thinking" state: the vision
+					// pass can take tens of seconds and the main conversation hasn't
+					// started streaming yet. Show a gear + elapsed timer + expandable
+					// status so the user knows exactly what is running and that it
+					// isn't stuck.
+					const visionStartTime = Date.now();
+					const updateVisionStatus = (status: string) => {
+						setLiveComponent?.(
+							<VisionProcessingIndicator
+								visionModel={visionModel}
+								imageCount={images.length}
+								status={status}
+								startTime={visionStartTime}
+							/>,
+						);
+					};
+					updateVisionStatus('Preparing image…');
+					try {
+						// The vision model may live on a different provider than the
+						// active one; prefer the stored provider, else find any
+						// configured provider that exposes the model.
+						const storedVisionProvider = getVisionModelProvider();
+						const visionProvider =
+							storedVisionProvider ||
+							getAppConfig().providers?.find(p =>
+								(p.models ?? []).includes(visionModel),
+							)?.name;
+						const visionClient = await createVisionClient(
+							visionModel,
+							visionProvider || undefined,
+						);
+						const description = await processImagesWithVisionModel(
+							visionClient,
+							images,
+							currentModel,
+							message,
+							updateVisionStatus,
+						);
+						updatedMessages = appendToLastUser(
+							`[Image Analysis — described by vision model ${visionModel}]\n${description}`,
+						);
+						setMessages(updatedMessages);
+						addToChatQueue(
+							<SuccessMessage
+								key={generateKey('vision-fallback')}
+								message={`  ✦ Vision fallback: ${visionModel} analyzed ${images.length} image(s) → ${currentModel} responds`}
+								hideBox={true}
+							/>,
+						);
+					} catch (error) {
+						// The vision model failed; the images are already stripped, so
+						// just note the omission for the main model.
+						updatedMessages = appendToLastUser(
+							`[Image omitted — vision model ${visionModel} failed to process it: ${String(error)}]`,
+						);
+						setMessages(updatedMessages);
+						addToChatQueue(
+							<ErrorMessage
+								key={generateKey('vision-error')}
+								message={`Failed to process images with vision model ${visionModel}. The images were omitted.`}
+								hideBox={true}
+							/>,
+						);
+					}
+					// The main conversation loop takes over the live area now.
+					setLiveComponent?.(null);
+				} else {
+					updatedMessages = appendToLastUser(
+						'[Image omitted — no vision fallback model is configured and the current model cannot read images]',
+					);
+					setMessages(updatedMessages);
+					addToChatQueue(
+						<WarningMessage
+							key={generateKey('no-vision-model')}
+							message={`Images attached but ${currentModel} may not support vision and no vision fallback model is configured. Set one in Settings → Capabilities → Vision Model.`}
+							hideBox={true}
+						/>,
+					);
+				}
+			}
+		}
+
 		const controller = new AbortController();
 		setAbortController(controller);
 

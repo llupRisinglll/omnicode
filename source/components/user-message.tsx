@@ -145,7 +145,7 @@ export default memo(function UserMessage({
 							{segments.map((segment, segIndex) => (
 								<Text
 									key={segIndex}
-									color={segment.isPlaceholder ? colors.info : colors.text}
+									color={segment.isPlaceholder ? colors.primary : colors.text}
 									bold={segment.isPlaceholder}
 								>
 									{segment.text}
@@ -197,7 +197,7 @@ export default memo(function UserMessage({
 				</>
 			)}
 			{imageCount > 0 && (
-				<Box marginBottom={1}>
+				<Box marginBottom={1} paddingLeft={arrowMode ? 2 : 0}>
 					<Text color={colors.info}>
 						■ {imageCount} image{imageCount === 1 ? '' : 's'} attached
 					</Text>

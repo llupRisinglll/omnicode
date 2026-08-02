@@ -195,6 +195,11 @@ export default function UserInput({
 	const [selectedQueuedIndex, setSelectedQueuedIndex] = useState(-1);
 	// Pending image attachments sent with the next submitted message.
 	const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+	// Images added by dropping/pasting a file PATH into the input, live-converted
+	// to [Image #N] tokens. Kept separate from `attachments` (Ctrl+V clipboard
+	// images, which carry no visible token) so a deleted token can drop its
+	// image without touching Ctrl+V attachments.
+	const convertedImagesRef = useRef<ImageAttachment[]>([]);
 	const lastRestoredDraftIdRef = useRef<number | null>(null);
 
 	const {
@@ -497,22 +502,26 @@ export default function UserInput({
 		// Chat history shows the real pasted text, not the [Paste #N] placeholder
 		let display = expandPastePlaceholdersForDisplay(currentState);
 
-		// Image file paths the user typed, pasted, or dragged into the terminal
-		// (often quoted, mixed in with prose) become attachments; the literal
-		// path in the message text is replaced with an `[Image #N]` placeholder,
-		// numbered after any attachments already added via Ctrl+V.
+		// Paths dropped into the input were already live-converted to
+		// [Image #N] tokens; Ctrl+V images live in `attachments`. Combine both.
+		images = [...attachments, ...convertedImagesRef.current];
+
+		// Any image file paths that reached submit still raw (e.g. a path pasted
+		// in one burst that escaped live conversion) become attachments; the
+		// literal path in the message text is replaced with an [Image #N] token,
+		// numbered after the combined list.
 		const {text: cleanedAssembled, paths} = extractImageReferences(
 			assembled,
-			attachments.length,
+			images.length,
 		);
 		if (paths.length > 0) {
 			const dropped = paths
 				.map(readImageFile)
 				.filter((img): img is ImageAttachment => img !== null);
 			if (dropped.length > 0) {
-				images = [...attachments, ...dropped];
+				images = [...images, ...dropped];
 				assembled = cleanedAssembled;
-				display = extractImageReferences(display, attachments.length).text;
+				display = extractImageReferences(display, images.length).text;
 			}
 		}
 
@@ -675,6 +684,39 @@ export default function UserInput({
 	const handleInputChange = useCallback(
 		(value: string) => {
 			inputFromHistoryRef.current = false;
+
+			// Live-convert dropped/pasted image paths (e.g. "/tmp/x.png") to
+			// [Image #N] tokens as the user composes, so the attachment shows up
+			// in primary (via the placeholder span) instead of a raw path — same
+			// treatment as [Paste #N]. Token numbering runs over converted images
+			// only, starting at 1.
+			const {text: cleaned, paths} = extractImageReferences(value, 0);
+			if (paths.length > 0) {
+				const dropped = paths
+					.map(readImageFile)
+					.filter((img): img is ImageAttachment => img !== null);
+				if (dropped.length > 0) {
+					convertedImagesRef.current = [
+						...convertedImagesRef.current,
+						...dropped,
+					];
+					updateInput(cleaned);
+					return;
+				}
+			}
+
+			// Reconcile: a [Image #N] token deleted from the value drops the
+			// matching converted image (Ctrl+V attachments are untouched).
+			const tokensInValue = new Set(
+				[...value.matchAll(/\[Image #(\d+)\]/g)].map(m => m[1]),
+			);
+			const kept = convertedImagesRef.current.filter((_img, i) =>
+				tokensInValue.has(String(i + 1)),
+			);
+			if (kept.length !== convertedImagesRef.current.length) {
+				convertedImagesRef.current = kept;
+			}
+
 			updateInput(value);
 		},
 		[updateInput],

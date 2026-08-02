@@ -410,6 +410,40 @@ export function updateInnerDaemonEffort(
 }
 
 /**
+ * Get the vision fallback model.
+ */
+export function getVisionModel(): string | null {
+	const preferences = loadPreferences();
+	return preferences.visionModel ?? null;
+}
+
+/**
+ * Get the vision model provider.
+ */
+export function getVisionModelProvider(): string | null {
+	const preferences = loadPreferences();
+	return preferences.visionModelProvider ?? null;
+}
+
+/**
+ * Set the vision fallback model.
+ */
+export function updateVisionModel(model: string | null): void {
+	const preferences = loadPreferences();
+	preferences.visionModel = model;
+	savePreferences(preferences);
+}
+
+/**
+ * Set the vision model provider.
+ */
+export function updateVisionModelProvider(provider: string | null): void {
+	const preferences = loadPreferences();
+	preferences.visionModelProvider = provider;
+	savePreferences(preferences);
+}
+
+/**
  * Set (or clear) the InnerDaemon model and notify subscribers so the steering
  * executor re-binds with the new model resolver. Pass null to restore the
  * default (inherit the main agent model).

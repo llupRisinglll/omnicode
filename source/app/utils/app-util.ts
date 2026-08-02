@@ -597,7 +597,11 @@ export async function handleMessageSubmission(
 		return;
 	}
 
-	if (message.startsWith('/')) {
+	// Route on parseInput's verdict, not a raw "/" prefix — a message that
+	// starts with an absolute path like "/tmp/Spectacle…/screenshot.png" is a
+	// file reference, not a slash command, and must not hit the command
+	// handler as an "unknown command".
+	if (parsedInput.isCommand) {
 		await handleSlashCommand(message, options);
 		return;
 	}

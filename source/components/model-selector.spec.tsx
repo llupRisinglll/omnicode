@@ -504,14 +504,17 @@ function renderGroupedSelector({
 test('grouped: active provider expanded with (Current), inactive collapsed', t => {
 	const {lastFrame} = renderGroupedSelector();
 	const out = lastFrame()!;
-	t.regex(out, /▼ Xiaomi \(Current\)/);
-	t.regex(out, /mimo-v2\.5-pro/);
-	t.regex(out, /mimo-v2\.5/);
-	t.regex(out, /mimo-v2\.5-asr/);
+	// Strip ANSI escape codes from output before matching
+	const strippedOut = out.replace(/\x1b\[[0-9;]*m/g, '');
+	t.regex(strippedOut, /▼\s*Xiaomi\s*\(Current\)/);
+	t.regex(strippedOut, /mimo-v2\.5-pro/);
+	t.regex(strippedOut, /mimo-v2\.5/);
+	t.regex(strippedOut, /mimo-v2\.5-asr/);
 	// Collapsed provider shows its header only — models are hidden.
-	t.regex(out, /▶ OpenAI/);
-	t.notRegex(out, /gpt-5/);
-});
+	t.regex(strippedOut, /▶\s*OpenAI/);
+	t.notRegex(strippedOut, /gpt-5/);
+	});
+
 
 test('grouped: context column shows configured windows and — for unknown', async t => {
 	const {lastFrame} = renderGroupedSelector();

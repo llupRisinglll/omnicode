@@ -106,6 +106,14 @@ function supportsTextInTextOut(model: OpenRouterModel): boolean {
 }
 
 /**
+ * Check if model supports vision/image input
+ */
+function supportsVision(model: OpenRouterModel): boolean {
+	const inputMods = model.architecture?.input_modalities || [];
+	return inputMods.includes('image');
+}
+
+/**
  * Check if model is relevant for coding (has tool support or is a known coding model)
  */
 function isRelevantForCoding(model: OpenRouterModel): boolean {
@@ -295,6 +303,7 @@ export async function fetchModels(): Promise<ModelEntry[]> {
 				isLocal,
 			),
 			hasToolSupport: model.supported_parameters?.includes('tools') || false,
+			supportsVision: supportsVision(model),
 		};
 
 		models.push(entry);
