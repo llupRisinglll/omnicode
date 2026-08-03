@@ -125,3 +125,22 @@ test('parseInput - preserves argument case and special characters', t => {
 	t.deepEqual(result.args, ['"Hello', 'World"', '--flag=value']);
 	t.is(result.fullCommand, 'echo "Hello World" --flag=value');
 });
+
+test('parseInput - treats a leading absolute image path as a file, not a command', t => {
+	// A dragged/pasted screenshot like "/tmp/Spectacle…/screenshot.png" must
+	// not be routed as a slash command — the command part contains a "/", so
+	// parseInput correctly flags it as a non-command.
+	const result = parseInput(
+		'/tmp/Spectacle.ubvFPo/Screenshot_20260802_174356.png\ntake a look at this',
+	);
+
+	t.false(result.isCommand);
+	t.is(result.isBashCommand, undefined);
+});
+
+test('parseInput - treats a relative-looking path after a slash as a file, not a command', t => {
+	const result = parseInput('/foo/bar.png');
+
+	t.false(result.isCommand);
+	t.is(result.isBashCommand, undefined);
+});

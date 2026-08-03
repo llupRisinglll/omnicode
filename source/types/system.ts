@@ -13,4 +13,5 @@ export interface ModelEntry {
 	costType: 'free' | 'paid';
 	costDetails: string; // e.g., "$1.25/M in, $5.00/M out"
 	hasToolSupport: boolean; // Whether model supports tool/function calling
+	supportsVision: boolean; // Whether model supports vision/image input
 }

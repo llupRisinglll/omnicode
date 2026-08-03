@@ -1,6 +1,6 @@
 import {getAppConfig} from '@/config/index';
 import {getBraveSearchApiKey} from '@/config/nanocoder-tools-config';
-import {getSteeringEnabled} from '@/config/preferences';
+import {getSteeringEnabled, getVisionModel} from '@/config/preferences';
 import {buildToolEntry} from '@/custom-tools/build-tool';
 import {CustomToolLoader} from '@/custom-tools/loader';
 // Type-only import — the `MCPClient` runtime value is loaded dynamically
@@ -83,6 +83,12 @@ export class ToolManager {
 		// Remove web_search if no Brave Search API key is configured
 		if (!getBraveSearchApiKey()) {
 			this.registry.unregister('web_search');
+		}
+
+		// examine_image re-runs attached images through the vision fallback model,
+		// so it is useless (and would only confuse the model) without one.
+		if (!getVisionModel()) {
+			this.registry.unregister('examine_image');
 		}
 	}
 

@@ -209,8 +209,12 @@ export function loadProviderConfigs(): AIProviderConfig[] {
 		models: provider.models || [],
 		contextWindow: provider.contextWindow,
 		contextWindows: provider.contextWindows,
-		requestTimeout: provider.requestTimeout,
-		socketTimeout: provider.socketTimeout,
+		// `timeout` is the plain-config spelling (e.g. `"timeout": 30000` in
+		// agents.config.json). Honor it as the socket/request timeout when the
+		// more explicit fields aren't set — otherwise a provider's configured
+		// timeout is silently dropped and a stalled model hangs forever.
+		requestTimeout: provider.requestTimeout ?? provider.timeout,
+		socketTimeout: provider.socketTimeout ?? provider.timeout,
 		connectionPool: provider.connectionPool,
 		fallbackModel: provider.fallbackModel,
 		// Tool configuration

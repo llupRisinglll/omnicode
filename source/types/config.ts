@@ -479,6 +479,18 @@ export interface UserPreferences {
 	 * finding #10).
 	 */
 	innerDaemonModel?: string | null;
+	innerDaemonEffort?: 'minimal' | 'low' | 'medium' | 'high';
+	/**
+	 * Vision fallback model. When the user attaches images but the current model
+	 * doesn't support vision, this model will be used to process the images and
+	 * extract descriptions. The descriptions are then passed to the main model
+	 * along with the original prompt.
+	 */
+	visionModel?: string | null;
+	/**
+	 * Provider for the vision model. If not specified, uses the current provider.
+	 */
+	visionModelProvider?: string | null;
 	/**
 	 * Per-subagent provider/model overrides. Missing agent entries default to the
 	 * subagent definition's own provider/model; built-ins use `model: inherit`,
@@ -489,6 +501,7 @@ export interface UserPreferences {
 		{
 			provider: string;
 			model: string;
+			effort?: 'minimal' | 'low' | 'medium' | 'high';
 		} | null
 	>;
 }

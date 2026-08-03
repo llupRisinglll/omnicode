@@ -6,6 +6,7 @@ import {StyledTitle} from '@/components/ui/styled-title';
 import {getAppConfig, loadDefaultMode, reloadAppConfig} from '@/config/index';
 import {
 	getAlternateScreen,
+	getInnerDaemonEffort,
 	getInnerDaemonModel,
 	getNanocoderShape,
 	getNotificationsPreference,
@@ -15,6 +16,8 @@ import {
 	getSemanticMemoryEnabled,
 	getSteeringEnabled,
 	getSteeringVerbose,
+	getVisionModel,
+	getVisionModelProvider,
 	loadPreferences,
 	updateAlternateScreen,
 	updateSemanticMemoryEnabled,
@@ -57,6 +60,7 @@ import {
 	SettingsSubagentToolsPanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
+	SettingsVisionModelPanel,
 } from './settings-selector';
 import {SettingsSessionsPanel} from './settings-sessions';
 import {SettingsToolApprovalPanel} from './settings-tool-approval';
@@ -269,7 +273,12 @@ function buildRowsForTab(
 								kind: 'managed',
 								id: 'innerdaemon-model',
 								label: 'Model',
-								value: getInnerDaemonModel() ?? 'default (main agent)',
+								value: (() => {
+									const model = getInnerDaemonModel();
+									const effort = getInnerDaemonEffort();
+									if (!model) return 'default (main agent)';
+									return effort ? `${model} [${effort}]` : model;
+								})(),
 								panel: 'innerdaemon-model',
 								indent: true,
 							} as SettingRow,
@@ -291,6 +300,15 @@ function buildRowsForTab(
 							} as SettingRow,
 						]
 					: []),
+				{
+					kind: 'managed',
+					id: 'vision-model',
+					label: 'Vision Model',
+					value: getVisionModel()
+						? `${getVisionModel()} (${getVisionModelProvider() || 'current provider'})`
+						: 'not set',
+					panel: 'vision-model',
+				},
 			];
 			return agentRows;
 		}
@@ -494,7 +512,7 @@ function SettingRowLine({
 					{row.label}
 				</Text>
 			</Box>
-			<Text color={colors.secondary} wrap={isNarrow ? 'truncate' : undefined}>
+			<Text color={rowColor} wrap={isNarrow ? 'truncate' : undefined}>
 				{valueText}
 			</Text>
 		</Box>
@@ -620,6 +638,8 @@ function renderManagedPanel(
 			return (
 				<SettingsInnerDaemonModelPanel onBack={onBack} onCancel={onBack} />
 			);
+		case 'vision-model':
+			return <SettingsVisionModelPanel onBack={onBack} onCancel={onBack} />;
 		case 'innerdaemon-list':
 			return (
 				<SettingsInnerDaemonListPanel

@@ -145,3 +145,18 @@ test('extractImageReferences numbers placeholders from startIndex', t => {
 	t.deepEqual(paths, [file]);
 	t.is(text, 'see [Image #3]');
 });
+
+test('extractImageReferences continues past existing tokens (incremental drop)', t => {
+	const file = join(dir, 'next.png');
+	writeFileSync(file, PNG_BYTES);
+	// Regression: a second path dropped into text that already carries
+	// [Image #1] (from an earlier live conversion) must become [Image #2], not
+	// renumber itself [Image #1] — startIndex must be the count of converted
+	// images, not reset to 0 on every keystroke.
+	const {text, paths} = extractImageReferences(
+		`compare [Image #1] with '${file}'`,
+		1,
+	);
+	t.deepEqual(paths, [file]);
+	t.is(text, 'compare [Image #1] with [Image #2]');
+});

@@ -1,4 +1,5 @@
 import {readFileSync, writeFileSync} from 'fs';
+import type {EffortLevel} from '@/components/model-selector';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {getClosestConfigFile} from '@/config/index';
 import type {TuneConfig} from '@/types/config';
@@ -389,6 +390,59 @@ export function getInnerDaemonModel(): string | null {
 	return preferences.innerDaemonModel ?? null;
 }
 
+export function getInnerDaemonEffort():
+	| 'minimal'
+	| 'low'
+	| 'medium'
+	| 'high'
+	| undefined {
+	const preferences = loadPreferences();
+	return preferences.innerDaemonEffort;
+}
+
+export function updateInnerDaemonEffort(
+	effort: 'minimal' | 'low' | 'medium' | 'high' | undefined,
+): void {
+	const preferences = loadPreferences();
+	preferences.innerDaemonEffort = effort;
+	savePreferences(preferences);
+	emitSteeringPrefsChanged();
+}
+
+/**
+ * Get the vision fallback model.
+ */
+export function getVisionModel(): string | null {
+	const preferences = loadPreferences();
+	return preferences.visionModel ?? null;
+}
+
+/**
+ * Get the vision model provider.
+ */
+export function getVisionModelProvider(): string | null {
+	const preferences = loadPreferences();
+	return preferences.visionModelProvider ?? null;
+}
+
+/**
+ * Set the vision fallback model.
+ */
+export function updateVisionModel(model: string | null): void {
+	const preferences = loadPreferences();
+	preferences.visionModel = model;
+	savePreferences(preferences);
+}
+
+/**
+ * Set the vision model provider.
+ */
+export function updateVisionModelProvider(provider: string | null): void {
+	const preferences = loadPreferences();
+	preferences.visionModelProvider = provider;
+	savePreferences(preferences);
+}
+
 /**
  * Set (or clear) the InnerDaemon model and notify subscribers so the steering
  * executor re-binds with the new model resolver. Pass null to restore the
@@ -404,6 +458,7 @@ export function updateInnerDaemonModel(value: string | null): void {
 export interface SubagentModelPreference {
 	provider: string;
 	model: string;
+	effort?: EffortLevel;
 }
 
 export function getSubagentModelPreference(
@@ -420,7 +475,8 @@ export function getSubagentModelPreference(
 		return {
 			provider: preference.provider.trim(),
 			model: preference.model.trim(),
-		};
+			effort: preference.effort,
+		} satisfies SubagentModelPreference;
 	}
 	return null;
 }
@@ -435,6 +491,7 @@ export function updateSubagentModelPreference(
 		next[agentName] = {
 			provider: value.provider,
 			model: value.model,
+			effort: value.effort,
 		};
 	} else {
 		delete next[agentName];
