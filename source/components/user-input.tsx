@@ -43,6 +43,7 @@ import {Completion, CustomCommandCompletionSource} from '@/types/index';
 const EMPTY_CUSTOM_COMMANDS: CustomCommandCompletionSource[] = [];
 
 import type {Colors} from '@/types/ui';
+import {persistPastes} from '@/utils/attachment-archive';
 import {
 	extractImageReferences,
 	readClipboardImage,
@@ -503,8 +504,10 @@ export default function UserInput({
 		let display = expandPastePlaceholdersForDisplay(currentState);
 
 		// Paths dropped into the input were already live-converted to
-		// [Image #N] tokens; Ctrl+V images live in `attachments`. Combine both.
-		images = [...attachments, ...convertedImagesRef.current];
+		// [Image #N] tokens; Ctrl+V images live in `attachments`. Combine both —
+		// converted images first so the array index matches the [Image #N] token
+		// numbers (1-based over converted images only).
+		images = [...convertedImagesRef.current, ...attachments];
 
 		// Any image file paths that reached submit still raw (e.g. a path pasted
 		// in one burst that escaped live conversion) become attachments; the
@@ -532,6 +535,14 @@ export default function UserInput({
 			displayValue: currentState.displayValue,
 			placeholderContent: {...currentState.placeholderContent},
 		};
+
+		// Keep a plain-text copy of pasted content in the conversation archive
+		// (fire-and-forget — never blocks submit). Queued submissions included:
+		// this runs before the busy branch returns. A disk failure is logged, not
+		// allowed to become an unhandled rejection.
+		void persistPastes(currentState.placeholderContent).catch(error => {
+			console.warn('Failed to archive pasted text:', error);
+		});
 
 		if (isBusy && !assembled.trim().startsWith('/') && onQueueMessage) {
 			promptHistory.addPrompt(inputStateForHistory);
@@ -689,8 +700,12 @@ export default function UserInput({
 			// [Image #N] tokens as the user composes, so the attachment shows up
 			// in primary (via the placeholder span) instead of a raw path — same
 			// treatment as [Paste #N]. Token numbering runs over converted images
-			// only, starting at 1.
-			const {text: cleaned, paths} = extractImageReferences(value, 0);
+			// only, starting at 1: new paths continue after the ones already
+			// converted, or every drop would renumber itself [Image #1].
+			const {text: cleaned, paths} = extractImageReferences(
+				value,
+				convertedImagesRef.current.length,
+			);
 			if (paths.length > 0) {
 				const dropped = paths
 					.map(readImageFile)
@@ -707,6 +722,8 @@ export default function UserInput({
 
 			// Reconcile: a [Image #N] token deleted from the value drops the
 			// matching converted image (Ctrl+V attachments are untouched).
+			// Survivors are renumbered contiguously so a gap (e.g. deleting
+			// [Image #1]) doesn't make the next drop collide with an old token.
 			const tokensInValue = new Set(
 				[...value.matchAll(/\[Image #(\d+)\]/g)].map(m => m[1]),
 			);
@@ -715,6 +732,11 @@ export default function UserInput({
 			);
 			if (kept.length !== convertedImagesRef.current.length) {
 				convertedImagesRef.current = kept;
+				let counter = 0;
+				updateInput(
+					value.replace(/\[Image #\d+\]/g, () => `[Image #${++counter}]`),
+				);
+				return;
 			}
 
 			updateInput(value);

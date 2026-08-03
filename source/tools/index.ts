@@ -1,6 +1,7 @@
 import {bashExecutor} from '@/services/bash-executor';
 import {agentTool} from '@/tools/agent-tool';
 import {askQuestionTool} from '@/tools/ask-question';
+import {examineImageTool} from '@/tools/examine-image';
 import {executeBashTool} from '@/tools/execute-bash';
 import {fetchUrlTool} from '@/tools/fetch-url';
 import {getFileOpTools} from '@/tools/file-ops';
@@ -39,6 +40,7 @@ const staticTools: NanocoderToolExport[] = [
 	writeFileTool,
 	stringReplaceTool,
 	diffEditTool,
+	examineImageTool,
 	executeBashTool,
 	monitorTool,
 	reportReproductionTool,

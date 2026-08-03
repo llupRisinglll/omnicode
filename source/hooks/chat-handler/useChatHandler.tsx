@@ -39,6 +39,11 @@ import {classifyUserTask} from '@/steering/intent-classifier';
 import type {SteeringEngine} from '@/steering/steering-engine';
 import {getTuneToolMode} from '@/types/config';
 import type {ImageAttachment, Message} from '@/types/core';
+import {
+	getArchiveDirPath,
+	persistDescription,
+	persistImages,
+} from '@/utils/attachment-archive';
 import {MessageBuilder} from '@/utils/message-builder';
 import {
 	type BuiltPromptBlock,
@@ -676,12 +681,28 @@ export function useChatHandler({
 			conversationStateManager.current.initializeState(message);
 		}
 
+		// Turn-scoped abort controller, created before the vision phase so Esc
+		// can cancel a slow/hung vision fallback — not just the main loop. The
+		// main conversation inherits the same signal below.
+		const controller = new AbortController();
+		setAbortController(controller);
+
 		// Vision fallback: when the active model can't read images, run the
 		// attached images through the configured vision model and hand the main
 		// model its text description instead of raw image parts. A text-only main
 		// model must NEVER receive raw image parts — that 400s on the provider —
 		// so every non-vision path here strips them and injects text.
 		if (images && images.length > 0) {
+			// Archive the originals before anything else so `examine_image` can
+			// re-examine them when the description isn't enough — regardless of
+			// whether the main model itself has vision. Best-effort: a disk
+			// failure must never abort the conversation.
+			try {
+				await persistImages(images);
+			} catch (error) {
+				console.warn('Failed to archive attached images:', error);
+			}
+
 			const activeProviderConfig = getAppConfig().providers?.find(
 				p => p.name === currentProvider,
 			);
@@ -760,7 +781,16 @@ export function useChatHandler({
 							currentModel,
 							message,
 							updateVisionStatus,
+							controller.signal,
 						);
+						// Store the analysis so examine_image can seed its follow-up
+						// conversation with the vision model's prior findings. Same
+						// best-effort posture as the archive write above.
+						try {
+							await persistDescription(description);
+						} catch (error) {
+							console.warn('Failed to archive vision description:', error);
+						}
 						updatedMessages = appendToLastUser(
 							`[Image Analysis — described by vision model ${visionModel}]\n${description}`,
 						);
@@ -768,24 +798,30 @@ export function useChatHandler({
 						addToChatQueue(
 							<SuccessMessage
 								key={generateKey('vision-fallback')}
-								message={`  ✦ Vision fallback: ${visionModel} analyzed ${images.length} image(s) → ${currentModel} responds`}
+								message={`  ✦ Vision fallback: ${visionModel} analyzed ${images.length} image(s) → ${currentModel} responds · originals in ${getArchiveDirPath()}`}
 								hideBox={true}
 							/>,
 						);
 					} catch (error) {
-						// The vision model failed; the images are already stripped, so
-						// just note the omission for the main model.
-						updatedMessages = appendToLastUser(
-							`[Image omitted — vision model ${visionModel} failed to process it: ${String(error)}]`,
-						);
-						setMessages(updatedMessages);
-						addToChatQueue(
-							<ErrorMessage
-								key={generateKey('vision-error')}
-								message={`Failed to process images with vision model ${visionModel}. The images were omitted.`}
-								hideBox={true}
-							/>,
-						);
+						if (!controller.signal.aborted) {
+							// The vision model failed; the images are already stripped,
+							// so just note the omission for the main model. (An aborted
+							// signal means the user pressed Esc mid-vision — an
+							// intentional cancel; the main loop below throws
+							// "Operation was cancelled" and shows the standard
+							// "Interrupted by user." path and its cleanup.)
+							updatedMessages = appendToLastUser(
+								`[Image omitted — vision model ${visionModel} failed to process it: ${String(error)}]`,
+							);
+							setMessages(updatedMessages);
+							addToChatQueue(
+								<ErrorMessage
+									key={generateKey('vision-error')}
+									message={`Failed to process images with vision model ${visionModel}. The images were omitted.`}
+									hideBox={true}
+								/>,
+							);
+						}
 					}
 					// The main conversation loop takes over the live area now.
 					setLiveComponent?.(null);
@@ -804,9 +840,6 @@ export function useChatHandler({
 				}
 			}
 		}
-
-		const controller = new AbortController();
-		setAbortController(controller);
 
 		try {
 			const systemState = getBaseSystemPromptState(

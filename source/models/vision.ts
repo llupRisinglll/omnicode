@@ -30,6 +30,7 @@ export async function processImagesWithVisionModel(
 	mainModel: string,
 	userMessage?: string,
 	onStatus?: (status: string) => void,
+	signal?: AbortSignal,
 ): Promise<string> {
 	const contextBlock = userMessage?.trim()
 		? `The user attached this image to support the following message:\n\n"${userMessage.trim()}"\n\n`
@@ -68,6 +69,7 @@ export async function processImagesWithVisionModel(
 				output += token;
 			},
 		},
+		signal,
 	);
 
 	onStatus?.(`Description received (${output.trim().length} chars)`);
