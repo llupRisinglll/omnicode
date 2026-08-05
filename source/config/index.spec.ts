@@ -40,6 +40,11 @@ test('getClosestConfigFile creates default config if none exists', t => {
 test('getClosestConfigFile prefers cwd config over home config', t => {
 	const fileName = 'test-priority.json';
 	const cwdConfig = join(process.cwd(), fileName);
+	// The cwd check only runs when NO explicit config dir is set (an explicit
+	// NANOCODER_CONFIG_DIR — the standard ava isolation env — intentionally
+	// bypasses cwd/home). Temporarily clear it to exercise the cwd path.
+	const originalConfigDir = process.env.NANOCODER_CONFIG_DIR;
+	delete process.env.NANOCODER_CONFIG_DIR;
 
 	// Create a config in cwd
 	writeFileSync(cwdConfig, JSON.stringify({test: 'cwd'}), 'utf-8');
@@ -56,6 +61,11 @@ test('getClosestConfigFile prefers cwd config over home config', t => {
 		// Clean up
 		if (existsSync(cwdConfig)) {
 			rmSync(cwdConfig, {force: true});
+		}
+		if (originalConfigDir === undefined) {
+			delete process.env.NANOCODER_CONFIG_DIR;
+		} else {
+			process.env.NANOCODER_CONFIG_DIR = originalConfigDir;
 		}
 	}
 });

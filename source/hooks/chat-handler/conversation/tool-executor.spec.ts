@@ -203,7 +203,7 @@ test('executeToolsDirectly - executes tool successfully', async t => {
 	t.true(results[0].content.includes('Tool executed'));
 });
 
-test('displayExecutedTool - omnicode compact execute_bash renders command detail before grouping', async t => {
+test('displayExecutedTool - omnicode compact execute_bash queues the detailed row (not the tally)', async t => {
 	const conversationStateManager = createMockConversationStateManager();
 	const addToChatQueueCalls: unknown[] = [];
 	const countedTools: Array<[string, string | undefined]> = [];
@@ -238,8 +238,17 @@ test('displayExecutedTool - omnicode compact execute_bash renders command detail
 		},
 	);
 
-	t.deepEqual(countedTools, [['execute_bash', 'echo one']]);
-	t.is(addToChatQueueCalls.length, 0);
+	// Interactive compact bash now renders the detailed command + output row
+	// instead of only tallying into the "Ran Bash ×N" summary.
+	t.is(countedTools.length, 0);
+	t.is(addToChatQueueCalls.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(
+		addToChatQueueCalls[0] as React.ReactElement,
+	);
+	const output = lastFrame();
+	t.regex(output!, /Bash\(echo one\)/);
+	t.regex(output!, /one/);
+	unmount();
 });
 
 test('displayExecutedTool - omnicode non-interactive execute_bash renders command detail', async t => {
@@ -293,6 +302,7 @@ test.serial(
 	async t => {
 		const runningCounts: unknown[] = [];
 		const compactCounts: Array<[string, string | string[] | undefined]> = [];
+		const queued: unknown[] = [];
 		const command = "printf 'start\\n'; sleep 0.05; printf 'done\\n'";
 
 		const results = await executeToolsDirectly(
@@ -307,9 +317,12 @@ test.serial(
 			],
 			createMockToolManager() as any,
 			createMockConversationStateManager() as any,
-			() => {},
+			component => {
+				queued.push(component);
+			},
 			{
 				compactDisplay: true,
+				iconTheme: true,
 				setLiveComponent: () => {},
 				onRunningToolCounts: counts => {
 					if (counts) runningCounts.push(counts);
@@ -326,7 +339,10 @@ test.serial(
 		t.is(firstRunning.execute_bash.count, 1);
 		t.deepEqual(firstRunning.execute_bash.details, [command]);
 		t.deepEqual(firstRunning.execute_bash.liveDetails(), [command]);
-		t.deepEqual(compactCounts, [['execute_bash', command]]);
+		// Completion queues the detailed command + output row instead of
+		// tallying into the "Ran Bash ×N" summary.
+		t.is(compactCounts.length, 0);
+		t.is(queued.length, 1);
 	},
 );
 
@@ -1059,10 +1075,13 @@ test.serial(
 		await delay(20);
 		t.true(runningCounts.length > 0);
 		const latestRunning = runningCounts.at(-1) as Record<string, any>;
-		const liveDetails = latestRunning.agent.liveDetails();
+		const runningKey = Object.keys(latestRunning).find(key =>
+			key.startsWith('agent:'),
+		);
+		t.truthy(runningKey);
+		const liveDetails = latestRunning[runningKey!].liveDetails();
 		t.deepEqual(liveDetails, [
-			'explore: running read_file · 1 tool call · ~42 tokens',
-			'explore → read_file',
+			'stats:running read_file · 1 tool call · ~42 tokens',
 		]);
 
 		releaseAgent();
@@ -1070,10 +1089,12 @@ test.serial(
 
 		t.deepEqual(compactCounts, [
 			{
-				toolName: 'agent',
+				toolName: runningKey,
 				detail: [
-					'explore: running read_file · 1 tool call · ~42 tokens',
-					'explore → read_file',
+					'explore: inspect repository',
+					'state:completed',
+					'read_file',
+					'stats:1 tool call · ~42 tokens',
 				],
 			},
 		]);
@@ -1116,6 +1137,82 @@ test('executeToolsDirectly - compact mode counts errors instead of queueing them
 	t.deepEqual(compactCounts, [{toolName: 'failing_tool', failed: true}]);
 });
 
+test.serial(
+	'executeToolsDirectly - compact parallel agents get separate entries',
+	async t => {
+		const {setAgentToolExecutor} = await import('@/tools/agent-tool');
+		const {updateSubagentProgressById, clearAllSubagentProgress} =
+			await import('@/services/subagent-events');
+
+		clearAllSubagentProgress();
+		setAgentToolExecutor({
+			execute: async (
+				task: {subagent_type: string},
+				_signal?: AbortSignal,
+				_depth?: number,
+				agentId?: string,
+			) => {
+				t.truthy(agentId);
+				updateSubagentProgressById(agentId!, {
+					subagentName: task.subagent_type,
+					status: 'running',
+					toolCallCount: 0,
+					turnCount: 1,
+					tokenCount: 10,
+				});
+				return {
+					subagentName: task.subagent_type,
+					output: 'ok',
+					success: true,
+					executionTimeMs: 1,
+				};
+			},
+		} as never);
+
+		const compactCounts: Array<{toolName: string; detail?: string | string[]}> =
+			[];
+
+		await executeToolsDirectly(
+			[
+				{
+					id: 'call_agent_1',
+					function: {
+						name: 'agent',
+						arguments: JSON.stringify({
+							subagent_type: 'explore',
+							description: 'first',
+						}),
+					},
+				},
+				{
+					id: 'call_agent_2',
+					function: {
+						name: 'agent',
+						arguments: JSON.stringify({
+							subagent_type: 'explore',
+							description: 'second',
+						}),
+					},
+				},
+			],
+			createMockToolManager() as any,
+			createMockConversationStateManager() as any,
+			() => {},
+			{
+				compactDisplay: true,
+				onCompactToolCount: (toolName, detail) => {
+					compactCounts.push({toolName, detail});
+				},
+			},
+		);
+
+		t.is(compactCounts.length, 2);
+		t.true(compactCounts.every(entry => entry.toolName.startsWith('agent:')));
+		t.is(new Set(compactCounts.map(entry => entry.toolName)).size, 2);
+		clearAllSubagentProgress();
+	},
+);
+
 test('executeToolsDirectly passes privacy options to rehydrate tools', async t => {
-t.pass(); // Add proper structural verification if stream testing is hard
+	t.pass(); // Add proper structural verification if stream testing is hard
 });

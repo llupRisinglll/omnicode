@@ -1,6 +1,9 @@
 import {type ChildProcess, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {EventEmitter} from 'node:events';
+import {existsSync, readFileSync, unlinkSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {platform} from 'node:process';
 
 import {
@@ -9,12 +12,15 @@ import {
 	INTERVAL_BASH_PROGRESS_MS,
 	TIMEOUT_BASH_DEFAULT_MS,
 } from '@/constants';
+import {getSafeSessionCwd, setSessionCwd} from './session-cwd.js';
 
 const isWindows = platform === 'win32';
 
 export interface BashExecutionState {
 	executionId: string;
 	command: string;
+	startedAt: number;
+	isBackground: boolean;
 	outputPreview: string; // Last 150 chars for display
 	fullOutput: string; // Complete output
 	stderr: string; // Complete stderr
@@ -31,14 +37,20 @@ interface ExecutionEntry {
 	timeoutId?: NodeJS.Timeout;
 	signal?: AbortSignal;
 	abortListener?: () => void;
+	cwdCaptureFile?: string;
 }
 
 export class BashExecutor extends EventEmitter {
 	private executions = new Map<string, ExecutionEntry>();
+	private completedExecutions = new Map<string, BashExecutionState>();
 
 	execute(
 		command: string,
-		options?: {timeoutMs?: number; signal?: AbortSignal},
+		options?: {
+			timeoutMs?: number;
+			signal?: AbortSignal;
+			background?: boolean;
+		},
 	): {
 		executionId: string;
 		promise: Promise<BashExecutionState>;
@@ -48,6 +60,8 @@ export class BashExecutor extends EventEmitter {
 		const state: BashExecutionState = {
 			executionId,
 			command,
+			startedAt: Date.now(),
+			isBackground: options?.background ?? false,
 			outputPreview: '',
 			fullOutput: '',
 			stderr: '',
@@ -56,13 +70,49 @@ export class BashExecutor extends EventEmitter {
 			error: null,
 		};
 
+		// Share the session cwd so bash and the file tools agree on relative paths.
+		const cwd = getSafeSessionCwd();
+
+		// Capture the shell's final dir to a temp file (not stdout, keeping output
+		// clean) so `cd` persists to later commands and the file tools. Unix only.
+		const cwdCaptureFile = isWindows
+			? undefined
+			: join(tmpdir(), `nanocoder-cwd-${executionId}`);
+		const spawnCommand =
+			cwdCaptureFile === undefined
+				? command
+				: // Blank line before the epilogue: a command ending in a trailing
+					// backslash would otherwise line-continue into `__nc_ec=$?`.
+					`${command}\n\n__nc_ec=$?\ncommand pwd -P > '${cwdCaptureFile}' 2>/dev/null\nexit $__nc_ec`;
+
 		const proc = isWindows
-			? spawn('cmd', ['/c', command])
+			? spawn('cmd', ['/c', command], {cwd})
 			: // `detached` makes the child a process-group leader so cancel() can
 				// signal the whole tree (e.g. `pnpm test` -> node -> test runner),
 				// not just the `sh` wrapper. Without it a cancelled command's
 				// children keep running in the background.
-				spawn('sh', ['-c', command], {detached: true});
+				spawn('sh', ['-c', spawnCommand], {cwd, detached: true});
+
+		// Best-effort: a missed capture just leaves the cwd where it was.
+		const applyCapturedCwd = () => {
+			if (!cwdCaptureFile) return;
+			try {
+				if (existsSync(cwdCaptureFile)) {
+					const captured = readFileSync(cwdCaptureFile, 'utf8').trim();
+					// Concurrent bash runs race here; last close wins, which is fine
+					// since the session cwd is a single shared value either way.
+					if (captured) setSessionCwd(captured);
+				}
+			} catch {
+				// Non-fatal: leave the session cwd where it was.
+			} finally {
+				try {
+					if (existsSync(cwdCaptureFile)) unlinkSync(cwdCaptureFile);
+				} catch {
+					// best-effort cleanup
+				}
+			}
+		};
 
 		let outputBytes = 0;
 		let outputTruncated = false;
@@ -119,9 +169,12 @@ export class BashExecutor extends EventEmitter {
 				intervalId,
 				resolve,
 				signal: options?.signal,
+				cwdCaptureFile,
 			};
 
-			const ms = options?.timeoutMs ?? TIMEOUT_BASH_DEFAULT_MS;
+			const ms = options?.background
+				? 0
+				: (options?.timeoutMs ?? TIMEOUT_BASH_DEFAULT_MS);
 			if (ms > 0) {
 				entry.timeoutId = setTimeout(() => {
 					this.cancel(executionId, `Command timed out after ${ms}ms`);
@@ -129,7 +182,7 @@ export class BashExecutor extends EventEmitter {
 				entry.timeoutId.unref();
 			}
 
-			if (options?.signal) {
+			if (options?.signal && !options.background) {
 				entry.abortListener = () => {
 					this.cancel(executionId, 'Cancelled via AbortSignal');
 				};
@@ -153,12 +206,39 @@ export class BashExecutor extends EventEmitter {
 				// Only process if not already handled by cancel()
 				if (!this.executions.has(executionId)) return;
 
+				// Persist `cd` only on a real completion, not a cancel/timeout.
+				applyCapturedCwd();
 				clearInterval(intervalId);
 				state.isComplete = true;
 				state.exitCode = code;
 				this.emit('complete', {...state});
 				this.executions.delete(executionId);
+				this.rememberCompleted(state);
 				resolve({...state});
+			});
+
+			// A setup command may intentionally daemonize servers that inherit its
+			// stdout/stderr descriptors. In that case the shell exits but Node never
+			// emits `close`, because those detached descendants keep the pipes open.
+			// Once a task is backgrounded, shell exit is the command boundary.
+			proc.on('exit', (code: number | null) => {
+				setTimeout(() => {
+					if (!state.isBackground || !this.executions.has(executionId)) return;
+					if (entry.timeoutId) clearTimeout(entry.timeoutId);
+					if (entry.signal && entry.abortListener) {
+						entry.signal.removeEventListener('abort', entry.abortListener);
+					}
+					proc.stdout?.destroy();
+					proc.stderr?.destroy();
+					applyCapturedCwd();
+					clearInterval(intervalId);
+					state.isComplete = true;
+					state.exitCode = code;
+					this.executions.delete(executionId);
+					this.rememberCompleted(state);
+					this.emit('complete', {...state});
+					resolve({...state});
+				}, 100).unref();
 			});
 
 			proc.on('error', (error: Error) => {
@@ -170,11 +250,13 @@ export class BashExecutor extends EventEmitter {
 				// Only process if not already handled by cancel()
 				if (!this.executions.has(executionId)) return;
 
+				applyCapturedCwd();
 				clearInterval(intervalId);
 				state.isComplete = true;
 				state.error = error.message;
 				this.emit('complete', {...state});
 				this.executions.delete(executionId);
+				this.rememberCompleted(state);
 				resolve({...state}); // Resolve with error state instead of rejecting
 			});
 		});
@@ -183,6 +265,24 @@ export class BashExecutor extends EventEmitter {
 		this.emit('start', {...state});
 
 		return {executionId, promise};
+	}
+
+	background(executionId: string): boolean {
+		const execution = this.executions.get(executionId);
+		if (!execution) return false;
+
+		if (execution.timeoutId) {
+			clearTimeout(execution.timeoutId);
+			execution.timeoutId = undefined;
+		}
+		if (execution.signal && execution.abortListener) {
+			execution.signal.removeEventListener('abort', execution.abortListener);
+			execution.signal = undefined;
+			execution.abortListener = undefined;
+		}
+		execution.state.isBackground = true;
+		this.emit('progress', {...execution.state});
+		return true;
 	}
 
 	cancel(executionId: string, reason = 'Cancelled by user'): boolean {
@@ -201,15 +301,34 @@ export class BashExecutor extends EventEmitter {
 		execution.process.stdin?.destroy();
 
 		this.killProcessTree(execution.process);
+		// Drop the cwd temp file; a killed command must not move the session cwd.
+		if (execution.cwdCaptureFile) {
+			try {
+				if (existsSync(execution.cwdCaptureFile)) {
+					unlinkSync(execution.cwdCaptureFile);
+				}
+			} catch {
+				// best-effort cleanup
+			}
+		}
 		execution.state.isComplete = true;
 		execution.state.error = reason;
+		this.executions.delete(executionId);
+		this.rememberCompleted(execution.state);
 		this.emit('complete', {...execution.state});
 
 		// Resolve the promise with the cancelled state
 		execution.resolve({...execution.state});
-
-		this.executions.delete(executionId);
 		return true;
+	}
+
+	private rememberCompleted(state: BashExecutionState): void {
+		this.completedExecutions.set(state.executionId, {...state});
+		while (this.completedExecutions.size > 50) {
+			const oldest = this.completedExecutions.keys().next().value;
+			if (oldest === undefined) break;
+			this.completedExecutions.delete(oldest);
+		}
 	}
 
 	/**
@@ -243,7 +362,16 @@ export class BashExecutor extends EventEmitter {
 
 	getState(executionId: string): BashExecutionState | undefined {
 		const execution = this.executions.get(executionId);
-		return execution ? {...execution.state} : undefined;
+		return execution
+			? {...execution.state}
+			: this.completedExecutions.get(executionId);
+	}
+
+	getStates(): BashExecutionState[] {
+		return [
+			...Array.from(this.executions.values(), entry => ({...entry.state})),
+			...this.completedExecutions.values(),
+		].sort((a, b) => b.startedAt - a.startedAt);
 	}
 
 	hasActiveExecutions(): boolean {
@@ -252,6 +380,20 @@ export class BashExecutor extends EventEmitter {
 
 	getActiveExecutionIds(): string[] {
 		return Array.from(this.executions.keys());
+	}
+
+	getActiveBackgroundCount(): number {
+		let count = 0;
+		for (const execution of this.executions.values()) {
+			if (execution.state.isBackground) count++;
+		}
+		return count;
+	}
+
+	cancelAll(reason = 'Nanocoder session ended'): void {
+		for (const executionId of this.getActiveExecutionIds()) {
+			this.cancel(executionId, reason);
+		}
 	}
 }
 

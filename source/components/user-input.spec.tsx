@@ -6,6 +6,10 @@ import {commandRegistry} from '../commands';
 import {themes} from '../config/themes';
 import {ThemeContext} from '../hooks/useTheme';
 import {UIStateProvider, useUIStateContext} from '../hooks/useUIState';
+import {
+	compactToggleEvents,
+	transcriptToggleEvents,
+} from '../utils/terminal-mouse';
 import UserInput from './user-input';
 
 console.log(`\nuser-input.spec.tsx – ${React.version}`);
@@ -746,6 +750,47 @@ test('UserInput does not show ctrl-o hint when onToggleCompactDisplay is not pro
 	unmount();
 });
 
+test('UserInput ctrl+o / ctrl+r / ctrl+t emit the compact + transcript toggle events', async t => {
+	let compactToggles = 0;
+	let transcriptToggles = 0;
+	const onCompact = () => {
+		compactToggles++;
+	};
+	const onTranscript = () => {
+		transcriptToggles++;
+	};
+	compactToggleEvents.on('toggle', onCompact);
+	transcriptToggleEvents.on('toggle', onTranscript);
+
+	const {stdin, unmount} = render(
+		<TestWrapper>
+			<UserInput
+				forceFocus={true}
+				onToggleCompactDisplay={() => {}}
+				onToggleReasoningExpanded={() => {}}
+			/>
+		</TestWrapper>,
+	);
+	try {
+		// ctrl+o → compactToggleEvents (already-queued compact blocks expand).
+		stdin.write('\x0f');
+		await wait(50);
+		t.is(compactToggles, 1, 'ctrl+o emits compactToggleEvents');
+
+		// ctrl+r and ctrl+t → transcriptToggleEvents (thought / detailed rows).
+		stdin.write('\x12');
+		await wait(50);
+		t.is(transcriptToggles, 1, 'ctrl+r emits transcriptToggleEvents');
+		stdin.write('\x14');
+		await wait(50);
+		t.is(transcriptToggles, 2, 'ctrl+t emits transcriptToggleEvents');
+	} finally {
+		compactToggleEvents.off('toggle', onCompact);
+		transcriptToggleEvents.off('toggle', onTranscript);
+		unmount();
+	}
+});
+
 
 // ============================================================================
 // Command Completion Navigation Tests
@@ -767,7 +812,6 @@ test('arrow key navigation updates the selected completion', async t => {
 
 	stdin.write('/');
 	await wait();
-	stdin.write('\t');
 	await wait();
 
 	const beforeNav = lastFrame()!;
@@ -793,7 +837,6 @@ test('Enter selects the highlighted completion and populates the input', async t
 
 	stdin.write('/');
 	await wait();
-	stdin.write('\t');
 	await wait();
 
 	t.regex(lastFrame()!, /Available commands:/);
@@ -817,7 +860,6 @@ test('typing a space after a command hides completions so args submit', async t 
 
 	stdin.write('/test');
 	await wait();
-	stdin.write('\t');
 	await wait();
 
 	// While still typing the command name, completions are visible
@@ -844,7 +886,6 @@ test('completion menu dismissal/reset after selection or escape', async t => {
 
 	stdin.write('/');
 	await wait();
-	stdin.write('\t');
 	await wait();
 
 	t.regex(lastFrame()!, /Available commands:/);
@@ -862,7 +903,6 @@ test('completion menu dismissal/reset after selection or escape', async t => {
 
 	stdin.write('/');
 	await wait();
-	stdin.write('\t');
 	await wait();
 
 	t.regex(lastFrame()!, /Available commands:/);
@@ -888,7 +928,6 @@ test('UserInput renders completions text when typing /', async t => {
 	await new Promise(resolve => setTimeout(resolve, 50));
 	stdin.write('/');
 	await new Promise(resolve => setTimeout(resolve, 150));
-	stdin.write('\t');
 	await wait();
 
 	const output = lastFrame()!;
@@ -909,7 +948,6 @@ test('UserInput windows long slash completion lists', async t => {
 
 	stdin.write('/zz');
 	await wait();
-	stdin.write('\t');
 	await wait();
 
 	const firstFrame = lastFrame()!;
@@ -946,7 +984,6 @@ test('UserInput renders completions BEFORE the mode indicator (inside the input 
 	await new Promise(resolve => setTimeout(resolve, 50));
 	stdin.write('/');
 	await new Promise(resolve => setTimeout(resolve, 150));
-	stdin.write('\t');
 	await wait();
 
 	const output = lastFrame()!;
@@ -973,7 +1010,6 @@ test('UserInput completions appear on a line above the mode indicator', async t 
 	await new Promise(resolve => setTimeout(resolve, 50));
 	stdin.write('/');
 	await new Promise(resolve => setTimeout(resolve, 150));
-	stdin.write('\t');
 	await wait();
 
 	const output = lastFrame()!;
@@ -1255,6 +1291,60 @@ test.serial(
 		} finally {
 			Object.defineProperty(process.stdout, 'columns', {
 				value: originalColumns,
+				configurable: true,
+			});
+		}
+	},
+);
+
+
+// ============================================================================
+// Narrow-terminal width cap (regression)
+// ============================================================================
+
+// Regression: boxWidth floors at 40 columns, so on terminals narrower than
+// ~44 columns the omnicode (promptChar) textbox painted border rows WIDER
+// than the real terminal. Over-wide rows hard-wrap in the terminal, breaking
+// Ink's erase accounting: each keystroke repaint under-erases, and the
+// accumulated residue composites into a garbled echo when the submitted
+// message commits to the transcript. The promptChar textbox must cap its box
+// at the true terminal width. serial: mutates process.stdout.columns.
+test.serial(
+	'UserInput promptChar textbox caps its rows to a narrow terminal width',
+	t => {
+		const original = process.stdout.columns;
+		Object.defineProperty(process.stdout, 'columns', {
+			value: 30,
+			configurable: true,
+		});
+		try {
+			const omnicodeTheme = {
+				currentTheme: 'omnicode' as const,
+				colors: themes.omnicode.colors,
+				setCurrentTheme: () => {},
+			};
+			const {lastFrame, unmount} = render(
+				<ThemeContext.Provider value={omnicodeTheme}>
+					<UIStateProvider>
+						<UserInput />
+					</UIStateProvider>
+				</ThemeContext.Provider>,
+			);
+			const frame = stripAnsi(lastFrame() ?? '');
+			unmount();
+			// Assert on the textbox rows themselves (border/prompt rows) so an
+			// unrelated wide status row can never mask or fake this regression.
+			const boxRows = frame.split('\n').filter(line => /[\u256D\u2502\u2570]/.test(line));
+			t.true(boxRows.length > 0, 'expected textbox border rows');
+			for (const line of boxRows) {
+				t.true(
+					line.length <= 30,
+					`textbox row wider than 30-col terminal (${line.length}): ${JSON.stringify(line)}`,
+				);
+			}
+		} finally {
+			Object.defineProperty(process.stdout, 'columns', {
+				value: original,
 				configurable: true,
 			});
 		}

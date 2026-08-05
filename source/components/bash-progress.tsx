@@ -30,6 +30,8 @@ export default function BashProgress({
 		completedState ?? {
 			executionId,
 			command,
+			startedAt: Date.now(),
+			isBackground: false,
 			outputPreview: '',
 			fullOutput: '',
 			stderr: '',
@@ -89,7 +91,11 @@ export default function BashProgress({
 
 	const messageContent = (
 		<Box flexDirection="column">
-			<ToolCallHeader toolName="execute_bash" detail={command} />
+			<ToolCallHeader
+				toolName="execute_bash"
+				detail={command}
+				running={!state.isComplete}
+			/>
 
 			<Box flexDirection="column">
 				<Text color={colors.secondary}>Command:</Text>

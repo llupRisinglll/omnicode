@@ -2,6 +2,7 @@ import {constants, existsSync} from 'node:fs';
 import {access, copyFile, mkdir, rename, rm, stat} from 'node:fs/promises';
 import {dirname, resolve} from 'node:path';
 import {makeSimpleToolFormatter} from '@/components/simple-tool-formatter';
+import {getSafeSessionCwd} from '@/services/session-cwd';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
 import {invalidateCache} from '@/utils/file-cache';
@@ -22,7 +23,7 @@ const executeFileOp = async (args: FileOpArgs): Promise<string> => {
 	const {operation} = args;
 
 	if (operation === 'mkdir') {
-		const absPath = resolve(args.path as string);
+		const absPath = resolve(getSafeSessionCwd(), args.path as string);
 		const alreadyExists = existsSync(absPath);
 		await mkdir(absPath, {recursive: true});
 		return alreadyExists
@@ -31,7 +32,7 @@ const executeFileOp = async (args: FileOpArgs): Promise<string> => {
 	}
 
 	if (operation === 'delete') {
-		const absPath = resolve(args.path as string);
+		const absPath = resolve(getSafeSessionCwd(), args.path as string);
 		const fileStat = await stat(absPath);
 		if (fileStat.isDirectory()) {
 			return `Error: "${args.path}" is a directory. Use execute_bash with rm -r for directory removal.`;
@@ -42,8 +43,8 @@ const executeFileOp = async (args: FileOpArgs): Promise<string> => {
 	}
 
 	// move | copy
-	const srcAbsPath = resolve(args.path as string);
-	const destAbsPath = resolve(args.destination as string);
+	const srcAbsPath = resolve(getSafeSessionCwd(), args.path as string);
+	const destAbsPath = resolve(getSafeSessionCwd(), args.destination as string);
 
 	if (operation === 'move') {
 		await rename(srcAbsPath, destAbsPath);
@@ -110,10 +111,10 @@ const fileOpValidator = async (
 	args: FileOpArgs,
 ): Promise<{valid: true} | {valid: false; error: string}> => {
 	if (!args.operation) {
-		return {valid: false, error: '⚒ operation is required'};
+		return {valid: false, error: '✦ operation is required'};
 	}
 	if (!args.path) {
-		return {valid: false, error: '⚒ path is required'};
+		return {valid: false, error: '✦ path is required'};
 	}
 
 	// Directory creation: only path validation, parents are created.
@@ -126,11 +127,11 @@ const fileOpValidator = async (
 		const pathResult = validatePath(args.path);
 		if (!pathResult.valid) return pathResult;
 
-		const absPath = resolve(args.path);
+		const absPath = resolve(getSafeSessionCwd(), args.path);
 		try {
 			await access(absPath, constants.F_OK);
 		} catch {
-			return {valid: false, error: `⚒ File does not exist: "${args.path}"`};
+			return {valid: false, error: `✦ File does not exist: "${args.path}"`};
 		}
 		return {valid: true};
 	}
@@ -140,20 +141,20 @@ const fileOpValidator = async (
 	if (!args.destination) {
 		return {
 			valid: false,
-			error: `⚒ destination is required for ${args.operation}`,
+			error: `✦ destination is required for ${args.operation}`,
 		};
 	}
 
 	const pairResult = validatePathPair(args.path, args.destination);
 	if (!pairResult.valid) return pairResult;
 
-	const srcAbsPath = resolve(args.path);
+	const srcAbsPath = resolve(getSafeSessionCwd(), args.path);
 	try {
 		await access(srcAbsPath, constants.F_OK);
 	} catch {
 		return {
 			valid: false,
-			error: `⚒ Source file does not exist: "${args.path}"`,
+			error: `✦ Source file does not exist: "${args.path}"`,
 		};
 	}
 
@@ -161,17 +162,17 @@ const fileOpValidator = async (
 	if (fileStat.isDirectory()) {
 		return {
 			valid: false,
-			error: `⚒ Source is a directory, not a file: "${args.path}"`,
+			error: `✦ Source is a directory, not a file: "${args.path}"`,
 		};
 	}
 
-	const parentDir = dirname(resolve(args.destination));
+	const parentDir = dirname(resolve(getSafeSessionCwd(), args.destination));
 	try {
 		await access(parentDir, constants.F_OK);
 	} catch {
 		return {
 			valid: false,
-			error: `⚒ Destination parent directory does not exist: "${parentDir}"`,
+			error: `✦ Destination parent directory does not exist: "${parentDir}"`,
 		};
 	}
 

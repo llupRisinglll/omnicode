@@ -1,4 +1,5 @@
 import test from 'ava';
+import {Text} from 'ink';
 import React from 'react';
 import {renderWithTheme} from '../../test-utils/render-with-theme';
 import {ChatInput} from './chat-input';
@@ -119,8 +120,24 @@ test('ChatInput keeps UserInput visible while a tool is executing', t => {
 	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Working\./);
+	t.regex(output!, /Executing tool: test_tool/);
 	t.regex(output!, /Press Esc to cancel/);
+	unmount();
+});
+
+test('ChatInput does not render live compact counts (they live in the chat area)', t => {
+	const props = createDefaultProps({
+		client: {},
+		isBusy: true,
+		liveCompactCounts: <Text>running-agent-strip</Text>,
+		liveCompactStatus: '0/3 agents completed',
+	});
+
+	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
+	const output = lastFrame()!;
+	t.notRegex(output, /running-agent-strip/);
+	t.regex(output, /Working/);
+	t.regex(output, /0\/3 agents completed/);
 	unmount();
 });
 
@@ -212,7 +229,7 @@ test('ChatInput shows live task list when liveTaskList provided', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	// Note: marginLeft={-1} in the component cuts off the first character in tests
-	t.regex(output!, /asks/);
+	t.regex(output!, /1 done, 1 in progress, 1 open/);
 	t.regex(output!, /First task/);
 	t.regex(output!, /Second task/);
 	t.regex(output!, /Third task/);

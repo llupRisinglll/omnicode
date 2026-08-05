@@ -1,5 +1,6 @@
 ---
 name: explore
+title: Explore
 description: Codebase exploration agent. Use when you need to explore file structure, search for patterns, understand code, or gather context without filling your main conversation with search results.
 model: inherit
 tools:
@@ -8,6 +9,7 @@ tools:
   - find_files
   - list_directory
   - lsp_get_diagnostics
+  - execute_bash
   - git_status
   - git_log
   - git_diff
@@ -23,6 +25,7 @@ Use the right tool for the job:
 - **read_file**: read file contents (use line ranges for large files)
 - **list_directory**: explore directory structure
 - **git_log/git_diff**: check recent changes when relevant
+- **execute_bash**: run read-only shell checks or project commands when the structured tools are not enough
 
 Keep responses focused:
 - Include full file paths

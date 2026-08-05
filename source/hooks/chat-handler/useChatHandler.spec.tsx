@@ -60,6 +60,10 @@ const createMockToolManager = () => ({
 	getToolNames: () => ['read_file'],
 	getFilteredTools: () => ({}),
 	getFilteredToolsForProvider: () => ({}),
+	// The hook calls getMCPInstructions while building the system prompt at
+	// init — a missing method throws during the harness render and the
+	// useEffect that surfaces hookResult never runs.
+	getMCPInstructions: () => [],
 }) as NonNullable<UseChatHandlerProps['toolManager']>;
 
 const waitForCondition = async (
@@ -513,6 +517,7 @@ test('getBaseSystemPrompt - headless mode ignores cached prompt', t => {
 	// rather than whatever the interactive TUI cached at boot.
 	const toolManager = {
 		getAvailableToolNames: (_tune: unknown, mode: string) => [`tool-for-${mode}`],
+		getMCPInstructions: () => [],
 	} as NonNullable<UseChatHandlerProps['toolManager']>;
 
 	const result = getBaseSystemPrompt(
@@ -541,4 +546,83 @@ test('getBaseSystemPrompt - normal mode reuses cached prompt', t => {
 	);
 
 	t.is(result, 'cached-prompt');
+});
+
+// Regression: interrupting a turn (Escape → 'Operation was cancelled') must
+// NOT drop already-executed steps. The grouped compact tool tally that was
+// visible in the live region gets committed to the static transcript, and any
+// partially streamed assistant text is preserved, before the error surfaces.
+test('useChatHandler - interrupt flushes pending tool tally and partial stream to the transcript', async t => {
+	const {default: AssistantMessage} = await import(
+		'../../components/assistant-message.js'
+	);
+	const {CompactToolCountsSummaryBlock} = await import(
+		'../../utils/tool-result-display.js'
+	);
+
+	const queue: React.ReactNode[] = [];
+	let hookResult: ChatHandlerReturn | null = null;
+	const compactToolCountsRef = {
+		current: {
+			execute_bash: {count: 3, details: ['ls -la', 'pwd']},
+		},
+	} as unknown as NonNullable<UseChatHandlerProps['compactToolCountsRef']>;
+	const setCounts: Array<unknown> = [];
+
+	const interruptingClient: LLMClient = {
+		getCurrentModel: () => 'test-model',
+		setModel: () => {},
+		getContextSize: () => 0,
+		getAvailableModels: async () => [],
+		chat: async (_messages, _tools, callbacks) => {
+			callbacks.onToken?.('partial answer before interrupt');
+			throw new Error('Operation was cancelled');
+		},
+		clearContext: async () => {},
+		getTimeout: () => undefined,
+	};
+	const toolManager = {
+		...createMockToolManager(),
+		getMCPInstructions: () => [],
+	} as unknown as NonNullable<UseChatHandlerProps['toolManager']>;
+
+	render(
+		<TestHookComponent
+			{...createMockProps({
+				client: interruptingClient,
+				toolManager,
+				addToChatQueue: component => {
+					queue.push(component);
+				},
+				compactToolCountsRef,
+				onSetCompactToolCounts: counts => {
+					setCounts.push(counts);
+				},
+			})}
+			onResult={result => {
+				hookResult = result;
+			}}
+		/>,
+	);
+
+	await waitForCondition(() => hookResult !== null);
+	await hookResult!.handleChatMessage('run some commands');
+
+	const elements = queue.filter(React.isValidElement);
+	const summaryIndex = elements.findIndex(
+		el => el.type === CompactToolCountsSummaryBlock,
+	);
+	const partialIndex = elements.findIndex(el => el.type === AssistantMessage);
+
+	// The grouped tally was committed to the static transcript...
+	t.true(summaryIndex >= 0, 'expected a compact tool summary in the queue');
+	// ...and the partially streamed text was preserved, after the tally.
+	t.true(partialIndex > summaryIndex, 'expected partial text after summary');
+	const partial = elements[partialIndex] as React.ReactElement<{
+		message: string;
+	}>;
+	t.is(partial.props.message, 'partial answer before interrupt');
+	// The accumulator was consumed, not silently wiped.
+	t.deepEqual(compactToolCountsRef.current, {});
+	t.is(setCounts[setCounts.length - 1], null);
 });

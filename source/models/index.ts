@@ -1,4 +1,5 @@
 export {
+	getModelCapabilities,
 	getModelContextLimit,
 	getModelPricing,
 	getSessionContextLimit,

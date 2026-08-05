@@ -312,7 +312,7 @@ function GitPrFormatter({
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<Text color={colors.tool}>⚒ git_pr</Text>
+			<Text color={colors.tool}>✦ git_pr</Text>
 
 			<Box>
 				<Text color={colors.secondary}>Action: </Text>

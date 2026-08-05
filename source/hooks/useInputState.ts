@@ -54,21 +54,36 @@ export function useInputState() {
 	// Cached line count for performance
 	const [cachedLineCount, setCachedLineCount] = useState(1);
 
+	// Ref-mirror of currentState so handlers see the latest value within a single
+	// stdin chunk — Ink fires every coalesced onChange synchronously with no
+	// re-render between, so the closure `currentState` is stale for all but the
+	// first call. Every setter routes through commitState to keep them in sync.
+	const currentStateRef = useRef(currentState);
+	const commitState = useCallback((newState: InputState) => {
+		currentStateRef.current = newState;
+		setCurrentState(newState);
+	}, []);
+
 	// Helper to push current state to undo stack
 	const pushToUndoStack = useCallback(
 		(newState: InputState) => {
-			setUndoStack(prev => [...prev, currentState]);
+			const previous = currentStateRef.current;
+			setUndoStack(prev => [...prev, previous]);
 			setRedoStack([]); // Clear redo stack on new action
-			setCurrentState(newState);
+			commitState(newState);
 		},
-		[currentState],
+		[commitState],
 	);
 
 	// Update input with paste detection and atomic deletion
 	const updateInput = useCallback(
 		(newInput: string) => {
+			// Read from the ref, not the closure — within one stdin chunk the closure
+			// `currentState` is stale for every onChange after the first.
+			const state = currentStateRef.current;
+
 			// First, check for atomic deletion (placeholder removal)
-			const atomicDeletionResult = handleAtomicDeletion(currentState, newInput);
+			const atomicDeletionResult = handleAtomicDeletion(state, newInput);
 			if (atomicDeletionResult) {
 				// Atomic deletion occurred - apply it
 				pushToUndoStack(atomicDeletionResult);
@@ -80,7 +95,7 @@ export function useInputState() {
 
 			// Check if this might be a continuation of a recent paste (chunked paste in VS Code)
 			const existingPlaceholder = lastPasteIdRef.current
-				? currentState.placeholderContent[lastPasteIdRef.current]
+				? state.placeholderContent[lastPasteIdRef.current]
 				: null;
 			const dynamicWindow = existingPlaceholder
 				? getDynamicPasteWindow(existingPlaceholder.content.length)
@@ -93,9 +108,8 @@ export function useInputState() {
 			) {
 				// This looks like a chunked paste continuation
 				// Extract the new text that was added (should be at the end)
-				const placeholder =
-					currentState.placeholderContent[lastPasteIdRef.current];
-				const expectedLength = currentState.displayValue.length;
+				const placeholder = state.placeholderContent[lastPasteIdRef.current];
+				const expectedLength = state.displayValue.length;
 				const addedChunk = newInput.slice(expectedLength);
 
 				// Real terminal paste chunks arrive many chars at a time — a single
@@ -111,7 +125,7 @@ export function useInputState() {
 					const newPlaceholder = `[Paste #${lastPasteIdRef.current}: ${updatedContent.length} chars]`;
 
 					const updatedPlaceholderContent = {
-						...currentState.placeholderContent,
+						...state.placeholderContent,
 						[lastPasteIdRef.current]: {
 							...placeholder,
 							content: updatedContent,
@@ -120,11 +134,17 @@ export function useInputState() {
 						},
 					};
 
-					// Replace old placeholder with updated one in display value
-					const newDisplayValue = currentState.displayValue.replace(
-						oldPlaceholder,
-						newPlaceholder,
-					);
+					// Rebuild the display from newInput (the authoritative cumulative
+					// value), splicing the placeholder token in by index and dropping
+					// the merged chunk — never .replace() off a possibly-stale display.
+					const placeholderIndex = newInput.indexOf(oldPlaceholder);
+					const newDisplayValue =
+						newInput.slice(0, placeholderIndex) +
+						newPlaceholder +
+						newInput.slice(
+							placeholderIndex + oldPlaceholder.length,
+							expectedLength,
+						);
 
 					pushToUndoStack({
 						displayValue: newDisplayValue,
@@ -148,7 +168,7 @@ export function useInputState() {
 
 				const activePasteId = lastPasteIdRef.current;
 				const activePlaceholder = activePasteId
-					? currentState.placeholderContent[activePasteId]
+					? state.placeholderContent[activePasteId]
 					: null;
 				const activeWindow = activePlaceholder
 					? getDynamicPasteWindow(activePlaceholder.content.length)
@@ -161,7 +181,7 @@ export function useInputState() {
 				) {
 					// If we don't have the placeholder in state yet, just update detector and skip
 					// This happens when multiple detections fire before React updates state
-					const placeholder = currentState.placeholderContent[activePasteId];
+					const placeholder = state.placeholderContent[activePasteId];
 					if (!placeholder) {
 						// Skip duplicate early detection
 						pasteDetectorRef.current.updateState(newInput);
@@ -175,7 +195,7 @@ export function useInputState() {
 						const newPlaceholder = `[Paste #${activePasteId}: ${updatedContent.length} chars]`;
 
 						const updatedPlaceholderContent = {
-							...currentState.placeholderContent,
+							...state.placeholderContent,
 							[activePasteId]: {
 								...placeholder,
 								content: updatedContent,
@@ -184,10 +204,17 @@ export function useInputState() {
 							},
 						};
 
-						const newDisplayValue = currentState.displayValue.replace(
-							oldPlaceholder,
-							newPlaceholder,
-						);
+						// Splice the updated placeholder into newInput by index and drop
+						// the appended text (now merged into the paste content).
+						const baseLength = newInput.length - detection.addedText.length;
+						const placeholderIndex = newInput.indexOf(oldPlaceholder);
+						const newDisplayValue =
+							newInput.slice(0, placeholderIndex) +
+							newPlaceholder +
+							newInput.slice(
+								placeholderIndex + oldPlaceholder.length,
+								baseLength,
+							);
 
 						pushToUndoStack({
 							displayValue: newDisplayValue,
@@ -203,8 +230,8 @@ export function useInputState() {
 				// Try to handle as paste (new paste)
 				const pasteResult = handlePaste(
 					detection.addedText,
-					currentState.displayValue,
-					currentState.placeholderContent,
+					state.displayValue,
+					state.placeholderContent,
 					detection.method as 'rate' | 'size' | 'multiline',
 				);
 
@@ -218,7 +245,7 @@ export function useInputState() {
 					// Track this paste for potential chunked continuation
 					const pasteId = Object.keys(pasteResult.placeholderContent).find(
 						id =>
-							!currentState.placeholderContent[id] &&
+							!state.placeholderContent[id] &&
 							pasteResult.placeholderContent[id].type === PlaceholderType.PASTE,
 					);
 					if (pasteId) {
@@ -229,14 +256,14 @@ export function useInputState() {
 					// Small paste - treat as normal input
 					pushToUndoStack({
 						displayValue: newInput,
-						placeholderContent: currentState.placeholderContent,
+						placeholderContent: state.placeholderContent,
 					});
 				}
 			} else {
 				// Normal typing
 				pushToUndoStack({
 					displayValue: newInput,
-					placeholderContent: currentState.placeholderContent,
+					placeholderContent: state.placeholderContent,
 				});
 			}
 
@@ -258,7 +285,7 @@ export function useInputState() {
 				);
 			}, 50);
 		},
-		[currentState, pushToUndoStack],
+		[pushToUndoStack],
 	);
 
 	// Undo function (Ctrl+_)
@@ -267,14 +294,17 @@ export function useInputState() {
 			const previousState = undoStack[undoStack.length - 1];
 			const newUndoStack = undoStack.slice(0, -1);
 
-			setRedoStack(prev => [...prev, currentState]);
+			// Snapshot before commitState reassigns the ref — a functional updater may
+			// run after that mutation and would otherwise capture the wrong state.
+			const snapshot = currentStateRef.current;
+			setRedoStack(prev => [...prev, snapshot]);
 			setUndoStack(newUndoStack);
-			setCurrentState(previousState);
+			commitState(previousState);
 
 			// Update paste detector state
 			pasteDetectorRef.current.updateState(previousState.displayValue);
 		}
-	}, [undoStack, currentState]);
+	}, [undoStack, commitState]);
 
 	// Redo function (Ctrl+Y)
 	const redo = useCallback(() => {
@@ -282,14 +312,16 @@ export function useInputState() {
 			const nextState = redoStack[redoStack.length - 1];
 			const newRedoStack = redoStack.slice(0, -1);
 
-			setUndoStack(prev => [...prev, currentState]);
+			// Snapshot before commitState reassigns the ref (see undo).
+			const snapshot = currentStateRef.current;
+			setUndoStack(prev => [...prev, snapshot]);
 			setRedoStack(newRedoStack);
-			setCurrentState(nextState);
+			commitState(nextState);
 
 			// Update paste detector state
 			pasteDetectorRef.current.updateState(nextState.displayValue);
 		}
-	}, [redoStack, currentState]);
+	}, [redoStack, commitState]);
 
 	// Delete placeholder atomically
 	const deletePlaceholder = useCallback(
@@ -306,8 +338,9 @@ export function useInputState() {
 				'g',
 			);
 
-			const newDisplayValue = currentState.displayValue.replace(regex, '');
-			const newPlaceholderContent = {...currentState.placeholderContent};
+			const state = currentStateRef.current;
+			const newDisplayValue = state.displayValue.replace(regex, '');
+			const newPlaceholderContent = {...state.placeholderContent};
 			delete newPlaceholderContent[placeholderId];
 
 			pushToUndoStack({
@@ -315,7 +348,7 @@ export function useInputState() {
 				placeholderContent: newPlaceholderContent,
 			});
 		},
-		[currentState, pushToUndoStack],
+		[pushToUndoStack],
 	);
 
 	// Reset all state
@@ -325,7 +358,7 @@ export function useInputState() {
 			debounceTimerRef.current = null;
 		}
 
-		setCurrentState(createEmptyInputState());
+		commitState(createEmptyInputState());
 		setUndoStack([]);
 		setRedoStack([]);
 		setHasLargeContent(false);
@@ -335,7 +368,7 @@ export function useInputState() {
 		pasteDetectorRef.current.reset();
 		lastPasteTimeRef.current = 0;
 		lastPasteIdRef.current = null;
-	}, []);
+	}, [commitState]);
 
 	// Cleanup on unmount
 	useEffect(() => {
@@ -348,19 +381,25 @@ export function useInputState() {
 	}, []);
 
 	// Set full InputState (for history navigation)
-	const setInputState = useCallback((newState: InputState) => {
-		setCurrentState(newState);
-		pasteDetectorRef.current.updateState(newState.displayValue);
-	}, []);
+	const setInputState = useCallback(
+		(newState: InputState) => {
+			commitState(newState);
+			pasteDetectorRef.current.updateState(newState.displayValue);
+		},
+		[commitState],
+	);
 
 	// Legacy setters for compatibility
-	const setInput = useCallback((newInput: string) => {
-		setCurrentState(prev => ({
-			...prev,
-			displayValue: newInput,
-		}));
-		pasteDetectorRef.current.updateState(newInput);
-	}, []);
+	const setInput = useCallback(
+		(newInput: string) => {
+			commitState({
+				...currentStateRef.current,
+				displayValue: newInput,
+			});
+			pasteDetectorRef.current.updateState(newInput);
+		},
+		[commitState],
+	);
 
 	// Compute legacy pastedContent for backward compatibility
 	const legacyPastedContent = useMemo(() => {
@@ -383,6 +422,9 @@ export function useInputState() {
 			redo,
 			deletePlaceholder,
 			setInputState,
+			// Synchronously-current mirror of currentState — read this (not the
+			// render-time `input`) inside useInput handlers that fire mid-chunk.
+			currentStateRef,
 
 			// Legacy interface for compatibility
 			input: currentState.displayValue,

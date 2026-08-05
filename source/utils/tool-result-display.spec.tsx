@@ -6,12 +6,30 @@ import type {ToolManager} from '../tools/tool-manager.js';
 import type {ToolCall, ToolResult} from '../types/core.js';
 import {renderWithTheme} from '../test-utils/render-with-theme.js';
 import {
+	CompactDetailResult,
+	CompactFileResult,
+	CompactToolActivityBlock,
 	CompactToolCountsLine,
 	LiveCompactCounts,
+	LiveCompactRunningSummary,
 	displayCompactCountsSummary,
 	displayToolResult,
+	getCompactToolDetail,
+	getCompactToolRunningSummary,
 	getLiveCompactToolExpandHitboxColumns,
 } from './tool-result-display.js';
+import type {CompactToolActivity} from './tool-result-display.js';
+import {
+	clearScreen,
+	isScreenTextOccurrenceFromEndAt,
+	setTerminalSize,
+	writeString,
+} from './selection.js';
+import {clickEvents, compactToggleEvents} from './terminal-mouse.js';
+
+const longNewFile = Array.from({length: 20}, (_, i) => `line ${i + 1}`).join(
+	'\n',
+);
 
 // ============================================================================
 // Type Definitions
@@ -125,7 +143,7 @@ test('displayToolResult - renders a validation failure as a red error', async t 
 	const result = createMockToolResult(
 		'call-1',
 		'TestTool',
-		'⚒ Validation failed: one or more arguments have the wrong type\n  - `path`: expected string, received object',
+		'✦ Validation failed: one or more arguments have the wrong type\n  - `path`: expected string, received object',
 	);
 	const {addToChatQueue, queue} = createMockAddToChatQueue();
 
@@ -160,12 +178,63 @@ test('displayToolResult - compact mode condenses an error to a one-liner', async
 	unmount();
 });
 
+test('CompactToolActivityBlock with calls expands to the individual entries', async t => {
+	setTerminalSize(80, 24);
+	const activity: CompactToolActivity = {
+		count: 3,
+		details: ['combined tail line'],
+		calls: [
+			{detail: 'pnpm install', output: 'up to date, audited 1200 packages'},
+			{detail: 'pnpm run build:packages', output: 'dist/ rebuilt'},
+			{detail: 'pnpm run dev', output: 'dev server running on :4001'},
+		],
+	};
+	const {lastFrame, unmount} = renderWithTheme(
+		<CompactToolActivityBlock
+			entries={[['execute_bash', activity]]}
+			expanded={false}
+		/>,
+	);
+	await new Promise(resolve => setTimeout(resolve, 50));
+
+	// Collapsed: only the compacted form (header + tail) — no individual calls.
+	const collapsed = lastFrame()!;
+	t.regex(collapsed, /combined tail line/);
+	t.notRegex(collapsed, /✦ Bash\(pnpm install\)/);
+
+	// ctrl+o expands → the individual call entries render inside the block.
+	compactToggleEvents.emit('toggle');
+	await new Promise(resolve => setTimeout(resolve, 50));
+	const expanded = lastFrame()!;
+	t.regex(expanded, /✦ Bash\(pnpm install\)/);
+	t.regex(expanded, /✦ Bash\(pnpm run build:packages\)/);
+	t.regex(expanded, /✦ Bash\(pnpm run dev\)/);
+	unmount();
+});
+
+test('getCompactToolDetail extracts the target path for file-edit tools', t => {
+	t.is(
+		getCompactToolDetail('string_replace', {path: 'src/a.ts'})?.detail,
+		'src/a.ts',
+	);
+	t.is(
+		getCompactToolDetail('write_file', {file_path: 'src/b.ts'})?.detail,
+		'src/b.ts',
+	);
+	t.is(
+		getCompactToolDetail('diff_edit', {path: 'src/c.ts'})?.detail,
+		'src/c.ts',
+	);
+	// Missing path → no single detail (falls through to the tally).
+	t.is(getCompactToolDetail('string_replace', {}), null);
+});
+
 test('displayToolResult - compact mode condenses a validation failure too', async t => {
 	const toolCall = createMockToolCall('call-1', 'write_file');
 	const result = createMockToolResult(
 		'call-1',
 		'write_file',
-		'⚒ Validation failed: Invalid file path: "/abs/path". Path must be relative.',
+		'✦ Validation failed: Invalid file path: "/abs/path". Path must be relative.',
 	);
 	const {addToChatQueue, queue} = createMockAddToChatQueue();
 
@@ -191,7 +260,7 @@ test('LiveCompactCounts renders running state and groups failed tools', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /^⚒\s+Ran WebFetch ×10 failed \(running\) \(ctrl-o to expand\)/);
+	t.regex(output, /^✦\s+Ran WebFetch ×10 failed \(running\)/);
 	t.notRegex(output, /Running WebFetch/);
 	unmount();
 });
@@ -204,8 +273,177 @@ test('CompactToolCountsLine renders completed failed summaries as ran', t => {
 	);
 
 	const output = lastFrame()!;
-	t.regex(output, /^⚒\s+Ran WebFetch ×10 failed/);
-	t.notRegex(output, /^ ⚒/);
+	t.regex(output, /^✦\s+Ran WebFetch ×10 failed/);
+	t.notRegex(output, /^ ✦/);
+	unmount();
+});
+
+test('LiveCompactCounts renders agent instance keys as separate blocks', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:first': {
+					count: 1,
+					details: ['explore: first'],
+					running: true,
+				},
+				'agent:second': {
+					count: 1,
+					details: ['review: second'],
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /^✦\s+Ran agent:explore\(first\) \(running\)/m);
+	t.regex(output, /^✦\s+Ran agent:review\(second\) \(running\)/m);
+	t.notRegex(output, /Task and Task/);
+	t.notRegex(output, /Task ×2/);
+	unmount();
+});
+
+test('LiveCompactCounts truncates long agent task details before the expand hint', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:long': {
+					count: 1,
+					details: [
+						'explore: Inspect the top-level repository layout and run a short bash command: sleep 4 && echo subagent-a',
+					],
+					liveDetails: () => ['stats:thinking · ~12 tokens'],
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(
+		output,
+		/Ran agent:explore\(Inspect the top-level repository layout and run…\) \(running\)/,
+	);
+		unmount();
+});
+
+test('getCompactToolRunningSummary summarizes running agents', t => {
+	t.is(
+		getCompactToolRunningSummary({
+			'agent:first': {count: 1, details: ['explore: first'], running: true},
+			'agent:second': {count: 1, details: ['explore: second'], running: true},
+			'agent:third': {count: 1, details: ['explore: third'], running: true},
+		}),
+		'0/3 agents completed',
+	);
+});
+
+test('getCompactToolRunningSummary uses dynamic subagent running state', t => {
+	t.is(
+		getCompactToolRunningSummary({
+			'agent:first': {
+				count: 1,
+				details: ['explore: first'],
+				liveRunning: () => false,
+				running: true,
+			},
+			'agent:second': {
+				count: 1,
+				details: ['explore: second'],
+				liveRunning: () => true,
+				running: true,
+			},
+			'agent:third': {
+				count: 1,
+				details: ['explore: third'],
+				liveRunning: () => true,
+				running: true,
+			},
+		}),
+		'1/3 agents completed',
+	);
+});
+
+test('LiveCompactRunningSummary refreshes dynamic subagent completion counts', async t => {
+	let firstRunning = true;
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactRunningSummary
+			counts={{
+				'agent:first': {
+					count: 1,
+					details: ['explore: first'],
+					liveRunning: () => firstRunning,
+					running: true,
+				},
+				'agent:second': {
+					count: 1,
+					details: ['explore: second'],
+					liveRunning: () => true,
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	t.regex(lastFrame() ?? '', /0\/2 agents completed/);
+	firstRunning = false;
+	await new Promise(resolve => setTimeout(resolve, 150));
+	t.regex(lastFrame() ?? '', /1\/2 agents completed/);
+
+	unmount();
+});
+
+test('LiveCompactCounts renders dynamically completed subagent rows during parallel work', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:first': {
+					count: 1,
+					details: ['explore: first', 'state:completed', 'read_file'],
+					liveDetails: () => ['state:completed', 'stats:1 tool call'],
+					liveRunning: () => false,
+					running: true,
+				},
+				'agent:second': {
+					count: 1,
+					details: ['explore: second'],
+					liveDetails: () => ['stats:thinking · mimo-v2.5 · ~12 tokens'],
+					liveRunning: () => true,
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /Ran agent:explore\(first\) completed/);
+	t.regex(output, /Ran agent:explore\(second\) \(running\)/);
+	t.regex(output, /thinking · mimo-v2\.5 · ~12 tokens/);
+	unmount();
+});
+
+test('LiveCompactCounts renders failed agent state only once', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:failed-id': {
+					count: 1,
+					details: [
+						'explore: failed task',
+						'state:failed',
+						'read_file',
+						'stats:1 tool call · mimo-v2.5 · ~42 tokens',
+					],
+					failed: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /Ran agent:explore\(failed task\) failed/);
+	t.notRegex(output, /failed failed/);
 	unmount();
 });
 
@@ -337,7 +575,7 @@ test('displayToolResult - displays formatted result as ToolMessage when formatte
 	const element = queue[0] as React.ReactElement<ToolMessageProps>;
 	t.is(element.type, ToolMessage);
 	t.is(element.props.message, 'Formatted content');
-	t.is(element.props.title, '⚒ ReadFile');
+	t.is(element.props.title, '✦ ReadFile');
 });
 
 test('displayToolResult - clones React element when formatter returns element', async t => {
@@ -382,7 +620,7 @@ test('displayToolResult - falls back to raw result when formatter throws', async
 	t.is(queue.length, 1);
 	const element = queue[0] as React.ReactElement<ToolMessageProps>;
 	t.is(element.props.message, 'raw result');
-	t.is(element.props.title, '⚒ BrokenTool');
+	t.is(element.props.title, '✦ BrokenTool');
 });
 
 test('displayToolResult - displays raw result when no formatter exists', async t => {
@@ -407,7 +645,7 @@ test('displayToolResult - displays raw result when no formatter exists', async t
 	t.is(queue.length, 1);
 	const element = queue[0] as React.ReactElement<ToolMessageProps>;
 	t.is(element.props.message, 'raw content');
-	t.is(element.props.title, '⚒ NoFormatterTool');
+	t.is(element.props.title, '✦ NoFormatterTool');
 });
 
 // ============================================================================
@@ -692,8 +930,7 @@ test('LiveCompactCounts - renders tool counts', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Ran Read ×3 and Grep ×2 \(running\)/);
-	t.regex(output!, /\(ctrl-o to expand\)/);
-	unmount();
+		unmount();
 });
 
 test('LiveCompactCounts - renders single count without multiplier', t => {
@@ -741,8 +978,7 @@ test('LiveCompactCounts - merges completed and running compact counts', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Ran Bash ×3 \(running\)/);
-	t.regex(output!, /\(ctrl-o to expand\)/);
-	t.regex(output!, /└\s+gh repo list llupRisinglll --limit 100 --json name/);
+		t.regex(output!, /└\s+gh repo list llupRisinglll --limit 100 --json name/);
 	t.notRegex(output!, /source\/app\/App\.tsx/);
 	t.notRegex(output!, /Running Bash/);
 	unmount();
@@ -752,10 +988,15 @@ test('LiveCompactCounts - renders live detail tails for running compact groups',
 	const {lastFrame, unmount} = renderWithTheme(
 		<LiveCompactCounts
 			counts={{
-				agent: {
+				'agent:preview': {
 					count: 1,
 					details: ['explore: inspect repository'],
-					liveDetails: () => ['explore: running read_file'],
+					liveDetails: () => [
+						'opening target files',
+						'checking relevant symbols',
+						'reading source/hooks/chat-handler/conversation/tool-executor.tsx',
+						'stats:running read_file · 1 tool call · ~42 tokens',
+					],
 					running: true,
 				},
 			}}
@@ -764,9 +1005,76 @@ test('LiveCompactCounts - renders live detail tails for running compact groups',
 
 	let output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Ran Task \(running\)/);
-	t.regex(output!, /└\s+explore: inspect repository/);
-	t.regex(output!, /explore: running read_file/);
+	t.regex(output!, /Ran agent:explore\(inspect repository\) \(running\)/);
+	t.notRegex(output!, /└\s+opening target files/);
+	t.regex(output!, /└\s+checking relevant symbols/);
+	t.regex(
+		output!,
+		/^\s+reading source\/hooks\/chat-handler\/conversation\/tool-executor\.tsx$/m,
+	);
+	t.notRegex(output!, /└\s+read_file/);
+	t.regex(output!, /… \+1 more line · running read_file · 1 tool call · ~42 tokens/);
+	t.notRegex(output!, /\+0 more lines/);
+	t.notRegex(output!, /└\s+explore: inspect repository/);
+	t.notRegex(output!, /└\s+explore: running read_file/);
+	t.notRegex(output!, /explore → read_file/);
+	unmount();
+});
+
+test('LiveCompactCounts - keeps running agent body free of raw tool labels when only stats change', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:preview': {
+					count: 1,
+					details: ['explore: inspect repository'],
+					liveDetails: () => [
+						'stats:running read_file · 1 tool call · ~42 tokens',
+					],
+					running: true,
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame();
+	t.truthy(output);
+	t.regex(output!, /Ran agent:explore\(inspect repository\) \(running\)/);
+	t.regex(output!, /^\s+running read_file · 1 tool call · ~42 tokens$/m);
+	t.notRegex(output!, /└\s+read_file/);
+	t.notRegex(output!, /\+0 more lines/);
+	unmount();
+});
+
+test('LiveCompactCounts - renders completed agent stats on hidden-count footer', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<LiveCompactCounts
+			counts={{
+				'agent:preview': {
+					count: 1,
+					details: [
+						'explore: inspect repository',
+						'state:completed',
+						'execute_bash',
+						"sleep 2; printf 'packages checked\\n'",
+						'final summary received',
+						'stats:2 tool calls · 1.8s · preview-model · ~1,280 tokens',
+					],
+				},
+			}}
+		/>,
+	);
+
+	const output = lastFrame();
+	t.truthy(output);
+	t.regex(output!, /Ran agent:explore\(inspect repository\) completed/);
+	t.regex(
+		output!,
+		/… \+1 more line · 2 tool calls · 1\.8s · preview-model · ~1,280 tokens/,
+	);
+	t.regex(output!, /└\s+execute_bash/);
+	t.notRegex(output!, /└\s+Completed/);
+	t.notRegex(output!, /Ran agent:explore\(inspect repository\) · complete/);
 	unmount();
 });
 
@@ -819,7 +1127,6 @@ test('LiveCompactCounts - expanded mode shows all grouped details', t => {
 	t.regex(output!, /command one/);
 	t.regex(output!, /command four/);
 	t.notRegex(output!, /more commands/);
-	t.regex(output!, /\(ctrl-o to collapse\)/);
 	unmount();
 });
 
@@ -835,8 +1142,7 @@ test('LiveCompactCounts - hover highlights expand hint', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /\(ctrl-o to expand\)/);
-	unmount();
+		unmount();
 });
 
 test('getLiveCompactToolExpandHitboxColumns returns visible hint columns', t => {
@@ -848,7 +1154,7 @@ test('getLiveCompactToolExpandHitboxColumns returns visible hint columns', t => 
 	);
 
 	t.truthy(hitbox);
-	t.true(hitbox!.start > '⚒  Ran Bash ×2 (running)'.length);
+	t.true(hitbox!.start > '✦  Ran Bash ×2 (running)'.length);
 	t.is(hitbox!.end - hitbox!.start + 1, '(ctrl-o to expand)'.length);
 });
 
@@ -871,9 +1177,35 @@ test('displayCompactCountsSummary - keeps safe compact details below summary', t
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Ran Bash ×2/);
-	t.regex(output!, /\(ctrl-o to collapse\)/);
 	t.regex(output!, /└\s+first command/);
 	t.regex(output!, /last command/);
+	unmount();
+});
+
+test('displayCompactCountsSummary renders agent entries as separate blocks', t => {
+	const components: React.ReactNode[] = [];
+	displayCompactCountsSummary(
+		{
+			'agent:first': {
+				count: 1,
+				details: ['explore: first task', 'explore: complete'],
+			},
+			'agent:second': {
+				count: 1,
+				details: ['review: second task', 'review: complete'],
+			},
+		},
+		component => {
+			components.push(component);
+		},
+		{indent: false},
+	);
+
+	const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
+	const output = lastFrame()!;
+	t.regex(output, /^✦\s+Ran agent:explore\(first task\)/m);
+	t.regex(output, /^✦\s+Ran agent:review\(second task\)/m);
+	t.notRegex(output, /Task and Task/);
 	unmount();
 });
 
@@ -899,7 +1231,7 @@ test('LiveCompactCounts - renders a single hammer for grouped entries', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	const hammerCount = (output!.match(/\u2692/g) || []).length;
+	const hammerCount = (output!.match(/\u2726/g) || []).length;
 	t.is(hammerCount, 1);
 	t.regex(output!, /Ran Read and Bash ×2 \(running\)/);
 	unmount();
@@ -955,5 +1287,184 @@ test('displayToolResult compact - unknown tool uses tool name', async t => {
 		queue[0] as React.ReactElement,
 	);
 	t.regex(lastFrame()!, /custom_mcp_tool/);
+	unmount();
+});
+
+test('displayToolResult compact icon theme - long output keeps the TAIL with an earlier-lines hint', async t => {
+	const {addToChatQueue, queue} = createMockAddToChatQueue();
+	const toolCall = createMockToolCall('1', 'execute_bash', {command: 'seq 6'});
+	const result = createMockToolResult(
+		'1',
+		'execute_bash',
+		'line-one\nline-two\nline-three\nline-four\nline-five\nline-six',
+	);
+
+	await displayToolResult(toolCall, result, null, addToChatQueue, true, {
+		iconTheme: true,
+	});
+
+	t.is(queue.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(queue[0] as React.ReactElement);
+	const output = lastFrame()!;
+	// Collapsed preview caps at 3 lines and must keep the tail, not the head.
+	t.regex(output, /line-six/);
+	t.regex(output, /line-four/);
+	t.notRegex(output, /line-one/);
+	// Hidden lines are announced BELOW the tail with the ctrl+t toggle.
+	t.regex(output, /\+3 lines \(ctrl \+ t to view transcript\)/);
+	t.true(
+		output.indexOf('line-six') < output.indexOf('+3 lines'),
+		'the earlier-lines hint must sit below the output tail',
+	);
+	unmount();
+});
+
+test('displayToolResult compact icon theme - short output shows fully with no hint', async t => {
+	const {addToChatQueue, queue} = createMockAddToChatQueue();
+	const toolCall = createMockToolCall('1', 'execute_bash', {command: 'pwd'});
+	const result = createMockToolResult('1', 'execute_bash', 'one\ntwo');
+
+	await displayToolResult(toolCall, result, null, addToChatQueue, true, {
+		iconTheme: true,
+	});
+
+	t.is(queue.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(queue[0] as React.ReactElement);
+	const output = lastFrame()!;
+	t.regex(output, /one/);
+	t.regex(output, /two/);
+	t.notRegex(output, /earlier line/);
+	unmount();
+});
+
+test('CompactFileResult write_file collapses to a 3-line preview with a +N more lines button', t => {
+	const {lastFrame} = renderWithTheme(
+		<CompactFileResult
+			toolName="write_file"
+			path="src/a.tsx"
+			newStr={longNewFile}
+		/>,
+	);
+	const out = lastFrame()!;
+	t.regex(out, /✦ Write src\/a\.tsx/);
+	t.regex(out, /⎿ Write: 20 lines/);
+	t.regex(out, /line 1/);
+	t.regex(out, /line 3/);
+	t.regex(out, /\.\.\.17 more lines/);
+	t.notRegex(out, /line 4/);
+});
+
+test('CompactFileResult string_replace renders an Edit row with a diff', t => {
+	const {lastFrame} = renderWithTheme(
+		<CompactFileResult
+			toolName="string_replace"
+			path="src/b.ts"
+			oldStr={['const a = 1;', 'const b = 2;'].join('\n')}
+			newStr={['const a = 1;', 'const b = 3;'].join('\n')}
+		/>,
+	);
+	const out = lastFrame()!;
+	t.regex(out, /✦ Edit src\/b\.ts/);
+	t.regex(out, /⎿ Edit: 2 lines → 2 lines/);
+});
+
+const clickableOutput = Array.from(
+	{length: 12},
+	(_, i) => `out line ${i + 1}`,
+).join('\n');
+const clickableFooter = '… +9 lines (ctrl + t to view transcript)';
+
+test('CompactDetailResult footer click expands, block click collapses', async t => {
+	setTerminalSize(80, 24);
+	const {lastFrame} = renderWithTheme(
+		<CompactDetailResult
+			toolName="execute_bash"
+			detail="npm run build"
+			output={clickableOutput}
+		/>,
+	);
+	await new Promise(resolve => setTimeout(resolve, 50));
+
+	// Seed the screen snapshot like the output overlay would: the clickable
+	// footer lives at row 3.
+	clearScreen();
+	writeString(3, 0, `    ${clickableFooter}`);
+	t.true(
+		isScreenTextOccurrenceFromEndAt(5, 3, clickableFooter, 0),
+		'footer hit-test primitive should match row 3',
+	);
+
+	clickEvents.emit('click', {x: 5, y: 3});
+	await new Promise(resolve => setTimeout(resolve, 50));
+	t.regex(lastFrame()!, /out line 5/, 'footer click should expand the output');
+
+	// Expanded: header at row 1, last output line at row 10 — clicking a row
+	// in between collapses the whole entry.
+	clearScreen();
+	writeString(1, 0, '✦ Bash(npm run build)');
+	writeString(10, 0, 'out line 12');
+	clickEvents.emit('click', {x: 5, y: 5});
+	await new Promise(resolve => setTimeout(resolve, 50));
+	t.notRegex(lastFrame()!, /out line 5/, 'block click should collapse');
+});
+
+test('stacked identical blocks: expanding one does not expand the other', async t => {
+	setTerminalSize(80, 24);
+	const activity: CompactToolActivity = {
+		count: 1,
+		details: [
+			'explore: first',
+			'state:completed',
+			'read_file',
+			'write_file',
+			'final summary received',
+			'stats:7 tool calls · 9.9s · preview-model · ~3,333 tokens',
+		],
+	};
+	const {lastFrame, unmount} = renderWithTheme(
+		<>
+			<CompactToolActivityBlock
+				entries={[['agent:first', {...activity}]]}
+				expanded={false}
+			/>
+			<CompactToolActivityBlock
+				entries={[['agent:second', {...activity}]]}
+				expanded={false}
+			/>
+		</>,
+	);
+	await new Promise(resolve => setTimeout(resolve, 50));
+
+	// Both collapsed blocks render the identical footer; seed the screen
+	// snapshot like the output overlay would (footers at rows 3 and 8).
+	const footer =
+		'… +1 more line · 7 tool calls · 9.9s · preview-model · ~3,333 tokens (ctrl-o to expand)';
+	clearScreen();
+	writeString(3, 0, footer);
+	writeString(8, 0, footer);
+	const collapsedSummary =
+		'… +1 more line · 7 tool calls · 9.9s · preview-model · ~3,333 tokens';
+	t.true(
+		isScreenTextOccurrenceFromEndAt(5, 3, collapsedSummary, 1),
+		'first block footer should hit-test at row 3 (occurrence 1)',
+	);
+	t.true(
+		isScreenTextOccurrenceFromEndAt(5, 8, collapsedSummary, 0),
+		'second block footer should hit-test at row 8 (occurrence 0)',
+	);
+
+	// Click the FIRST footer only.
+	clickEvents.emit('click', {x: 5, y: 3});
+	await new Promise(resolve => setTimeout(resolve, 50));
+
+	const output = lastFrame()!;
+	// "final summary received" is hidden in the collapsed block; it appears
+	// exactly once when only the first block expands — twice if the second
+	// wrongly expands along with it.
+	t.is(
+		(output.match(/final summary received/g) ?? []).length,
+		1,
+		'only the clicked block should expand',
+	);
 	unmount();
 });

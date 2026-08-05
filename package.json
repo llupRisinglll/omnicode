@@ -1,7 +1,7 @@
 {
 	"name": "@nanocollective/nanocoder",
 	"main": "dist/cli.js",
-	"version": "1.28.1",
+	"version": "1.29.0",
 	"description": "The best Claude Code alternative -- multi-provider agentic coding CLI. Use DeepSeek, Ollama, GLM, or any OpenAI-compatible API with a Claude Code-level harness.",
 	"keywords": [
 		"cli",
@@ -89,6 +89,7 @@
 		"croner": "^10.0.1",
 		"diff": "^9.0.0",
 		"dotenv": "^17.2.3",
+		"get-east-asian-width": "1.4.0",
 		"ignore": "^7.0.5",
 		"ink": "^6.3.1",
 		"ink-big-text": "^2.0.0",
@@ -96,6 +97,7 @@
 		"ink-select-input": "^6.2.0",
 		"ink-spinner": "^5.0.0",
 		"ink-tab": "^5.2.0",
+		"jsonrepair": "^3.15.0",
 		"llama-tokenizer-js": "^1.2.2",
 		"pino": "^10.1.0",
 		"pino-pretty": "^13.1.3",

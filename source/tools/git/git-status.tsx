@@ -283,7 +283,7 @@ function GitStatusFormatter({result}: {result?: string}): React.ReactElement {
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<Text color={colors.tool}>⚒ git_status</Text>
+			<Text color={colors.tool}>✦ git_status</Text>
 
 			{branch && (
 				<Box>

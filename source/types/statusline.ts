@@ -39,6 +39,9 @@ export interface StatusLineData {
 		resolved_profile: string;
 		tool_mode: string;
 	};
+	background_tasks?: {
+		running: number;
+	};
 	version: string;
 }
 

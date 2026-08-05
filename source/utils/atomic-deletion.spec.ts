@@ -207,6 +207,16 @@ test('getPlaceholderSpans finds all placeholder spans', t => {
 	t.is(text.slice(spans[1].start, spans[1].end), '[Paste #2: 42 chars]');
 });
 
+test('getPlaceholderSpans finds image placeholders', t => {
+	const text = 'a [Image #1] b [Image #2] [Paste #3: 12 chars]';
+	const spans = getPlaceholderSpans(text);
+
+	t.is(spans.length, 3);
+	t.is(text.slice(spans[0].start, spans[0].end), '[Image #1]');
+	t.is(text.slice(spans[1].start, spans[1].end), '[Image #2]');
+	t.is(text.slice(spans[2].start, spans[2].end), '[Paste #3: 12 chars]');
+});
+
 test('getPlaceholderSpans returns empty for plain text', t => {
 	t.deepEqual(getPlaceholderSpans('no placeholders here'), []);
 });

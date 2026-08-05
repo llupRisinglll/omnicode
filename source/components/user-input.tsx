@@ -21,7 +21,6 @@ import {useInputState} from '@/hooks/useInputState';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useUIStateContext} from '@/hooks/useUIState';
-
 import type {
 	QueuedUserMessage,
 	UserMessageQueueDraft,
@@ -39,7 +38,15 @@ import type {
 	SubmittedInputDraft,
 } from '@/types/hooks';
 import {Completion, CustomCommandCompletionSource} from '@/types/index';
+import {
+	compactToggleEvents,
+	transcriptToggleEvents,
+} from '@/utils/terminal-mouse';
+
+const EMPTY_CUSTOM_COMMANDS: CustomCommandCompletionSource[] = [];
+
 import type {Colors} from '@/types/ui';
+import {persistPastes} from '@/utils/attachment-archive';
 import {
 	extractImageReferences,
 	readClipboardImage,
@@ -82,13 +89,21 @@ interface ChatProps {
 	sessionName?: string; // Optional session name for display
 	tune?: TuneConfig; // Model mode configuration
 	currentModel?: string; // Active model id — resolves the 'auto' tune profile for display
+	backgroundCount?: number;
 	statusInfo?: DevelopmentModeStatusInfo;
 	statusLineSlot?: ReactNode;
+	busyStatus?: ReactNode;
 	activeEditor?: ActiveEditorState | null; // VS Code active file + optional selection
 	onDismissActiveEditor?: () => void; // Dismiss the active editor pill on clear/escape
 	forceFocus?: boolean; // Force focus for testing (bypasses useFocus)
+	suppressBuiltInCompletions?: boolean; // When true, hide built-in commands from completions
 	onSubmittedDraft?: (draft: SubmittedInputDraft) => void;
 	restoreSubmittedDraft?: RestoredInputDraft | null;
+	onDownAtBottom?: () => void;
+	submitBlocked?: boolean;
+	bgHighlighted?: boolean;
+	agentCount?: number;
+	agentHighlighted?: boolean;
 }
 
 export default function UserInput({
@@ -97,7 +112,7 @@ export default function UserInput({
 	queuedMessages = [],
 	onRemoveQueuedMessage,
 	placeholder,
-	customCommands = [],
+	customCommands = EMPTY_CUSTOM_COMMANDS,
 	disabled = false,
 	isBusy = false,
 	onToggleMode,
@@ -110,13 +125,21 @@ export default function UserInput({
 	sessionName,
 	tune,
 	currentModel,
+	backgroundCount,
 	statusInfo,
 	statusLineSlot,
+	busyStatus,
 	activeEditor,
 	onDismissActiveEditor,
 	forceFocus = false,
+	suppressBuiltInCompletions = false,
 	onSubmittedDraft,
 	restoreSubmittedDraft = null,
+	onDownAtBottom,
+	submitBlocked = false,
+	bgHighlighted = false,
+	agentCount = 0,
+	agentHighlighted = false,
 }: ChatProps) {
 	const {isFocused, focus} = useFocus({autoFocus: !disabled, id: 'user-input'});
 
@@ -134,16 +157,34 @@ export default function UserInput({
 	const effectiveFocus = forceFocus || isFocused;
 	const {colors} = useTheme();
 	const inputState = useInputState();
+	const submitBlockedRef = useRef(submitBlocked);
+	submitBlockedRef.current = submitBlocked;
 	const uiState = useUIStateContext();
 	const {boxWidth, isNarrow, actualWidth, truncate} = useResponsiveTerminal();
+	// boxWidth floors at 40, which exceeds the real width of terminals narrower
+	// than ~44 columns. Rows wider than the terminal hard-wrap in the terminal
+	// itself, which breaks Ink's newline-based erase accounting and leaves
+	// residue rows that composite over later frames (the garbled multi-line
+	// echo on submit). Cap the promptChar textbox at the true terminal width;
+	// at columns >= 44 this equals boxWidth exactly, so normal-width rendering
+	// is unchanged. Classic themes keep raw boxWidth untouched.
+	const arrowBoxWidth = Math.max(20, Math.min(boxWidth, actualWidth - 2));
 	// Must match the wrapWidth passed to TextInput below — both sides use it to
 	// decide whether Up/Down means line navigation or history.
 	// Themes with a promptChar render a rounded, inset box and keep the "❯ "
 	// prefix visible while typing: side margins (2) + rounded border (2) +
 	// paddingX (2) + prefix (2). Classic style: left border (1) + padding (2).
-	const inputWrapWidth = boxWidth - (colors.promptChar ? 8 : 3);
+	const inputWrapWidth = colors.promptChar ? arrowBoxWidth - 8 : boxWidth - 3;
 	const [textInputKey, setTextInputKey] = useState(0);
 	const completionJustSelectedRef = useRef(false);
+	// Input value for which the user dismissed the completion menu with Escape,
+	// so the auto-show effect doesn't immediately re-open it until they type more.
+	const dismissedForInputRef = useRef<string | null>(null);
+	// True while the current input came from history navigation (↑/↓), not typing.
+	// A recalled `/command` must NOT auto-open the suggestion menu — otherwise the
+	// menu captures ↑/↓ and history navigation is blocked. Cleared on any keystroke
+	// so editing the recalled command surfaces suggestions again.
+	const inputFromHistoryRef = useRef(false);
 	// Store the full InputState draft when starting history navigation, so it can be restored
 	const savedDraftRef = useRef<InputState>({
 		displayValue: '',
@@ -158,6 +199,11 @@ export default function UserInput({
 	const [selectedQueuedIndex, setSelectedQueuedIndex] = useState(-1);
 	// Pending image attachments sent with the next submitted message.
 	const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+	// Images added by dropping/pasting a file PATH into the input, live-converted
+	// to [Image #N] tokens. Kept separate from `attachments` (Ctrl+V clipboard
+	// images, which carry no visible token) so a deleted token can drop its
+	// image without touching Ctrl+V attachments.
+	const convertedImagesRef = useRef<ImageAttachment[]>([]);
 	const lastRestoredDraftIdRef = useRef<number | null>(null);
 
 	const {
@@ -169,6 +215,7 @@ export default function UserInput({
 		resetInput,
 		deletePlaceholder: _deletePlaceholder,
 		currentState,
+		currentStateRef,
 		setInputState,
 	} = inputState;
 
@@ -323,7 +370,9 @@ export default function UserInput({
 
 		const commandPrefix = input.slice(1).split(' ')[0];
 
-		const builtInCompletions = commandRegistry.getCompletions(commandPrefix);
+		const builtInCompletions = suppressBuiltInCompletions
+			? []
+			: commandRegistry.getCompletions(commandPrefix);
 		const customCompletions = customCommands
 			.filter(cmd => {
 				// Include all when no prefix, otherwise filter by prefix
@@ -346,7 +395,13 @@ export default function UserInput({
 				description: cmd.description,
 			})),
 		] as Completion[];
-	}, [input, isCommandMode, isFileAutocompleteMode, customCommands]);
+	}, [
+		input,
+		isCommandMode,
+		isFileAutocompleteMode,
+		customCommands,
+		suppressBuiltInCompletions,
+	]);
 
 	// Update UI state for command completions
 	useEffect(() => {
@@ -356,21 +411,29 @@ export default function UserInput({
 		}
 		if (commandCompletions.length > 0) {
 			setCompletions(commandCompletions);
-			if (showCompletions) {
-				setSelectedCompletionIndex(prev =>
-					prev >= commandCompletions.length
-						? commandCompletions.length - 1
-						: prev < 0
-							? 0
-							: prev,
-				);
+			// Show the menu as soon as completions exist (typing `/`), not only on
+			// Tab — unless the user dismissed it with Escape for this exact input,
+			// or the input was recalled from history (keep ↑/↓ free to navigate).
+			if (
+				!inputFromHistoryRef.current &&
+				dismissedForInputRef.current !== input
+			) {
+				setShowCompletions(true);
 			}
+			setSelectedCompletionIndex(prev =>
+				prev >= commandCompletions.length
+					? commandCompletions.length - 1
+					: prev < 0
+						? 0
+						: prev,
+			);
 		} else if (showCompletions) {
 			setCompletions([]);
 			setShowCompletions(false);
 			setSelectedCompletionIndex(-1);
 		}
 	}, [
+		input,
 		commandCompletions,
 		showCompletions,
 		setCompletions,
@@ -443,22 +506,28 @@ export default function UserInput({
 		// Chat history shows the real pasted text, not the [Paste #N] placeholder
 		let display = expandPastePlaceholdersForDisplay(currentState);
 
-		// Image file paths the user typed, pasted, or dragged into the terminal
-		// (often quoted, mixed in with prose) become attachments; the literal
-		// path in the message text is replaced with an `[Image #N]` placeholder,
-		// numbered after any attachments already added via Ctrl+V.
+		// Paths dropped into the input were already live-converted to
+		// [Image #N] tokens; Ctrl+V images live in `attachments`. Combine both —
+		// converted images first so the array index matches the [Image #N] token
+		// numbers (1-based over converted images only).
+		images = [...convertedImagesRef.current, ...attachments];
+
+		// Any image file paths that reached submit still raw (e.g. a path pasted
+		// in one burst that escaped live conversion) become attachments; the
+		// literal path in the message text is replaced with an [Image #N] token,
+		// numbered after the combined list.
 		const {text: cleanedAssembled, paths} = extractImageReferences(
 			assembled,
-			attachments.length,
+			images.length,
 		);
 		if (paths.length > 0) {
 			const dropped = paths
 				.map(readImageFile)
 				.filter((img): img is ImageAttachment => img !== null);
 			if (dropped.length > 0) {
-				images = [...attachments, ...dropped];
+				images = [...images, ...dropped];
 				assembled = cleanedAssembled;
-				display = extractImageReferences(display, attachments.length).text;
+				display = extractImageReferences(display, images.length).text;
 			}
 		}
 
@@ -469,6 +538,14 @@ export default function UserInput({
 			displayValue: currentState.displayValue,
 			placeholderContent: {...currentState.placeholderContent},
 		};
+
+		// Keep a plain-text copy of pasted content in the conversation archive
+		// (fire-and-forget — never blocks submit). Queued submissions included:
+		// this runs before the busy branch returns. A disk failure is logged, not
+		// allowed to become an unhandled rejection.
+		void persistPastes(currentState.placeholderContent).catch(error => {
+			console.warn('Failed to archive pasted text:', error);
+		});
 
 		if (isBusy && !assembled.trim().startsWith('/') && onQueueMessage) {
 			promptHistory.addPrompt(inputStateForHistory);
@@ -516,6 +593,7 @@ export default function UserInput({
 		if (showCompletions) {
 			setShowCompletions(false);
 			setSelectedCompletionIndex(-1);
+			dismissedForInputRef.current = input;
 			return;
 		}
 		if (isFileAutocompleteMode) {
@@ -533,6 +611,7 @@ export default function UserInput({
 			setShowClearMessage(true);
 		}
 	}, [
+		input,
 		showCompletions,
 		isFileAutocompleteMode,
 		showClearMessage,
@@ -548,8 +627,23 @@ export default function UserInput({
 	// History navigation
 	const handleHistoryNavigation = useCallback(
 		(direction: 'up' | 'down') => {
+			// Down on the live input (or a recalled draft) hands focus to the
+			// status-line indicators. Guard on historyIndex alone so an empty
+			// prompt history still lets ↓ reach the badges.
+			if (
+				direction === 'down' &&
+				(historyIndex === -1 || historyIndex === -2)
+			) {
+				onDownAtBottom?.();
+				return;
+			}
+
 			const history = promptHistory.getHistory();
 			if (history.length === 0) return;
+
+			// This value is being recalled, not typed — suppress the auto-show so a
+			// recalled `/command` doesn't hijack ↑/↓ from further history navigation.
+			inputFromHistoryRef.current = true;
 
 			if (direction === 'up') {
 				if (historyIndex === -1) {
@@ -570,38 +664,22 @@ export default function UserInput({
 					setInputState(savedDraftRef.current);
 					setTextInputKey(prev => prev + 1);
 				} else if (historyIndex === -2) {
-					// At draft, cycle back to last history item
-					savedDraftRef.current = currentState;
-					setHistoryIndex(history.length - 1);
-					setInputState(history[history.length - 1]);
+					// Returning from draft cycling — restore original state
+					setHistoryIndex(-1);
+					setInputState(savedDraftRef.current);
 					setTextInputKey(prev => prev + 1);
 				}
+			} else if (historyIndex < history.length - 1) {
+				// Move forward in history
+				const newIndex = historyIndex + 1;
+				setHistoryIndex(newIndex);
+				setInputState(history[newIndex]);
+				setTextInputKey(prev => prev + 1);
 			} else {
-				if (historyIndex === -1) {
-					// Save draft, go to draft cycling state (visually a no-op)
-					savedDraftRef.current = currentState;
-					setOriginalInput(input);
-					setHistoryIndex(-2);
-					setInputState(savedDraftRef.current);
-					setTextInputKey(prev => prev + 1);
-				} else if (historyIndex === -2) {
-					// At draft, cycle to first history item
-					savedDraftRef.current = currentState;
-					setHistoryIndex(0);
-					setInputState(history[0]);
-					setTextInputKey(prev => prev + 1);
-				} else if (historyIndex >= 0 && historyIndex < history.length - 1) {
-					// Move forward in history
-					const newIndex = historyIndex + 1;
-					setHistoryIndex(newIndex);
-					setInputState(history[newIndex]);
-					setTextInputKey(prev => prev + 1);
-				} else if (historyIndex === history.length - 1) {
-					// At last history item, restore saved draft
-					setHistoryIndex(-2);
-					setInputState(savedDraftRef.current);
-					setTextInputKey(prev => prev + 1);
-				}
+				// At last history item, restore saved draft
+				setHistoryIndex(-2);
+				setInputState(savedDraftRef.current);
+				setTextInputKey(prev => prev + 1);
 			}
 		},
 		[
@@ -611,7 +689,62 @@ export default function UserInput({
 			setHistoryIndex,
 			setOriginalInput,
 			setInputState,
+			onDownAtBottom,
 		],
+	);
+
+	// Any keystroke means the user is composing, not navigating — re-enable the
+	// auto-show so editing a recalled command surfaces suggestions again.
+	const handleInputChange = useCallback(
+		(value: string) => {
+			inputFromHistoryRef.current = false;
+
+			// Live-convert dropped/pasted image paths (e.g. "/tmp/x.png") to
+			// [Image #N] tokens as the user composes, so the attachment shows up
+			// in primary (via the placeholder span) instead of a raw path — same
+			// treatment as [Paste #N]. Token numbering runs over converted images
+			// only, starting at 1: new paths continue after the ones already
+			// converted, or every drop would renumber itself [Image #1].
+			const {text: cleaned, paths} = extractImageReferences(
+				value,
+				convertedImagesRef.current.length,
+			);
+			if (paths.length > 0) {
+				const dropped = paths
+					.map(readImageFile)
+					.filter((img): img is ImageAttachment => img !== null);
+				if (dropped.length > 0) {
+					convertedImagesRef.current = [
+						...convertedImagesRef.current,
+						...dropped,
+					];
+					updateInput(cleaned);
+					return;
+				}
+			}
+
+			// Reconcile: a [Image #N] token deleted from the value drops the
+			// matching converted image (Ctrl+V attachments are untouched).
+			// Survivors are renumbered contiguously so a gap (e.g. deleting
+			// [Image #1]) doesn't make the next drop collide with an old token.
+			const tokensInValue = new Set(
+				[...value.matchAll(/\[Image #(\d+)\]/g)].map(m => m[1]),
+			);
+			const kept = convertedImagesRef.current.filter((_img, i) =>
+				tokensInValue.has(String(i + 1)),
+			);
+			if (kept.length !== convertedImagesRef.current.length) {
+				convertedImagesRef.current = kept;
+				let counter = 0;
+				updateInput(
+					value.replace(/\[Image #\d+\]/g, () => `[Image #${++counter}]`),
+				);
+				return;
+			}
+
+			updateInput(value);
+		},
+		[updateInput],
 	);
 
 	const handleQueueNavigation = useCallback(
@@ -705,6 +838,14 @@ export default function UserInput({
 			return;
 		}
 
+		// While a status-line indicator holds focus (submitBlocked), every key
+		// belongs to that navigation — the owning section's useInput routes
+		// arrows/Enter/Escape, so this handler must not also act on them (↑ here
+		// would otherwise start history navigation under the focus).
+		if (submitBlockedRef.current) {
+			return;
+		}
+
 		// Handle shift+tab to toggle development mode (always available)
 		if (key.tab && key.shift && onToggleMode) {
 			onToggleMode();
@@ -713,12 +854,25 @@ export default function UserInput({
 
 		// Handle ctrl+o to toggle compact tool display (always available)
 		if (key.ctrl && inputChar === 'o' && onToggleCompactDisplay) {
+			compactToggleEvents.emit('toggle');
 			onToggleCompactDisplay();
 			return;
 		}
 
 		// Handle ctrl+r to toggle expanded reasoning traces (always available)
 		if (key.ctrl && inputChar === 'r' && onToggleReasoningExpanded) {
+			transcriptToggleEvents.emit('toggle');
+			onToggleReasoningExpanded();
+			return;
+		}
+
+		// Handle ctrl+t to toggle the expanded transcript view of compact tool
+		// details ("… +N lines (ctrl + t to view transcript)"). Shares the same
+		// expand state as ctrl+r: it widens SUBSEQUENT queued entries, while
+		// already-queued rows expand via their clickable footer OR the global
+		// toggle event (so the hint actually works on visible blocks).
+		if (key.ctrl && inputChar === 't' && onToggleReasoningExpanded) {
+			transcriptToggleEvents.emit('toggle');
 			onToggleReasoningExpanded();
 			return;
 		}
@@ -768,8 +922,23 @@ export default function UserInput({
 
 			// Command completion - use pre-calculated commandCompletions
 			if (input.startsWith('/')) {
-				// Don't auto-complete on Tab when completions list is visible - use Enter to select
+				// Tab selects the highlighted suggestion when the menu is open. #696 made
+				// completion Tab-triggered, but that often failed to render the menu
+				// (especially in alt-screen); show-on-`/` + Tab-to-select is more reliable.
 				if (showCompletions && completions.length > 0) {
+					const selected =
+						completions[
+							selectedCompletionIndex >= 0 ? selectedCompletionIndex : 0
+						];
+					const completedText = `/${selected.name}`;
+					completionJustSelectedRef.current = true;
+					setInputState({
+						displayValue: completedText,
+						placeholderContent: {},
+					});
+					setShowCompletions(false);
+					setSelectedCompletionIndex(-1);
+					setTextInputKey(prev => prev + 1);
 					return;
 				}
 				if (commandCompletions.length === 1) {
@@ -810,13 +979,15 @@ export default function UserInput({
 			(key.ctrl && inputChar === 'j') ||
 			(inputChar === '\n' && !key.return)
 		) {
-			updateInput(input + '\n');
+			// Build from the ref, not render-time `input` — within one coalesced
+			// stdin chunk `input` is stale and would drop same-chunk characters.
+			updateInput(currentStateRef.current.displayValue + '\n');
 			return;
 		}
 
 		// Support Shift+Enter if the terminal sends it properly
 		if (key.return && key.shift) {
-			updateInput(input + '\n');
+			updateInput(currentStateRef.current.displayValue + '\n');
 			return;
 		}
 
@@ -830,19 +1001,30 @@ export default function UserInput({
 		) {
 			const selected = completions[selectedCompletionIndex];
 			const completedText = `/${selected.name}`;
-			completionJustSelectedRef.current = true;
-			setInputState({
-				displayValue: completedText,
-				placeholderContent: {},
-			});
-			setShowCompletions(false);
-			setSelectedCompletionIndex(-1);
-			setTextInputKey(prev => prev + 1);
-			return;
+			// If input already matches the completion, skip selection and submit
+			if (
+				completedText === input ||
+				completedText === currentStateRef.current.displayValue
+			) {
+				setShowCompletions(false);
+				setCompletions([]);
+				setSelectedCompletionIndex(-1);
+				// Fall through to submit below
+			} else {
+				completionJustSelectedRef.current = true;
+				setInputState({
+					displayValue: completedText,
+					placeholderContent: {},
+				});
+				setShowCompletions(false);
+				setSelectedCompletionIndex(-1);
+				setTextInputKey(prev => prev + 1);
+				return;
+			}
 		}
 
 		// Handle Enter to submit (fallthrough - if completion handler didn't return)
-		if (key.return && !key.shift) {
+		if (key.return && !key.shift && !submitBlockedRef.current) {
 			if (loadSelectedQueuedMessage()) {
 				return;
 			}
@@ -958,7 +1140,7 @@ export default function UserInput({
 	//     (2) = boxWidth - 3.
 	const completionInteriorWidth = (colors as Colors & {promptChar?: string})
 		.promptChar
-		? boxWidth - 6
+		? arrowBoxWidth - 6
 		: boxWidth - 3;
 	const commandCompletionAvailableWidth = Math.max(20, completionInteriorWidth);
 	const commandNameColumnWidth = useMemo(() => {
@@ -971,10 +1153,19 @@ export default function UserInput({
 			Math.floor(commandCompletionAvailableWidth * 0.4),
 		);
 	}, [completions, commandCompletionAvailableWidth]);
-	const modelInputBadge =
-		colors.promptChar && currentModel
-			? truncate(currentModel, Math.max(8, inputWrapWidth - 4))
-			: '';
+	// Model badge in the box's bottom-right corner. The ctx figure rides
+	// beside it (bar glyphs dropped — just the estimate marker + percentage),
+	// rendered in secondary so the model name stays the visual anchor.
+	const modelInputBadge = (() => {
+		if (!colors.promptChar || !currentModel) return null;
+		const ctxPct = contextPercentUsed ?? null;
+		const ctxPart =
+			ctxPct !== null
+				? ` · ctx ${contextSource === 'api' ? '' : '~'}${ctxPct}%`
+				: '';
+		const modelBudget = Math.max(6, inputWrapWidth - 4 - ctxPart.length);
+		return {model: truncate(currentModel, modelBudget), ctx: ctxPart};
+	})();
 
 	// When disabled, show minimal UI to avoid cluttering the screen
 	if (disabled) {
@@ -998,6 +1189,10 @@ export default function UserInput({
 					sessionName={sessionName}
 					tune={tune}
 					currentModel={currentModel}
+					backgroundCount={backgroundCount}
+					bgHighlighted={bgHighlighted}
+					agentCount={agentCount}
+					agentHighlighted={agentHighlighted}
 					statusInfo={statusInfo}
 				/>
 				{statusLineSlot}
@@ -1030,24 +1225,31 @@ export default function UserInput({
 
 	return (
 		<>
-			{!isBashMode ? (
+			{isBashMode ? (
+				<Text color={colors.tool} bold>
+					Bash mode
+				</Text>
+			) : isBusy && (busyStatus || getShowWorkingIndicator()) ? (
 				<Box marginTop={1}>
-					{isBusy && getShowWorkingIndicator() ? (
-						<Box>
-							<Text color={colors.primary}>
-								<AnimatedGear />
-							</Text>
-							<Text color={colors.primary} bold>
-								{' Working'}
-							</Text>
-							<Text color={colors.primary}>
-								<Spinner type="simpleDots" />
-							</Text>
-							{workingStartTime && (
-								<ElapsedTimer startTime={workingStartTime} />
-							)}
-						</Box>
-					) : colors.assistantIcon ? (
+					<Box>
+						<Text color={colors.primary}>
+							<AnimatedGear />
+						</Text>
+						<Text color={colors.primary} bold>
+							{' Working'}
+						</Text>
+						<Text color={colors.primary}>
+							<Spinner type="simpleDots" />
+						</Text>
+						{busyStatus && (
+							<Text color={colors.secondary}> · {busyStatus}</Text>
+						)}
+						{workingStartTime && <ElapsedTimer startTime={workingStartTime} />}
+					</Box>
+				</Box>
+			) : !colors.promptChar ? (
+				<Box marginTop={1}>
+					{colors.assistantIcon ? (
 						<Text>
 							<Text color={colors.secondary}>{colors.assistantIcon} </Text>
 							<Text color={colors.primary}>
@@ -1060,11 +1262,7 @@ export default function UserInput({
 						</Text>
 					)}
 				</Box>
-			) : (
-				<Text color={colors.tool} bold>
-					Bash mode
-				</Text>
-			)}
+			) : null}
 
 			{Boolean(colors.promptChar) && queuedBlock && (
 				<Box marginX={1} flexDirection="column">
@@ -1076,7 +1274,7 @@ export default function UserInput({
 				flexDirection="column"
 				marginTop={colors.promptChar ? 0 : 1}
 				backgroundColor={getTextboxBackground(colors)}
-				width={colors.promptChar ? boxWidth - 2 : boxWidth}
+				width={colors.promptChar ? arrowBoxWidth - 2 : boxWidth}
 				marginX={colors.promptChar ? 1 : 0}
 				paddingX={1}
 				paddingY={colors.promptChar ? 0 : 1}
@@ -1119,7 +1317,7 @@ export default function UserInput({
 					<TextInput
 						key={textInputKey}
 						value={input}
-						onChange={updateInput}
+						onChange={handleInputChange}
 						onEdgeArrow={handleHistoryNavigation}
 						onSubmit={handleSubmit}
 						onEnter={handleSubmit}
@@ -1226,12 +1424,17 @@ export default function UserInput({
 					marginTop={-1}
 					marginX={1}
 					paddingRight={2}
-					width={boxWidth - 2}
+					width={arrowBoxWidth - 2}
 				>
 					<Text color={colors.info} bold>
 						{' '}
-						{modelInputBadge}{' '}
+						{modelInputBadge.model}
 					</Text>
+					{modelInputBadge.ctx && (
+						<Text color={colors.secondary} bold>
+							{modelInputBadge.ctx}{' '}
+						</Text>
+					)}
 				</Box>
 			)}
 
@@ -1255,6 +1458,10 @@ export default function UserInput({
 					sessionName={sessionName}
 					tune={tune}
 					currentModel={currentModel}
+					backgroundCount={backgroundCount}
+					bgHighlighted={bgHighlighted}
+					agentCount={agentCount}
+					agentHighlighted={agentHighlighted}
 					statusInfo={statusInfo}
 					activeEditor={activeEditor}
 				/>

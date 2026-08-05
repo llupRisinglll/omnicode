@@ -72,6 +72,7 @@ function setup(probe: ProbeProps = {}) {
 	const setMessages = spy<[Message[]]>();
 	const setActiveMode = spy<[ActiveMode]>();
 	const setIsSettingsMode = spy<[boolean]>();
+	const setSettingsInitialTab = spy<[import('@/types/settings').SettingsTabId]>();
 	const addToChatQueue = spy<[React.ReactNode]>();
 	const reinitializeMCPServers = spy<[unknown]>();
 	const setTune = spy<[TuneConfig]>();
@@ -89,6 +90,7 @@ function setup(probe: ProbeProps = {}) {
 		getMessageTokens: () => 0,
 		setActiveMode,
 		setIsSettingsMode,
+		setSettingsInitialTab,
 		addToChatQueue,
 		reinitializeMCPServers: async () => {
 			reinitializeMCPServers(undefined);
@@ -105,6 +107,7 @@ function setup(probe: ProbeProps = {}) {
 		setMessages,
 		setActiveMode,
 		setIsSettingsMode,
+		setSettingsInitialTab,
 		addToChatQueue,
 		setTune,
 	};
@@ -169,11 +172,12 @@ test('each enter*Mode helper sets the matching active mode', t => {
 });
 
 test('enterSettingsMode toggles settings flag, handleSettingsCancel clears it', t => {
-	const {handlers, setIsSettingsMode} = setup();
+	const {handlers, setIsSettingsMode, setSettingsInitialTab} = setup();
 
 	handlers.enterSettingsMode();
 	handlers.handleSettingsCancel();
 
+	t.deepEqual(setSettingsInitialTab.calls, [['appearance']]);
 	t.deepEqual(setIsSettingsMode.calls, [[true], [false]]);
 });
 

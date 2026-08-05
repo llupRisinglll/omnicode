@@ -1563,7 +1563,9 @@ test.serial(
 		// Both reasoning turns merge into exactly one ThoughtRunSummary — no
 		// per-turn AssistantReasoning component should have been queued.
 		const assistantReasoning = queuedComponents.filter(
-			(c: any) => c.props?.reasoning !== undefined,
+			// AssistantReasoning exposes `expand`; the merged summary exposes
+			// `expanded` and `reasoning` (the retained text for click-expand).
+			(c: any) => c.props?.expand !== undefined,
 		);
 		t.is(
 			assistantReasoning.length,
@@ -1579,6 +1581,9 @@ test.serial(
 			1,
 			'Two consecutive reasoning turns should merge into one summary line',
 		);
+		// The summary keeps the merged reasoning text so it can expand in
+		// place when clicked (preview parity).
+		t.is(thoughtSummaries[0].props.reasoning, 'First thought.\n\nSecond thought.');
 	},
 );
 

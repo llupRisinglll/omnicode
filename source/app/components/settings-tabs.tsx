@@ -3,42 +3,68 @@ import {Box, Text, useInput} from 'ink';
 import type {ReactElement} from 'react';
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {StyledTitle} from '@/components/ui/styled-title';
+import {getAppConfig, loadDefaultMode, reloadAppConfig} from '@/config/index';
 import {
 	getAlternateScreen,
+	getInnerDaemonEffort,
+	getInnerDaemonModel,
 	getNanocoderShape,
 	getNotificationsPreference,
 	getPasteThreshold,
 	getPrivacyPreference,
+	getReasoningExpanded,
+	getSemanticMemoryEnabled,
+	getSteeringEnabled,
+	getSteeringVerbose,
+	getVisionModel,
+	getVisionModelProvider,
 	loadPreferences,
 	updateAlternateScreen,
+	updateSemanticMemoryEnabled,
+	updateSteeringEnabled,
+	updateSteeringVerbose,
 } from '@/config/preferences';
-import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
+import {useResponsiveTerminal, useTerminalRows} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useTitleShape} from '@/hooks/useTitleShape';
+import {SteeringRuleLoader} from '@/steering/loader';
+import type {SteeringRule} from '@/steering/types';
+import {getSubagentLoader} from '@/subagents/subagent-loader';
+import type {SubagentConfigWithSource} from '@/subagents/types';
+import type {SettingsTabId} from '@/types/settings';
 import {fuzzyScore} from '@/utils/fuzzy-matching';
 import {DEFAULT_SINGLE_LINE_PASTE_THRESHOLD} from '@/utils/paste-utils';
-import type {
-	ManagedSettingsPanel,
-	SettingsSelectorProps,
-} from './settings-selector';
+import {SettingsAutoCompactPanel} from './settings-auto-compact';
+import {SettingsDefaultModePanel} from './settings-default-mode';
+import {SettingsEnvironmentPanel} from './settings-environment';
+import {SettingsInnerDaemonListPanel} from './settings-innerdaemon-list';
+import {SettingsJsonConfigPanel} from './settings-json-config';
+import {SettingsMcpListPanel} from './settings-mcp-list';
+import {SettingsProvidersListPanel} from './settings-providers-list';
+import {SettingsReasoningTracesPanel} from './settings-reasoning-traces';
+import type {SettingsSelectorProps} from './settings-selector';
 import {
+	SettingsDeveloperModePanel,
 	SettingsDisplayPanel,
+	SettingsInnerDaemonModelPanel,
 	SettingsNanocoderShapePanel,
 	SettingsNotificationsPanel,
 	SettingsPasteThresholdPanel,
 	SettingsPrivacyPanel,
 	SettingsStatusLinePanel,
+	SettingsSubagentCreatePanel,
+	SettingsSubagentDescriptionPanel,
+	SettingsSubagentEditPanel,
+	SettingsSubagentListPanel,
+	SettingsSubagentModelPanel,
+	SettingsSubagentToolsPanel,
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
+	SettingsVisionModelPanel,
 } from './settings-selector';
-
-/**
- * Tab categories are our own settings, grouped for browsability — not the
- * Status/Config/Usage read-only surfaces (those live at /status and /usage).
- * Every existing preference must be reachable from exactly one of these
- * four tabs.
- */
-export type SettingsTabId = 'appearance' | 'input' | 'display' | 'advanced';
+import {SettingsSessionsPanel} from './settings-sessions';
+import {SettingsToolApprovalPanel} from './settings-tool-approval';
+import {SettingsWebSearchPanel} from './settings-web-search';
 
 interface TabDefinition {
 	id: SettingsTabId;
@@ -48,40 +74,67 @@ interface TabDefinition {
 const TABS: TabDefinition[] = [
 	{id: 'appearance', label: 'Appearance'},
 	{id: 'input', label: 'Input'},
-	{id: 'display', label: 'Display'},
+	{id: 'behavior', label: 'Behavior'},
+	{id: 'agents', label: 'Capabilities'},
+	{id: 'providers', label: 'Providers'},
 	{id: 'advanced', label: 'Advanced'},
 ];
 
 type SettingRow =
+	| {
+			kind: 'header';
+			id: string;
+			label: string;
+	  }
 	| {
 			kind: 'boolean';
 			id: string;
 			label: string;
 			value: boolean;
 			onToggle: () => void;
+			indent?: boolean;
 	  }
 	| {
 			kind: 'number';
 			id: string;
 			label: string;
 			value: number;
-			panel: ManagedSettingsPanel;
+			panel: string;
+			indent?: boolean;
 	  }
 	| {
 			kind: 'managed';
 			id: string;
 			label: string;
 			value: string;
-			panel: ManagedSettingsPanel;
+			panel: string;
+			indent?: boolean;
+	  }
+	| {
+			// Launches an app-level flow (e.g. the tune / IDE wizards) rather than
+			// opening an in-settings panel.
+			kind: 'action';
+			id: string;
+			label: string;
+			value: string;
+			onAction: () => void;
+			indent?: boolean;
 	  };
 
-const MAX_VISIBLE_ROWS = 4;
 const SEARCH_PLACEHOLDER = 'Search settings…';
+
+interface RowActions {
+	onLaunchTune?: () => void;
+	onLaunchIde?: () => void;
+}
 
 function buildRowsForTab(
 	tabId: SettingsTabId,
 	currentTheme: string,
 	currentTitleShape: string,
+	actions: RowActions = {},
+	agents: SubagentConfigWithSource[] = [],
+	innerDaemonRules: SteeringRule[] = [],
 ): SettingRow[] {
 	switch (tabId) {
 		case 'appearance': {
@@ -120,7 +173,17 @@ function buildRowsForTab(
 					id: 'alternate-screen',
 					label: 'Alternate Screen',
 					value: getAlternateScreen(),
-					onToggle: () => updateAlternateScreen(!getAlternateScreen()),
+					onToggle: () => {
+						const newValue = !getAlternateScreen();
+						updateAlternateScreen(newValue);
+						if (process.stdout.isTTY) {
+							if (newValue) {
+								process.stdout.write('\x1B[?1049h');
+							} else {
+								process.stdout.write('\x1B[?1049l');
+							}
+						}
+					},
 				},
 			];
 		}
@@ -145,7 +208,7 @@ function buildRowsForTab(
 				},
 			];
 		}
-		case 'display':
+		case 'behavior':
 			return [
 				{
 					kind: 'managed',
@@ -154,9 +217,136 @@ function buildRowsForTab(
 					value: 'configure',
 					panel: 'display-settings',
 				},
+				{
+					kind: 'managed',
+					id: 'reasoning-traces',
+					label: 'Reasoning Traces',
+					value: getReasoningExpanded() ? 'expanded' : 'collapsed',
+					panel: 'reasoning-traces',
+				},
+				{
+					kind: 'managed',
+					id: 'default-mode',
+					label: 'Default Mode',
+					value: loadDefaultMode() ?? 'normal',
+					panel: 'default-mode',
+				},
+				{
+					kind: 'managed',
+					id: 'auto-compact',
+					label: 'Auto-Compact',
+					value: getAppConfig().autoCompact?.enabled === false ? 'off' : 'on',
+					panel: 'auto-compact',
+				},
+				{
+					kind: 'managed',
+					id: 'sessions',
+					label: 'Sessions',
+					value:
+						getAppConfig().sessions?.autoSave === false ? 'manual' : 'auto',
+					panel: 'sessions',
+				},
 			];
-		case 'advanced':
+		case 'agents': {
+			const agentRows: SettingRow[] = [
+				{
+					kind: 'managed',
+					id: 'subagent-list',
+					label: 'Subagents',
+					value: (() => {
+						const count = agents.filter(a => a.name !== 'innerdaemon').length;
+						return count === 1 ? '1 agent' : `${count} agents`;
+					})(),
+					panel: 'subagent-list',
+				},
+				{
+					kind: 'boolean',
+					id: 'innerdaemon',
+					label: 'InnerDaemon',
+					value: getSteeringEnabled(),
+					onToggle: () => updateSteeringEnabled(!getSteeringEnabled()),
+				},
+				// Child rows: indented and hidden when InnerDaemon is off
+				...(getSteeringEnabled()
+					? [
+							{
+								kind: 'managed',
+								id: 'innerdaemon-model',
+								label: 'Model',
+								value: (() => {
+									const model = getInnerDaemonModel();
+									const effort = getInnerDaemonEffort();
+									if (!model) return 'default (main agent)';
+									return effort ? `${model} [${effort}]` : model;
+								})(),
+								panel: 'innerdaemon-model',
+								indent: true,
+							} as SettingRow,
+							{
+								kind: 'boolean',
+								id: 'innerdaemon-verbose',
+								label: 'Verbose Logging',
+								value: getSteeringVerbose(),
+								onToggle: () => updateSteeringVerbose(!getSteeringVerbose()),
+								indent: true,
+							} as SettingRow,
+							{
+								kind: 'managed',
+								id: 'innerdaemon-list',
+								label: 'InnerDaemons',
+								value: `${innerDaemonRules.length} loaded`,
+								panel: 'innerdaemon-list',
+								indent: true,
+							} as SettingRow,
+						]
+					: []),
+				{
+					kind: 'managed',
+					id: 'vision-model',
+					label: 'Vision Model',
+					value: getVisionModel()
+						? `${getVisionModel()} (${getVisionModelProvider() || 'current provider'})`
+						: 'not set',
+					panel: 'vision-model',
+				},
+			];
+			return agentRows;
+		}
+		case 'providers':
 			return [
+				{
+					kind: 'managed',
+					id: 'providers-config',
+					label: 'Configure Providers',
+					value: `${getAppConfig().providers?.length ?? 0} configured`,
+					panel: 'providers-config',
+				},
+				{
+					kind: 'managed',
+					id: 'mcp-config',
+					label: 'Configure MCP Servers',
+					value: `${getAppConfig().mcpServers?.length ?? 0} configured`,
+					panel: 'mcp-config',
+				},
+				{
+					kind: 'managed',
+					id: 'web-search',
+					label: 'Web Search',
+					value: getAppConfig().nanocoderTools?.webSearch?.apiKey
+						? 'configured'
+						: 'not set',
+					panel: 'web-search',
+				},
+				{
+					kind: 'managed',
+					id: 'tool-approval',
+					label: 'Tool Auto-Approval',
+					value: `${getAppConfig().alwaysAllow?.length ?? 0} tools`,
+					panel: 'tool-approval',
+				},
+			];
+		case 'advanced': {
+			const rows: SettingRow[] = [
 				{
 					kind: 'managed',
 					id: 'privacy',
@@ -164,7 +354,56 @@ function buildRowsForTab(
 					value: getPrivacyPreference() ? 'on' : 'off',
 					panel: 'privacy',
 				},
+				{
+					kind: 'managed',
+					id: 'developer-mode',
+					label: 'Developer Mode',
+					value: '',
+					panel: 'developer-mode',
+				},
+				{
+					kind: 'boolean',
+					id: 'semantic-memory',
+					label: 'Semantic Memory',
+					value: getSemanticMemoryEnabled(),
+					onToggle: () =>
+						updateSemanticMemoryEnabled(!getSemanticMemoryEnabled()),
+				},
+				{
+					kind: 'managed',
+					id: 'json-config',
+					label: 'Edit Config Files',
+					value: 'agents.config.json',
+					panel: 'json-config',
+				},
+				{
+					kind: 'managed',
+					id: 'environment',
+					label: 'Environment',
+					value: 'view',
+					panel: 'environment',
+				},
 			];
+			if (actions.onLaunchTune) {
+				rows.push({
+					kind: 'action',
+					id: 'tune',
+					label: 'Tune Model',
+					value: 'model params',
+					onAction: actions.onLaunchTune,
+				});
+			}
+			if (actions.onLaunchIde) {
+				rows.push({
+					kind: 'action',
+					id: 'connect-ide',
+					label: 'Connect IDE',
+					value: 'wizard',
+					onAction: actions.onLaunchIde,
+				});
+			}
+			return rows;
+		}
 	}
 }
 
@@ -201,14 +440,28 @@ function filterRows(rows: SettingRow[], query: string): SettingRow[] {
  * hook can't otherwise observe (a managed sub-panel writes preferences.json
  * directly, outside this component's React state).
  */
-function useTabRows(tabId: SettingsTabId, version: number): SettingRow[] {
+function useTabRows(
+	tabId: SettingsTabId,
+	version: number,
+	actions: RowActions,
+	agents: SubagentConfigWithSource[],
+	innerDaemonRules: SteeringRule[],
+): SettingRow[] {
 	const {currentTheme} = useTheme();
 	const {currentTitleShape} = useTitleShape();
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: version deliberately drives a full recompute — see doc comment above.
 	return useMemo(
-		() => buildRowsForTab(tabId, currentTheme, currentTitleShape ?? 'pill'),
-		[version, tabId, currentTheme, currentTitleShape],
+		() =>
+			buildRowsForTab(
+				tabId,
+				currentTheme,
+				currentTitleShape ?? 'pill',
+				actions,
+				agents,
+				innerDaemonRules,
+			),
+		[version, tabId, currentTheme, currentTitleShape, agents, innerDaemonRules],
 	);
 }
 
@@ -224,19 +477,42 @@ function SettingRowLine({
 	isNarrow: boolean;
 }) {
 	const {colors} = useTheme();
+
+	if (row.kind === 'header') {
+		return (
+			<Box flexDirection="column" marginTop={1}>
+				{/* Subtle section separator line */}
+				<Box marginBottom={0}>
+					<Text color={colors.secondary} dimColor>
+						{'\u2500\u2500\u2500'}
+					</Text>
+				</Box>
+				<Box flexDirection="row">
+					<Text color={colors.secondary} bold dimColor>
+						{row.label}
+					</Text>
+				</Box>
+			</Box>
+		);
+	}
+
 	const valueText =
 		row.kind === 'boolean' ? (row.value ? 'true' : 'false') : String(row.value);
 	const rowColor = selected ? colors.info : colors.text;
 
+	const isIndented = 'indent' in row && row.indent === true;
 	return (
 		<Box flexDirection="row">
-			<Text color={rowColor}>{selected ? '> ' : '  '}</Text>
+			<Box minWidth={2}>
+				<Text color={rowColor}>{selected ? '❯' : ' '}</Text>
+			</Box>
 			<Box width={labelWidth}>
 				<Text color={rowColor} wrap={isNarrow ? 'truncate' : undefined}>
+					{isIndented ? '  ' : ''}
 					{row.label}
 				</Text>
 			</Box>
-			<Text color={colors.secondary} wrap={isNarrow ? 'truncate' : undefined}>
+			<Text color={rowColor} wrap={isNarrow ? 'truncate' : undefined}>
 				{valueText}
 			</Text>
 		</Box>
@@ -244,9 +520,87 @@ function SettingRowLine({
 }
 
 function renderManagedPanel(
-	panel: ManagedSettingsPanel,
+	panel: string,
 	onBack: () => void,
+	onMcpChanged?: () => void | Promise<void>,
+	agentName?: string,
+	onAgentChanged?: (preferredName?: string) => Promise<void>,
+	toolNames?: string[],
+	onOpenPanel?: (panel: string) => void,
+	currentSessionId?: string,
+	messageCount?: number,
+	onActivateDeveloperMode?: () => void,
+	innerDaemonRules: SteeringRule[] = [],
 ): ReactElement {
+	// Handle subagent list panel (collapsed subagent listing)
+	if (panel === 'subagent-list') {
+		return (
+			<SettingsSubagentListPanel
+				onBack={onBack}
+				onCancel={onBack}
+				onOpenPanel={onOpenPanel ?? (() => {})}
+				onAgentChanged={onAgentChanged}
+			/>
+		);
+	}
+
+	// Handle dynamic subagent-edit panels
+	if (panel.startsWith('subagent-edit:')) {
+		return (
+			<SettingsSubagentEditPanel
+				agentName={agentName ?? ''}
+				onBack={onBack}
+				onCancel={() => onOpenPanel?.('subagent-list')}
+				onOpenPanel={onOpenPanel ?? (() => {})}
+			/>
+		);
+	}
+
+	// Handle subagent model panel (routed from edit panel menu)
+	if (panel.startsWith('subagent-model:') && agentName) {
+		// ESC goes back to the edit panel, not the list
+		const goToEdit = () => {
+			if (onOpenPanel) onOpenPanel(`subagent-edit:${agentName}`);
+			else onBack();
+		};
+		return (
+			<SettingsSubagentModelPanel
+				agentName={agentName}
+				onBack={onBack}
+				onCancel={goToEdit}
+			/>
+		);
+	}
+	// Handle subagent tools panel
+	if (panel.startsWith('subagent-tools:') && agentName) {
+		const goToEdit = () => {
+			if (onOpenPanel) onOpenPanel(`subagent-edit:${agentName}`);
+			else onBack();
+		};
+		return (
+			<SettingsSubagentToolsPanel
+				agentName={agentName}
+				toolNames={toolNames}
+				onBack={onBack}
+				onCancel={goToEdit}
+			/>
+		);
+	}
+	// Handle subagent description panel
+	if (panel.startsWith('subagent-description:') && agentName) {
+		const goToEdit = () => {
+			if (onOpenPanel) onOpenPanel(`subagent-edit:${agentName}`);
+			else onBack();
+		};
+		return (
+			<SettingsSubagentDescriptionPanel
+				agentName={agentName}
+				onBack={onBack}
+				onCancel={goToEdit}
+			/>
+		);
+	}
+
 	switch (panel) {
 		case 'theme':
 			return <SettingsThemePanel onBack={onBack} onCancel={onBack} />;
@@ -264,6 +618,82 @@ function renderManagedPanel(
 			return <SettingsPrivacyPanel onBack={onBack} onCancel={onBack} />;
 		case 'status-line':
 			return <SettingsStatusLinePanel onBack={onBack} onCancel={onBack} />;
+		case 'subagent-model-explore':
+			return (
+				<SettingsSubagentModelPanel
+					agentName="explore"
+					onBack={onBack}
+					onCancel={onBack}
+				/>
+			);
+		case 'subagent-model-innerdaemon':
+			return (
+				<SettingsSubagentModelPanel
+					agentName="innerdaemon"
+					onBack={onBack}
+					onCancel={onBack}
+				/>
+			);
+		case 'innerdaemon-model':
+			return (
+				<SettingsInnerDaemonModelPanel onBack={onBack} onCancel={onBack} />
+			);
+		case 'vision-model':
+			return <SettingsVisionModelPanel onBack={onBack} onCancel={onBack} />;
+		case 'innerdaemon-list':
+			return (
+				<SettingsInnerDaemonListPanel
+					rules={innerDaemonRules}
+					onBack={onBack}
+					onCancel={onBack}
+				/>
+			);
+		case 'json-config':
+			return <SettingsJsonConfigPanel onBack={onBack} onCancel={onBack} />;
+		case 'web-search':
+			return <SettingsWebSearchPanel onBack={onBack} onCancel={onBack} />;
+		case 'default-mode':
+			return <SettingsDefaultModePanel onBack={onBack} onCancel={onBack} />;
+		case 'reasoning-traces':
+			return <SettingsReasoningTracesPanel onBack={onBack} onCancel={onBack} />;
+		case 'auto-compact':
+			return <SettingsAutoCompactPanel onBack={onBack} onCancel={onBack} />;
+		case 'sessions':
+			return <SettingsSessionsPanel onBack={onBack} onCancel={onBack} />;
+		case 'tool-approval':
+			return <SettingsToolApprovalPanel onBack={onBack} onCancel={onBack} />;
+		case 'environment':
+			return <SettingsEnvironmentPanel onBack={onBack} onCancel={onBack} />;
+		case 'providers-config':
+			return <SettingsProvidersListPanel onBack={onBack} onCancel={onBack} />;
+		case 'mcp-config':
+			return (
+				<SettingsMcpListPanel
+					onBack={onBack}
+					onCancel={onBack}
+					onMcpChanged={onMcpChanged}
+				/>
+			);
+		case 'developer-mode':
+			return (
+				<SettingsDeveloperModePanel
+					onBack={onBack}
+					onCancel={onBack}
+					onActivateDeveloperMode={onActivateDeveloperMode}
+					currentSessionId={currentSessionId}
+					messageCount={messageCount}
+				/>
+			);
+		case 'subagent-create':
+			return (
+				<SettingsSubagentCreatePanel
+					onBack={onBack}
+					onCancel={onBack}
+					onCreated={onAgentChanged}
+				/>
+			);
+		default:
+			return <Text>Unknown panel: {panel}</Text>;
 	}
 }
 
@@ -289,18 +719,25 @@ function TabBar({
 }) {
 	const {colors} = useTheme();
 	const {currentTitleShape} = useTitleShape();
+	const {isNarrow} = useResponsiveTerminal();
 	const shape = currentTitleShape ?? 'pill';
 
 	return (
+		// wrap: the strip overflowed the panel border on narrow terminals, spilling
+		// the active pill's cap glyph outside the frame. The "Settings" prefix is
+		// redundant with the panel title, so it's the first thing to go.
 		<Box
 			key={`${activeTab}-${headerFocused}`}
 			flexDirection="row"
+			flexWrap="wrap"
 			gap={1}
 			marginBottom={1}
 		>
-			<Text bold color={colors.primary}>
-				Settings
-			</Text>
+			{!isNarrow && (
+				<Text bold color={colors.primary}>
+					Settings
+				</Text>
+			)}
 			{TABS.map(tab => {
 				const isActive = tab.id === activeTab;
 				if (isActive) {
@@ -320,18 +757,58 @@ function TabBar({
 	);
 }
 
-export function SettingsSelector({onCancel}: SettingsSelectorProps) {
+export function SettingsSelector({
+	onCancel,
+	initialTab,
+	toolManager,
+	onLaunchTune,
+	onLaunchIde,
+	onMcpChanged,
+	currentSessionId,
+	messageCount,
+	onActivateDeveloperMode,
+}: SettingsSelectorProps) {
 	const {colors} = useTheme();
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const terminalRows = useTerminalRows();
+	const OVERHEAD_ROWS = 9;
+	const MAX_VISIBLE_ROWS = Math.min(
+		6,
+		Math.max(3, terminalRows - OVERHEAD_ROWS),
+	);
 
-	const [activeTab, setActiveTab] = useState<SettingsTabId>('appearance');
+	const [activeTab, setActiveTab] = useState<SettingsTabId>(
+		initialTab ?? 'appearance',
+	);
 	const [focus, setFocus] = useState<TabFocus>('header');
-	const [openPanel, setOpenPanel] = useState<ManagedSettingsPanel | null>(null);
+	const [openPanel, setOpenPanel] = useState<string | null>(null);
 
 	const [version, setVersion] = useState(0);
 	const [query, setQuery] = useState('');
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [scrollOffset, setScrollOffset] = useState(0);
+	const [agents, setAgents] = useState<SubagentConfigWithSource[]>([]);
+	const [innerDaemonRules] = useState(() =>
+		new SteeringRuleLoader(process.cwd()).loadRules(),
+	);
+
+	const reloadAgents = async (preferredName?: string) => {
+		const loader = getSubagentLoader();
+		await loader.reload();
+		const loaded = await loader.listSubagents();
+		setAgents(loaded);
+		if (preferredName) {
+			const index = loaded.findIndex(agent => agent.name === preferredName);
+			if (index >= 0) setSelectedIndex(index);
+		}
+		setVersion(v => v + 1);
+	};
+
+	// Load agents on mount and when the agents tab is active
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reloadAgents is stable
+	useEffect(() => {
+		void reloadAgents();
+	}, []);
 
 	// Ink delivers every keypress event parsed out of one stdin chunk
 	// synchronously in the same tick (see ink's `App.handleReadable`), so a
@@ -368,6 +845,10 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 	};
 	const selectedIndexRef = useRef(selectedIndex);
 
+	useEffect(() => {
+		if (initialTab) setActiveTab(initialTab);
+	}, [initialTab]);
+
 	// Switching tabs resets the per-tab search/selection/scroll state and
 	// returns focus to the header — the search box always filters within
 	// the currently active tab only.
@@ -380,7 +861,13 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 		updateFocus('header');
 	}, [activeTab]);
 
-	const allRows = useTabRows(activeTab, version);
+	const allRows = useTabRows(
+		activeTab,
+		version,
+		{onLaunchTune, onLaunchIde},
+		agents,
+		innerDaemonRules,
+	);
 	const filteredRows = useMemo(
 		() => filterRows(allRows, query),
 		[allRows, query],
@@ -399,9 +886,30 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 		selectedIndexRef.current = clamped;
 		setSelectedIndex(clamped);
 		setScrollOffset(prevOffset => {
-			if (clamped < prevOffset) return clamped;
-			if (clamped >= prevOffset + MAX_VISIBLE_ROWS) {
-				return clamped - MAX_VISIBLE_ROWS + 1;
+			// Map selectable index to filtered index (headers don't count)
+			const selToFiltered = (selIdx: number): number => {
+				let count = -1;
+				for (let i = 0; i < filteredRows.length; i++) {
+					if (filteredRows[i].kind !== 'header') count++;
+					if (count === selIdx) return i;
+				}
+				return Math.max(0, filteredRows.length - 1);
+			};
+			// Compare in filtered-row coordinates, not selectable coordinates
+			const filteredIdx = selToFiltered(clamped);
+			const windowEnd = prevOffset + MAX_VISIBLE_ROWS;
+
+			if (filteredIdx < prevOffset) {
+				// Moving up: scroll so selected is at the top
+				return Math.max(0, filteredIdx);
+			}
+			if (filteredIdx >= windowEnd) {
+				// Moving down: scroll so selected is at the bottom
+				const target = filteredIdx - MAX_VISIBLE_ROWS + 1;
+				return Math.min(
+					Math.max(0, target),
+					Math.max(0, filteredRows.length - MAX_VISIBLE_ROWS),
+				);
 			}
 			return prevOffset;
 		});
@@ -414,9 +922,18 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 	};
 
 	const activateRow = (row: SettingRow) => {
+		if (row.kind === 'header') return;
 		if (row.kind === 'boolean') {
 			row.onToggle();
 			setVersion(v => v + 1);
+			return;
+		}
+		if (row.kind === 'action') {
+			if (row.id === 'add-subagent') {
+				setOpenPanel('subagent-create');
+			} else {
+				row.onAction();
+			}
 			return;
 		}
 		setOpenPanel(row.panel);
@@ -494,9 +1011,10 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 
 		// focus === 'list'
 		const effectiveRows = filterRows(allRows, queryRef.current);
+		const selectableRows = effectiveRows.filter(r => r.kind !== 'header');
 		const effectiveClampedIndex = Math.min(
 			selectedIndexRef.current,
-			Math.max(0, effectiveRows.length - 1),
+			Math.max(0, selectableRows.length - 1),
 		);
 
 		if (key.escape || input === '/') {
@@ -507,16 +1025,16 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 			if (effectiveClampedIndex === 0) {
 				updateFocus('search');
 			} else {
-				moveSelection(effectiveClampedIndex - 1, effectiveRows.length);
+				moveSelection(effectiveClampedIndex - 1, selectableRows.length);
 			}
 			return;
 		}
 		if (key.downArrow) {
-			moveSelection(effectiveClampedIndex + 1, effectiveRows.length);
+			moveSelection(effectiveClampedIndex + 1, selectableRows.length);
 			return;
 		}
 		if (key.return || input === ' ') {
-			const row = effectiveRows[effectiveClampedIndex];
+			const row = selectableRows[effectiveClampedIndex];
 			if (row) activateRow(row);
 		}
 	};
@@ -549,15 +1067,41 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 			}
 			handleKey(input, key);
 		},
-		{isActive: true},
+		{isActive: !openPanel},
 	);
 
 	if (openPanel) {
 		const onBack = () => {
+			// getAppConfig() is module-cached, so a panel (or a wizard it launched)
+			// that wrote to disk leaves the cache stale and the row values below
+			// would recompute from pre-edit data.
+			reloadAppConfig();
 			setVersion(v => v + 1);
 			setOpenPanel(null);
 		};
-		return renderManagedPanel(openPanel, onBack);
+		// Extract agent name from subagent-*:agentName panel identifiers
+		const agentName = openPanel.startsWith('subagent-edit:')
+			? openPanel.slice('subagent-edit:'.length)
+			: openPanel.startsWith('subagent-model:')
+				? openPanel.slice('subagent-model:'.length)
+				: openPanel.startsWith('subagent-tools:')
+					? openPanel.slice('subagent-tools:'.length)
+					: openPanel.startsWith('subagent-description:')
+						? openPanel.slice('subagent-description:'.length)
+						: undefined;
+		return renderManagedPanel(
+			openPanel,
+			onBack,
+			onMcpChanged,
+			agentName,
+			reloadAgents,
+			toolManager?.getToolNames().sort(),
+			setOpenPanel,
+			currentSessionId,
+			messageCount,
+			onActivateDeveloperMode,
+			innerDaemonRules,
+		);
 	}
 
 	const width = isNarrow ? '100%' : boxWidth;
@@ -566,11 +1110,13 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 		scrollOffset,
 		scrollOffset + MAX_VISIBLE_ROWS,
 	);
-	const moreAbove = scrollOffset;
-	const moreBelow = Math.max(
-		0,
-		filteredRows.length - scrollOffset - MAX_VISIBLE_ROWS,
-	);
+	// Count only selectable (non-header) rows above/below the visible window
+	const moreAbove = filteredRows
+		.slice(0, scrollOffset)
+		.filter(r => r.kind !== 'header').length;
+	const moreBelow = filteredRows
+		.slice(scrollOffset + MAX_VISIBLE_ROWS)
+		.filter(r => r.kind !== 'header').length;
 
 	const footerHint =
 		focus === 'header'
@@ -649,15 +1195,26 @@ export function SettingsSelector({onCancel}: SettingsSelectorProps) {
 				{visibleRows.length === 0 && (
 					<Text color={colors.secondary}>No settings match "{query}"</Text>
 				)}
-				{visibleRows.map((row, i) => (
-					<SettingRowLine
-						key={row.id}
-						row={row}
-						selected={focus === 'list' && scrollOffset + i === clampedIndex}
-						labelWidth={labelWidth}
-						isNarrow={isNarrow}
-					/>
-				))}
+				{visibleRows.map((row, i) => {
+					// Compute selectable index for this row (skip headers)
+					const selectableIndex =
+						filteredRows
+							.slice(0, scrollOffset + i + 1)
+							.filter(r => r.kind !== 'header').length - 1;
+					return (
+						<SettingRowLine
+							key={row.id}
+							row={row}
+							selected={
+								focus === 'list' &&
+								row.kind !== 'header' &&
+								selectableIndex === clampedIndex
+							}
+							labelWidth={labelWidth}
+							isNarrow={isNarrow}
+						/>
+					);
+				})}
 				{moreBelow > 0 && (
 					<Text color={colors.secondary} dimColor>
 						↓ {moreBelow} more below

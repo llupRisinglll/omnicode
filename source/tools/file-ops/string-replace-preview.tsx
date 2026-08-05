@@ -24,7 +24,8 @@ export async function formatStringReplacePreview(
 	const themeColors = colors || getColors();
 	const {path, old_str, new_str} = args;
 
-	const terminalWidth = process.stdout.columns || DEFAULT_TERMINAL_COLUMNS;
+	const terminalWidth =
+		(process.stdout.columns || DEFAULT_TERMINAL_COLUMNS) - 2;
 
 	const isResult = result !== undefined;
 
@@ -42,7 +43,7 @@ export async function formatStringReplacePreview(
 					<ToolMessage
 						message={
 							<Box flexDirection="column" marginBottom={1}>
-								<Text color={themeColors.tool}>⚒ string_replace</Text>
+								<Text color={themeColors.tool}>✦ string_replace</Text>
 								<Box>
 									<Text color={themeColors.secondary}>Path: </Text>
 									<Text wrap="truncate-end" color={themeColors.primary}>
@@ -67,7 +68,7 @@ export async function formatStringReplacePreview(
 					<ToolMessage
 						message={
 							<Box flexDirection="column">
-								<Text color={themeColors.tool}>⚒ string_replace</Text>
+								<Text color={themeColors.tool}>✦ string_replace</Text>
 								<Box>
 									<Text color={themeColors.secondary}>Path: </Text>
 									<Text wrap="truncate-end" color={themeColors.primary}>
@@ -127,7 +128,7 @@ export async function formatStringReplacePreview(
 			<ToolMessage
 				message={
 					<Box flexDirection="column">
-						<Text color={themeColors.tool}>⚒ string_replace</Text>
+						<Text color={themeColors.tool}>✦ string_replace</Text>
 						<Box>
 							<Text color={themeColors.secondary}>Path: </Text>
 							<Text wrap="truncate-end" color={themeColors.primary}>
@@ -161,7 +162,7 @@ export async function formatStringReplacePreview(
 			<ToolMessage
 				message={
 					<Box flexDirection="column">
-						<Text color={themeColors.tool}>⚒ string_replace</Text>
+						<Text color={themeColors.tool}>✦ string_replace</Text>
 						<Box>
 							<Text color={themeColors.secondary}>Path: </Text>
 							<Text wrap="truncate-end" color={themeColors.primary}>

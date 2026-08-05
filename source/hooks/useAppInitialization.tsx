@@ -29,6 +29,7 @@ import {
 	setToolManagerGetter,
 	setToolRegistryGetter,
 } from '@/message-handler';
+
 import {generateKey} from '@/session/key-generator';
 import {SubagentExecutor} from '@/subagents/subagent-executor';
 import {getSubagentLoader} from '@/subagents/subagent-loader';
@@ -36,6 +37,7 @@ import {setAgentToolExecutor, setAvailableAgentNames} from '@/tools/agent-tool';
 import {clearAllTasks} from '@/tools/tasks';
 import {ToolManager} from '@/tools/tool-manager';
 import type {CustomCommand} from '@/types/commands';
+
 import {
 	LLMClient,
 	LSPConnectionStatus,
@@ -510,7 +512,7 @@ export function useAppInitialization({
 			// bundle skills register their subagents. Re-publish now so the
 			// `agent` tool's parameter description and the system prompt's
 			// subagent block include bundle agents (e.g. k8s_agent).
-			const refreshedAgents = await subagentLoader.listSubagents();
+			const refreshedAgents = await subagentLoader.listInvokableSubagents();
 			const refreshedSummaries = refreshedAgents.map(a => ({
 				name: a.name,
 				description: a.description,
@@ -563,8 +565,9 @@ export function useAppInitialization({
 			setCurrentModel('');
 			setCurrentProviderConfig(null);
 
-			// Clear task list — fire-and-forget, just deletes a JSON file
-			void clearAllTasks();
+			// Clear task list — fire-and-forget, just deletes a JSON file;
+			// swallow failures so an unwritable cwd can't crash the process
+			clearAllTasks().catch(() => {});
 
 			const newToolManager = new ToolManager();
 			const newCustomCommandLoader = new CustomCommandLoader();
@@ -599,7 +602,7 @@ export function useAppInitialization({
 			await Promise.all([
 				start(newToolManager, newCustomCommandLoader, preferences),
 				subagentLoader.initialize().then(async () => {
-					const availableAgents = await subagentLoader.listSubagents();
+					const availableAgents = await subagentLoader.listInvokableSubagents();
 					const agentSummaries = availableAgents.map(a => ({
 						name: a.name,
 						description: a.description,

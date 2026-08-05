@@ -12,6 +12,8 @@
 export interface SubagentConfig {
 	/** Unique identifier for the subagent */
 	name: string;
+	/** Human-friendly display title */
+	title?: string;
 	/** Description of when to use this subagent */
 	description: string;
 	/** Provider name from agents.config.json (optional — uses parent's provider if not set) */
@@ -32,6 +34,12 @@ export interface SubagentConfig {
 	 * the subagent's effective tool list, even when those tools are scoped.
 	 */
 	ownerSkill?: string;
+	/**
+	 * Internal subagents are invoked only programmatically (e.g. by the
+	 * steering engine), never exposed to — or invokable via — the main
+	 * model's `agent` tool. They stay resolvable by name for their owner.
+	 */
+	internal?: boolean;
 }
 
 /**
@@ -63,6 +71,8 @@ export interface SubagentResult {
 	error?: string;
 	/** Number of tokens used (if available) */
 	tokensUsed?: number;
+	/** Effective model used for the subagent run */
+	modelUsed?: string;
 	/** Execution time in milliseconds */
 	executionTimeMs: number;
 }
@@ -128,6 +138,8 @@ export interface SubagentConfigWithSource extends SubagentConfig {
 export interface SubagentFrontmatter {
 	/** Subagent name */
 	name: string;
+	/** Human-friendly display title */
+	title?: string;
 	/** Description of when to use */
 	description: string;
 	/** Provider name */
@@ -140,6 +152,8 @@ export interface SubagentFrontmatter {
 	tools?: string[];
 	/** Disallowed tools */
 	disallowedTools?: string[];
+	/** Internal-only: hidden from and not invokable via the main model's agent tool */
+	internal?: boolean;
 }
 
 /**

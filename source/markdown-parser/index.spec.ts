@@ -1,4 +1,5 @@
 import test from 'ava';
+import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import type {Colors} from '../types/markdown-parser.js';
 import {parseMarkdown} from './index.js';
@@ -260,6 +261,40 @@ This is **bold** and *italic* text with \`code\`.
 	t.true(result.includes('italic'));
 	t.true(result.includes('•'));
 	t.true(result.includes('Name'));
+});
+
+test('parseMarkdown does not mistake ANSI codes for link brackets (heading + link)', t => {
+	// Force chalk to emit real ANSI codes — the bug only manifests when the
+	// heading's `\x1b[38;2;…m` color code is present. The link regex used to
+	// match the `[` inside that escape as a link opener and corrupt the
+	// heading (the color parameters leaked as literal text).
+	const originalLevel = chalk.level;
+	chalk.level = 3;
+	try {
+		const text = [
+			'## What changed',
+			'',
+			'A link: [the fork workflow](/docs/fork-differences.md) in one go.',
+		].join('\n');
+		const result = parseMarkdown(text, mockColors);
+		// When the bug fires, the heading's color parameters leak as literal
+		// text ("38;2;59;130;246m") — stripAnsi removes real escape sequences
+		// but keeps those leaked fragments, so their absence proves the
+		// heading rendered cleanly.
+		const visible = stripAnsi(result);
+		t.false(visible.includes('38;2;'), 'color parameters must not leak');
+		// The link still renders underlined + the URL in parentheses.
+		const linkText = 'the fork workflow';
+		const linkAt = result.indexOf(linkText);
+		t.true(linkAt !== -1, 'link text present');
+		t.true(
+			result.slice(0, linkAt).includes('\x1b[4m'),
+			'link text is underlined',
+		);
+		t.true(result.includes('(/docs/fork-differences.md)'));
+	} finally {
+		chalk.level = originalLevel;
+	}
 });
 
 test('parseMarkdown handles plain text without markdown', t => {

@@ -1,11 +1,14 @@
 import {Box, Text} from 'ink';
 import React from 'react';
+import {StyledTitle} from '@/components/ui/styled-title';
 import {
 	TOKEN_THRESHOLD_CRITICAL_PERCENT,
 	TOKEN_THRESHOLD_WARNING_PERCENT,
 } from '@/constants';
+import {useBackgroundTaskCount} from '@/hooks/useBackgroundTaskCount';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import type {useTheme} from '@/hooks/useTheme';
+import {TitleShapeContext} from '@/hooks/useTitleShape';
 import {resolveToolProfile} from '@/tools/tool-profiles';
 import type {TuneConfig} from '@/types/config';
 import type {ContextSource, DevelopmentMode} from '@/types/core';
@@ -36,6 +39,10 @@ interface DevelopmentModeIndicatorProps {
 	tune?: TuneConfig;
 	currentModel?: string;
 	activeEditor?: ActiveEditorState | null;
+	backgroundCount?: number;
+	bgHighlighted?: boolean;
+	agentCount?: number;
+	agentHighlighted?: boolean;
 	statusInfo?: DevelopmentModeStatusInfo;
 }
 
@@ -68,9 +75,18 @@ export const DevelopmentModeIndicator = React.memo(
 		tune,
 		currentModel,
 		activeEditor,
+		backgroundCount,
+		bgHighlighted = false,
+		agentCount = 0,
+		agentHighlighted = false,
 		statusInfo,
 	}: DevelopmentModeIndicatorProps) => {
 		const {isNarrow, actualWidth, truncate} = useResponsiveTerminal();
+		const backgroundTaskCount = backgroundCount ?? useBackgroundTaskCount();
+		// The focus pill reuses the user's configured titlebar shape so the
+		// status-line selection matches Settings' active tab exactly.
+		const titleShape =
+			React.useContext(TitleShapeContext)?.currentTitleShape ?? 'pill';
 		const modeLabel = isNarrow
 			? DEVELOPMENT_MODE_LABELS_NARROW[developmentMode]
 			: DEVELOPMENT_MODE_LABELS[developmentMode];
@@ -94,6 +110,20 @@ export const DevelopmentModeIndicator = React.memo(
 		// truncates.
 		const ctxPrefix = contextSource === 'api' ? '' : '~';
 
+		// [user directory] identity. On icon themes it rides at the END of the
+		// mode line (so it is the last thing to clip on narrow screens); classic
+		// themes keep it on its own line next to the git info.
+		const identityLabelFull = (() => {
+			if (!statusInfo?.user && !statusInfo?.directory) return '';
+			const user = statusInfo.user
+				? statusInfo.host
+					? `${statusInfo.user}@${statusInfo.host}`
+					: statusInfo.user
+				: '';
+			const pieces = [user, statusInfo.directory].filter(Boolean);
+			return pieces.length > 0 ? `[${pieces.join(' ')}]` : '';
+		})();
+
 		// Mode, tune, and ctx never truncate. Session name and the filename
 		// portion of the editor pill share whatever room is left, each
 		// truncating with an ellipsis; if both fit fully neither truncates;
@@ -102,7 +132,7 @@ export const DevelopmentModeIndicator = React.memo(
 		// optional — drop them when otherwise the row would wrap. Suffix
 		// drops first (line-range info is more contextual than help text),
 		// then the shift hint.
-		const {sessionLabel, editorLabel, showShiftHint} = (() => {
+		const {sessionLabel, editorLabel, showShiftHint, identityLabel} = (() => {
 			const editorFileName = activeEditor?.fileName;
 			const hasSelection =
 				!!activeEditor?.selection &&
@@ -123,12 +153,18 @@ export const DevelopmentModeIndicator = React.memo(
 					? ' (Shift+Tab to cycle)'
 					: '';
 			const tuneSegment = tuneLabel ? ` · ${tuneLabel}` : '';
-			const ctxSegment =
-				contextPercentUsed !== null
+			// ctx moved to the box's model badge on icon themes.
+			const ctxSegment = colors.promptChar
+				? ''
+				: contextPercentUsed !== null
 					? ` · ctx: ${ctxPrefix}${contextBar(contextPercentUsed)} ${contextPercentUsed}%`
 					: '';
+			const backgroundSegment =
+				backgroundTaskCount > 0 ? ` · bg: ${backgroundTaskCount}` : '';
 			const sessionSeparator = sessionName ? ' · ' : '';
 			const editorSeparator = editorFileName ? ' · ' : '';
+			const identitySegment =
+				colors.promptChar && identityLabelFull ? ` · ${identityLabelFull}` : '';
 
 			const minLen = 6;
 			const minSessionLen = sessionName ? minLen : 0;
@@ -139,9 +175,11 @@ export const DevelopmentModeIndicator = React.memo(
 				modeLabel.length +
 				tuneSegment.length +
 				ctxSegment.length +
+				backgroundSegment.length +
 				sessionSeparator.length +
 				editorSeparator.length +
 				editorPrefix.length +
+				identitySegment.length +
 				minSessionLen +
 				minEditorLen;
 
@@ -164,10 +202,12 @@ export const DevelopmentModeIndicator = React.memo(
 				shiftHint.length +
 				tuneSegment.length +
 				ctxSegment.length +
+				backgroundSegment.length +
 				sessionSeparator.length +
 				editorSeparator.length +
 				editorPrefix.length +
-				editorSuffix.length;
+				editorSuffix.length +
+				identitySegment.length;
 
 			const remaining = Math.max(0, actualWidth - fixedWidth - 1);
 
@@ -212,18 +252,22 @@ export const DevelopmentModeIndicator = React.memo(
 				sessionLabel: session,
 				editorLabel: editor,
 				showShiftHint: shiftHint.length > 0,
+				// Icon themes: identity rides at the END of the mode line,
+				// its length already reserved in fixedWidth so it only
+				// truncates when the whole row still overflows the terminal.
+				identityLabel: identitySegment
+					? truncate(
+							identityLabelFull,
+							identitySegment.length +
+								Math.max(
+									0,
+									remaining -
+										(session ? 3 + session.length : 0) -
+										(editor ? 3 + editor.length : 0),
+								),
+						)
+					: '',
 			};
-		})();
-
-		const identityLabel = (() => {
-			if (!statusInfo?.user && !statusInfo?.directory) return '';
-			const user = statusInfo.user
-				? statusInfo.host
-					? `${statusInfo.user}@${statusInfo.host}`
-					: statusInfo.user
-				: '';
-			const pieces = [user, statusInfo.directory].filter(Boolean);
-			return pieces.length > 0 ? `[${pieces.join(' ')}]` : '';
 		})();
 
 		return (
@@ -262,7 +306,7 @@ export const DevelopmentModeIndicator = React.memo(
 							</Text>
 						</>
 					)}
-					{contextPercentUsed !== null && (
+					{!colors.promptChar && contextPercentUsed !== null && (
 						<>
 							<Text color={colors.secondary}> · </Text>
 							<Text color={colors.secondary}>ctx: </Text>
@@ -272,21 +316,60 @@ export const DevelopmentModeIndicator = React.memo(
 							</Text>
 						</>
 					)}
+					{agentCount > 0 && (
+						<>
+							<Text color={colors.secondary}> · </Text>
+							{agentHighlighted ? (
+								<StyledTitle
+									title={`agents: ${agentCount}`}
+									shape={titleShape}
+									borderColor={colors.primary}
+									textColor={colors.base}
+								/>
+							) : (
+								<Text color={colors.text}>agents: {agentCount}</Text>
+							)}
+						</>
+					)}
+					{backgroundTaskCount > 0 && (
+						<>
+							<Text color={colors.secondary}> · </Text>
+							{bgHighlighted ? (
+								<StyledTitle
+									title={`bg: ${backgroundTaskCount}`}
+									shape={titleShape}
+									borderColor={colors.primary}
+									textColor={colors.base}
+								/>
+							) : (
+								<Text color={colors.text}>bg: {backgroundTaskCount}</Text>
+							)}
+						</>
+					)}
 					{editorLabel && (
 						<>
 							<Text color={colors.secondary}> · </Text>
 							<Text color={colors.info}>{editorLabel}</Text>
 						</>
 					)}
-				</Box>
-				{(identityLabel || statusInfo?.git) && (
-					<Box>
-						{identityLabel && (
+					{identityLabel && (
+						<>
+							<Text color={colors.secondary}> · </Text>
 							<Text color={colors.secondary}>{identityLabel}</Text>
+						</>
+					)}
+				</Box>
+				{/* Identity + git ride on their own line for classic themes only.
+				    Icon themes drop the git line entirely — the identity already
+				    rides at the end of the mode line above. */}
+				{!colors.promptChar && (identityLabelFull || statusInfo?.git) ? (
+					<Box>
+						{identityLabelFull && (
+							<Text color={colors.secondary}>{identityLabelFull}</Text>
 						)}
 						{statusInfo?.git && (
 							<>
-								{identityLabel && <Text color={colors.secondary}> </Text>}
+								{identityLabelFull && <Text color={colors.secondary}> </Text>}
 								<Text color={colors.info}>git:</Text>
 								<Text color={colors.secondary}>(</Text>
 								<Text color={colors.error}>{statusInfo.git.branch}</Text>
@@ -295,7 +378,7 @@ export const DevelopmentModeIndicator = React.memo(
 							</>
 						)}
 					</Box>
-				)}
+				) : null}
 			</Box>
 		);
 	},

@@ -1544,3 +1544,46 @@ test.serial(
 		}
 	},
 );
+
+test.serial(
+	'loadProviderConfigs maps the plain timeout field to request/socket timeout',
+	t => {
+		const originalProviders = process.env.NANOCODER_PROVIDERS;
+
+		try {
+			process.env.NANOCODER_PROVIDERS = JSON.stringify({
+				providers: [
+					{
+						name: 'TimedProvider',
+						baseUrl: 'https://example.com/v1',
+						models: ['model1'],
+						timeout: 30000,
+					},
+					{
+						name: 'ExplicitProvider',
+						baseUrl: 'https://example.com/v1',
+						models: ['model1'],
+						requestTimeout: 20000,
+						socketTimeout: 60000,
+					},
+				],
+			});
+
+			const resolved = loadProviderConfigs();
+			const timed = resolved.find(p => p.name === 'TimedProvider');
+			t.is(timed?.requestTimeout, 30000);
+			t.is(timed?.socketTimeout, 30000);
+
+			// Explicit request/socket timeouts still win over the plain timeout.
+			const explicit = resolved.find(p => p.name === 'ExplicitProvider');
+			t.is(explicit?.requestTimeout, 20000);
+			t.is(explicit?.socketTimeout, 60000);
+		} finally {
+			if (originalProviders !== undefined) {
+				process.env.NANOCODER_PROVIDERS = originalProviders;
+			} else {
+				delete process.env.NANOCODER_PROVIDERS;
+			}
+		}
+	},
+);

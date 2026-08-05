@@ -33,11 +33,23 @@ test('PasteDetector detects multi-line input as paste', t => {
 test('PasteDetector detects small paste', t => {
 	const detector = new PasteDetector();
 
-	// 15 characters - enough to trigger size detection (> 5*2 = 10)
-	const result = detector.detectPaste('small paste txt');
+	// 16 characters - clears both the size threshold (> 5*2 = 10) and the
+	// coalesced-typing floor (>= 16 chars) that guards against fast typing.
+	const result = detector.detectPaste('small paste text');
 
 	t.true(result.isPaste);
-	t.is(result.method, 'size'); // 15 chars > 5*2 = 10
+	t.is(result.method, 'size');
+});
+
+test('PasteDetector treats a sub-16-char burst as typing, not paste', t => {
+	const detector = new PasteDetector();
+
+	// A fast 12-char burst coalesced into one change (timeElapsed ~0) must NOT be
+	// classified as a paste — that misclassification is what corrupted input.
+	const result = detector.detectPaste('abcdefghijkl');
+
+	t.false(result.isPaste);
+	t.is(result.method, 'none');
 });
 
 test('PasteDetector does not detect manual typing', async t => {

@@ -27,7 +27,21 @@ export const wheelEvents = new EventEmitter();
 export const clickEvents = new EventEmitter();
 /** Singleton bus for pointer movement stripped from stdin. */
 export const pointerEvents = new EventEmitter();
-
+/**
+ * Keyboard-driven expand/collapse buses, emitted from the input shortcuts
+ * (ctrl+o → compact tool tallies, ctrl+t/ctrl+r → detailed rows / thoughts).
+ * Queued components subscribe so the "(ctrl-o to expand)" / "(ctrl + t to
+ * view transcript)" hints actually toggle the already-visible blocks, not
+ * just subsequent renders.
+ */
+export const compactToggleEvents = new EventEmitter();
+export const transcriptToggleEvents = new EventEmitter();
+/** Singleton bus for mouse button press events (left/middle/right). */
+export const mouseDownEvents = new EventEmitter();
+/** Singleton bus for mouse button release events. */
+export const mouseUpEvents = new EventEmitter();
+/** Singleton bus for mouse drag-motion events (button held while moving). */
+export const mouseMoveEvents = new EventEmitter();
 // ESC [ < button ; column ; row, terminated by M (press) or m (release).
 const SGR_MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
 
@@ -38,6 +52,8 @@ const SGR_MOUSE_RE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
 // is not a realistic case.
 const MAX_PARTIAL = 20;
 const PARTIAL_TAIL_RE = /\x1b\[<(?:\d+(?:;\d+(?:;\d+)?)?)?$/;
+let primaryPress: MousePointer | null = null;
+let primaryPressDragged = false;
 
 export interface StripResult {
 	/** Input with all SGR mouse sequences removed. */
@@ -82,8 +98,49 @@ export function stripMouseSequences(chunk: string, prefix = ''): StripResult {
 				wheel.push(direction);
 			} else if (eventType === 'M' && button === 35) {
 				pointers.push({x: Number(xStr), y: Number(yStr)});
-			} else if (eventType === 'M' && (button & 3) === 0) {
+			} else if (eventType === 'M' && button < 32) {
+				// Button press (click): button 0 = left, 1 = middle, 2 = right
 				clicks.push({x: Number(xStr), y: Number(yStr)});
+				if (button === 0) {
+					primaryPress = {x: Number(xStr), y: Number(yStr)};
+					primaryPressDragged = false;
+				}
+				mouseDownEvents.emit('mousedown', {
+					button,
+					x: Number(xStr),
+					y: Number(yStr),
+				});
+			} else if (
+				eventType === 'M' &&
+				button >= 32 &&
+				button < 64 &&
+				button !== 35
+			) {
+				// Drag motion while button held (SGR 1002 mode)
+				const heldButton = button & 3; // extract the button number from motion event
+				if (
+					heldButton === 0 &&
+					primaryPress &&
+					(Math.abs(Number(xStr) - primaryPress.x) >= 2 ||
+						Math.abs(Number(yStr) - primaryPress.y) >= 2)
+				) {
+					primaryPressDragged = true;
+				}
+				mouseMoveEvents.emit('mousemove', {
+					button: heldButton,
+					x: Number(xStr),
+					y: Number(yStr),
+				});
+			} else if (eventType === 'm') {
+				// Button release
+				const release = {x: Number(xStr), y: Number(yStr)};
+				mouseUpEvents.emit('mouseup', release);
+				if (primaryPress && !primaryPressDragged) {
+					const click = {x: release.x - 1, y: release.y - 1};
+					queueMicrotask(() => clickEvents.emit('click', click));
+				}
+				primaryPress = null;
+				primaryPressDragged = false;
 			}
 			return '';
 		},

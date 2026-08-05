@@ -42,12 +42,14 @@ export async function parseSubagentMarkdown(
 
 	const config: SubagentConfig = {
 		name: frontmatter.name,
+		title: frontmatter.title,
 		description: frontmatter.description,
 		provider: frontmatter.provider,
 		model: frontmatter.model || 'inherit',
 		contextWindow: frontmatter.contextWindow,
 		tools: frontmatter.tools,
 		disallowedTools: frontmatter.disallowedTools,
+		internal: frontmatter.internal,
 		systemPrompt,
 	};
 
@@ -73,6 +75,16 @@ export function validateFrontmatter(
 		return {
 			valid: false,
 			error: 'name is required and must be a non-empty string',
+		};
+	}
+
+	if (
+		frontmatter.title !== undefined &&
+		(typeof frontmatter.title !== 'string' || !frontmatter.title.trim())
+	) {
+		return {
+			valid: false,
+			error: 'title must be a non-empty string',
 		};
 	}
 
@@ -124,6 +136,13 @@ export function validateFrontmatter(
 				error: 'disallowedTools must be an array of strings',
 			};
 		}
+	}
+
+	if (
+		frontmatter.internal !== undefined &&
+		typeof frontmatter.internal !== 'boolean'
+	) {
+		return {valid: false, error: 'internal must be a boolean'};
 	}
 
 	return {valid: true};

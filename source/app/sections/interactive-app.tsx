@@ -1,18 +1,19 @@
 import {userInfo} from 'node:os';
-import {basename} from 'node:path';
 import {Box, useInput} from 'ink';
 import React, {useMemo} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
+import {PreviewDevPanel} from '@/app/components/preview-dev-panel';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
 import {StatusLine} from '@/components/StatusLine';
-import {loadPreferences} from '@/config/preferences';
+import {loadPreferences, updateDeveloperMode} from '@/config/preferences';
 import type {useChatHandler} from '@/hooks/chat-handler';
 import type {AppHandlers} from '@/hooks/useAppHandlers';
 import type {useAppState} from '@/hooks/useAppState';
+import {useBackgroundTaskCount} from '@/hooks/useBackgroundTaskCount';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
 import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {UIStateProvider} from '@/hooks/useUIState';
@@ -23,13 +24,9 @@ import {isSingleToolProfile, resolveToolProfile} from '@/tools/tool-profiles';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
 import type {StatusLineData} from '@/types/statusline';
-import {clickEvents} from '@/utils/terminal-mouse';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
-import {
-	displayCompactCountsSummary,
-	getLiveCompactToolExpandHitboxColumns,
-} from '@/utils/tool-result-display';
+import {displayCompactCountsSummary} from '@/utils/tool-result-display';
 
 interface InteractiveAppProps {
 	appState: ReturnType<typeof useAppState>;
@@ -40,6 +37,8 @@ interface InteractiveAppProps {
 	staticComponents: React.ReactNode[];
 	transientNoticeComponents?: React.ReactNode[];
 	liveComponent: React.ReactNode;
+	liveCompactCounts?: React.ReactNode;
+	liveCompactStatus?: React.ReactNode;
 	pendingSubagentApproval: PendingToolApproval | null;
 	handleSubagentToolApproval: (confirmed: boolean) => void;
 	pendingToolConfirmation: PendingToolConfirmation | null;
@@ -76,6 +75,8 @@ export function InteractiveApp({
 	staticComponents,
 	transientNoticeComponents = [],
 	liveComponent,
+	liveCompactCounts,
+	liveCompactStatus,
 	pendingSubagentApproval,
 	handleSubagentToolApproval,
 	pendingToolConfirmation,
@@ -88,6 +89,19 @@ export function InteractiveApp({
 	altScreenActive = false,
 }: InteractiveAppProps): React.ReactElement {
 	const nextRestoredDraftIdRef = React.useRef(1);
+	// Tune / IDE are launched by closing settings first, so their exit has no way
+	// to know it should land back in settings rather than in chat.
+	const launchedFromSettingsRef = React.useRef(false);
+	const returnFromLaunchedWizard = React.useCallback(
+		(exit: () => void) => () => {
+			exit();
+			if (launchedFromSettingsRef.current) {
+				launchedFromSettingsRef.current = false;
+				modeHandlers.enterSettingsMode();
+			}
+		},
+		[modeHandlers],
+	);
 	const [submittedDraft, setSubmittedDraft] =
 		React.useState<SubmittedInputDraft | null>(null);
 	const [restoredDraft, setRestoredDraft] =
@@ -110,41 +124,15 @@ export function InteractiveApp({
 		}
 	}, [appState]);
 
-	const handleToggleReasoningExpanded = () => {
+	const handleToggleReasoningExpanded = React.useCallback(() => {
 		appState.setReasoningExpanded(!appState.reasoningExpanded);
-	};
-
-	React.useEffect(() => {
-		const hasCompactSummary =
-			appState.compactToolCounts &&
-			Object.keys(appState.compactToolCounts).length > 0;
-		if (!hasCompactSummary) return;
-
-		const hitbox = getLiveCompactToolExpandHitboxColumns(
-			appState.compactToolCounts ?? {},
-			!appState.compactToolDisplay,
-		);
-		if (!hitbox) return;
-
-		const onClick = ({x}: {x: number; y: number}) => {
-			if (x < hitbox.start || x > hitbox.end) return;
-			handleToggleCompactDisplay();
-		};
-
-		clickEvents.on('click', onClick);
-		return () => {
-			clickEvents.off('click', onClick);
-		};
-	}, [
-		appState.compactToolCounts,
-		appState.compactToolDisplay,
-		handleToggleCompactDisplay,
-	]);
+	}, [appState.reasoningExpanded, appState.setReasoningExpanded]);
 
 	const showModalSelectors =
 		(appState.activeMode !== null &&
 			appState.activeMode !== 'explorer' &&
-			appState.activeMode !== 'ideSelection') ||
+			appState.activeMode !== 'ideSelection' &&
+			appState.activeMode !== 'preview') ||
 		appState.isSettingsMode;
 
 	// Show the plan review bar when the chat handler signals that a turn which
@@ -291,6 +279,7 @@ export function InteractiveApp({
 
 	const terminalRows = useTerminalRows();
 	const terminalWidth = useTerminalWidth();
+	const backgroundTaskCount = useBackgroundTaskCount();
 	const statusLineConfig = loadPreferences().statusLine;
 	const statusInfo = useMemo(() => {
 		let git:
@@ -311,7 +300,7 @@ export function InteractiveApp({
 
 		return {
 			user: userInfo().username,
-			directory: basename(process.cwd()),
+			directory: process.cwd(),
 			git,
 		};
 	}, []);
@@ -356,6 +345,9 @@ export function InteractiveApp({
 					? 'single'
 					: 'parallel',
 			},
+			background_tasks: {
+				running: backgroundTaskCount,
+			},
 			version: '1.28.1',
 		};
 	}, [
@@ -363,6 +355,7 @@ export function InteractiveApp({
 		appState.currentModel,
 		appState.contextPercentUsed,
 		appState.tune,
+		backgroundTaskCount,
 	]);
 	const statusLineSlot =
 		statusLineConfig?.enabled && statusLineConfig.command && statusLineData ? (
@@ -434,11 +427,26 @@ export function InteractiveApp({
 					</Box>
 				)}
 
+				{appState.activeMode === 'preview' && (
+					<PreviewDevPanel
+						onClose={() => {
+							appState.setActiveMode(null);
+							appState.setIsSettingsMode(false);
+						}}
+					/>
+				)}
+
 				{appState.isIdeSelectionMode && (
 					<Box marginLeft={-1} flexDirection="column">
 						<IdeSelector
-							onSelect={handleIdeSelect}
-							onCancel={modeHandlers.handleIdeSelectionCancel}
+							onSelect={ide => {
+								// Completing lands in chat so the result is visible.
+								launchedFromSettingsRef.current = false;
+								handleIdeSelect(ide);
+							}}
+							onCancel={returnFromLaunchedWizard(
+								modeHandlers.handleIdeSelectionCancel,
+							)}
 						/>
 					</Box>
 				)}
@@ -448,11 +456,15 @@ export function InteractiveApp({
 						<ModalSelectors
 							activeMode={appState.activeMode}
 							isSettingsMode={appState.isSettingsMode}
+							settingsInitialTab={appState.settingsInitialTab}
+							toolManager={appState.toolManager}
 							showAllSessions={appState.showAllSessions}
 							currentModel={appState.currentModel}
 							currentProvider={appState.currentProvider}
 							checkpointLoadData={appState.checkpointLoadData}
-							onModelSelect={modeHandlers.handleModelSelect}
+							onModelSelect={(provider, model, effort) =>
+								modeHandlers.handleModelSelect(provider, model, false, effort)
+							}
 							onModelSelectionCancel={modeHandlers.handleModelSelectionCancel}
 							onModelDatabaseCancel={modeHandlers.handleModelDatabaseCancel}
 							onConfigWizardComplete={modeHandlers.handleConfigWizardComplete}
@@ -460,9 +472,39 @@ export function InteractiveApp({
 							onMcpWizardComplete={modeHandlers.handleMcpWizardComplete}
 							onMcpWizardCancel={modeHandlers.handleMcpWizardCancel}
 							onSettingsCancel={modeHandlers.handleSettingsCancel}
+							onMcpChanged={modeHandlers.reloadMcpServers}
+							currentSessionId={appState.currentSessionId ?? undefined}
+							messageCount={appState.messages.length}
+							onActivateDeveloperMode={() => {
+								updateDeveloperMode(true);
+								appState.setIsSettingsMode(false);
+								appState.setActiveMode('preview');
+							}}
+							onLaunchTune={() => {
+								launchedFromSettingsRef.current = true;
+								modeHandlers.handleSettingsCancel();
+								modeHandlers.enterTune();
+							}}
+							onLaunchIde={() => {
+								launchedFromSettingsRef.current = true;
+								modeHandlers.handleSettingsCancel();
+								modeHandlers.enterIdeSelectionMode();
+							}}
+							onAddProvider={() => {
+								// Add-provider row in the model selector → provider wizard.
+								launchedFromSettingsRef.current = false;
+								modeHandlers.enterConfigWizardMode();
+							}}
 							tuneConfig={appState.tune}
-							onTuneSelect={modeHandlers.handleTuneSelect}
-							onTuneCancel={modeHandlers.handleTuneCancel}
+							onTuneSelect={config => {
+								// Tune clears the conversation and prints a summary — land in
+								// chat so that output isn't hidden behind the settings panel.
+								launchedFromSettingsRef.current = false;
+								return modeHandlers.handleTuneSelect(config);
+							}}
+							onTuneCancel={returnFromLaunchedWizard(
+								modeHandlers.handleTuneCancel,
+							)}
 							onCheckpointSelect={appHandlers.handleCheckpointSelect}
 							onCheckpointCancel={appHandlers.handleCheckpointCancel}
 							onSessionSelect={sessionId =>
@@ -506,6 +548,8 @@ export function InteractiveApp({
 								contextSource={appState.contextSource}
 								sessionName={appState.sessionName || undefined}
 								compactToolDisplay={appState.compactToolDisplay}
+								liveCompactCounts={liveCompactCounts}
+								liveCompactStatus={liveCompactStatus}
 								liveTaskList={appState.liveTaskList}
 								onToggleCompactDisplay={handleToggleCompactDisplay}
 								pendingSubagentApproval={pendingSubagentApproval}

@@ -553,6 +553,11 @@ async function handleSlashCommand(
 	if (await handleCommandCreate(commandParts, options)) return;
 	if (await handleAgentCreate(commandParts, options)) return;
 	if (await handleAgentCopy(commandParts, options)) return;
+	if (commandParts[0] === 'agents' && commandParts.length === 1) {
+		options.onEnterSettingsMode('agents');
+		options.onCommandComplete?.();
+		return;
+	}
 	if (await handleToolCreate(commandParts, options)) return;
 	if (await handleSkillsCreate(commandParts, options)) return;
 	if (await handleSpecialCommand(commandName, options)) return;
@@ -592,7 +597,11 @@ export async function handleMessageSubmission(
 		return;
 	}
 
-	if (message.startsWith('/')) {
+	// Route on parseInput's verdict, not a raw "/" prefix — a message that
+	// starts with an absolute path like "/tmp/Spectacle…/screenshot.png" is a
+	// file reference, not a slash command, and must not hit the command
+	// handler as an "unknown command".
+	if (parsedInput.isCommand) {
 		await handleSlashCommand(message, options);
 		return;
 	}

@@ -21,6 +21,16 @@ export interface AIProviderConfig {
 	socketTimeout?: number;
 	maxRetries?: number; // Maximum number of retries for failed requests (default: 2)
 	/**
+	 * Runaway-stream guard overrides. A single model stream exceeding either bound
+	 * is treated as a runaway generation loop, aborted, and surfaced. Raise
+	 * `maxDurationMs` for slow local models, or `disabled: true` to opt out.
+	 */
+	streamGuard?: {
+		maxOutputChars?: number;
+		maxDurationMs?: number;
+		disabled?: boolean;
+	};
+	/**
 	 * Optional model to try once after the primary model fails with a provider/API
 	 * error after its normal retry budget is exhausted. Must be a model exposed by
 	 * this same provider config.
@@ -427,6 +437,8 @@ export interface UserPreferences {
 	reasoningExpanded?: boolean;
 	compactToolDisplay?: boolean;
 	enablePromptScrubbing?: boolean;
+	/** Whether semantic memory is active. Default true to preserve existing behavior. */
+	semanticMemoryEnabled?: boolean;
 	showWorkingIndicator?: boolean;
 	statusLine?: import('@/types/statusline').StatusLineConfig;
 	/**
@@ -440,4 +452,56 @@ export interface UserPreferences {
 	alternateScreen?: boolean;
 	/** Max diff lines shown in compact-mode file results. 0 = unlimited. Default 20. */
 	compactDiffMaxLines?: number;
+	/**
+	 * Developer mode switch. Enables mock/test features and development-mode
+	 * behavior. Off by default.
+	 */
+	developerMode?: boolean;
+	/**
+	 * Auto-steering (InnerDaemon) master switch. true (default): the steering
+	 * engine evaluates each turn and may nudge/block/stop. false: the engine is
+	 * never built or run — useful for A/B comparison against un-steered behavior.
+	 */
+	steeringEnabled?: boolean;
+	/**
+	 * Verbose "proof-of-life" trace for InnerDaemon. false (default): silent.
+	 * true: every turn's steering evaluation emits a single dim trace line into
+	 * the transcript, even on a noop turn, so it's visibly alive.
+	 */
+	steeringVerbose?: boolean;
+	/**
+	 * Model the InnerDaemon steering subagent runs on. null/undefined (default):
+	 * inherit the main agent's current session model — i.e. today's `model:
+	 * inherit` behavior, preserved exactly. A non-null value (a model id on the
+	 * current provider) overrides that, letting the user point InnerDaemon at a
+	 * fast, thinking-off model so a steering nudge doesn't stall the main loop on
+	 * a heavy-thinking session model (see docs/innerdaemon-steering-findings.md
+	 * finding #10).
+	 */
+	innerDaemonModel?: string | null;
+	innerDaemonEffort?: 'minimal' | 'low' | 'medium' | 'high';
+	/**
+	 * Vision fallback model. When the user attaches images but the current model
+	 * doesn't support vision, this model will be used to process the images and
+	 * extract descriptions. The descriptions are then passed to the main model
+	 * along with the original prompt.
+	 */
+	visionModel?: string | null;
+	/**
+	 * Provider for the vision model. If not specified, uses the current provider.
+	 */
+	visionModelProvider?: string | null;
+	/**
+	 * Per-subagent provider/model overrides. Missing agent entries default to the
+	 * subagent definition's own provider/model; built-ins use `model: inherit`,
+	 * so the default behavior is to inherit the main agent provider and model.
+	 */
+	subagentModels?: Record<
+		string,
+		{
+			provider: string;
+			model: string;
+			effort?: 'minimal' | 'low' | 'medium' | 'high';
+		} | null
+	>;
 }

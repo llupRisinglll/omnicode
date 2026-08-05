@@ -22,6 +22,7 @@ import {buildSessionHistoryComponents} from '@/session/session-history-renderer'
 import type {Session} from '@/session/session-manager';
 import {sessionManager} from '@/session/session-manager';
 import {createTokenizer} from '@/tokenization/index';
+import {clearVisionFollowupState} from '@/tools/examine-image';
 import {
 	type GitStatusSummary,
 	getGitStatusSummarySync,
@@ -39,9 +40,11 @@ import type {
 import type {CustomCommand} from '@/types/commands';
 import type {TuneConfig} from '@/types/config';
 import type {ApiCallRecord, ApiUsageSnapshot} from '@/types/core';
+import type {SettingsTabId} from '@/types/settings';
 import type {ThemePreset} from '@/types/ui';
 import type {UpdateInfo} from '@/types/utils';
 import {calculateTokenBreakdown} from '@/usage/calculator';
+import {resetAttachmentArchive} from '@/utils/attachment-archive';
 import {autoCompactSessionOverrides} from '@/utils/auto-compact';
 import {formatError} from '@/utils/error-formatter';
 import {getLogger} from '@/utils/logging';
@@ -107,7 +110,7 @@ interface UseAppHandlersProps {
 	enterModelSelectionMode: () => void;
 	enterModelDatabaseMode: () => void;
 	enterConfigWizardMode: () => void;
-	enterSettingsMode: () => void;
+	enterSettingsMode: (tab?: SettingsTabId) => void;
 	enterMcpWizardMode: () => void;
 	enterExplorerMode: () => void;
 	enterIdeSelectionMode: () => void;
@@ -176,6 +179,14 @@ export function useAppHandlers(props: UseAppHandlersProps): AppHandlers {
 			// are not prefixed with the cleared session's ID. A fresh random ID
 			// will be lazily generated on the next generateKey() call.
 			setKeyGeneratorSessionId(randomBytes(4).toString('hex'));
+			// The attachment archive is dedicated to the conversation — a cleared
+			// conversation tears it down and mints a fresh key. The examine_image
+			// follow-up conversations die with it. Best-effort: a stale temp dir
+			// is harmless and the OS reclaims tmpdir anyway.
+			void resetAttachmentArchive().catch(error => {
+				console.warn('Failed to reset attachment archive:', error);
+			});
+			clearVisionFollowupState();
 			props.setLiveTaskList(null);
 			props.dismissActiveEditor?.();
 		},

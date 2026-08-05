@@ -9,7 +9,18 @@ import type {AIProviderConfig, ProviderConfig} from '@/types/config';
 import {formatError} from '@/utils/error-formatter';
 import {getLogger} from '@/utils/logging';
 import {createSessionOverride} from '@/utils/session-override';
-import {readCache, writeCache} from './models-cache.js';
+import {
+	getCachedContextLimit,
+	readCache,
+	setCachedContextLimit,
+	writeCache,
+} from './models-cache.js';
+
+export {
+	getCachedContextLimit,
+	getCachedContextLimitSync,
+} from './models-cache.js';
+
 import type {
 	ModelInfo,
 	ModelsDevDatabase,
@@ -347,6 +358,7 @@ export type ContextLimitSource =
 	| 'provider-config'
 	| 'env'
 	| 'model-lookup'
+	| 'cache'
 	| 'unknown';
 
 export interface ModelContextLimitOptions {
@@ -442,6 +454,17 @@ export async function resolveModelContextLimit(
 				? modelId.slice(0, -6)
 				: modelId;
 
+		// Check persistent cache before doing models.dev lookup
+		if (options.providerConfig) {
+			const cached = await getCachedContextLimit(
+				options.providerConfig.name,
+				normalizedModelId,
+			);
+			if (cached) {
+				return {limit: cached.limit, source: 'cache'};
+			}
+		}
+
 		// Try models.dev exact ID match first (primary source)
 		let modelInfo = await findModelById(normalizedModelId);
 
@@ -452,18 +475,54 @@ export async function resolveModelContextLimit(
 
 		// If found in models.dev, return that
 		if (modelInfo) {
-			return {limit: modelInfo.contextLimit, source: 'model-lookup'};
+			const result: ResolvedContextLimit = {
+				limit: modelInfo.contextLimit,
+				source: 'model-lookup',
+			};
+			if (options.providerConfig) {
+				void setCachedContextLimit(
+					options.providerConfig.name,
+					normalizedModelId,
+					modelInfo.contextLimit,
+					'model-lookup',
+				);
+			}
+			return result;
 		}
 
 		// Fall back to hardcoded Ollama model defaults (offline fallback)
 		const ollamaLimitOriginal = getOllamaFallbackContextLimit(modelId);
 		if (ollamaLimitOriginal) {
-			return {limit: ollamaLimitOriginal, source: 'model-lookup'};
+			const result: ResolvedContextLimit = {
+				limit: ollamaLimitOriginal,
+				source: 'model-lookup',
+			};
+			if (options.providerConfig) {
+				void setCachedContextLimit(
+					options.providerConfig.name,
+					normalizedModelId,
+					ollamaLimitOriginal,
+					'model-lookup',
+				);
+			}
+			return result;
 		}
 
 		const ollamaLimit = getOllamaFallbackContextLimit(normalizedModelId);
 		if (ollamaLimit) {
-			return {limit: ollamaLimit, source: 'model-lookup'};
+			const result: ResolvedContextLimit = {
+				limit: ollamaLimit,
+				source: 'model-lookup',
+			};
+			if (options.providerConfig) {
+				void setCachedContextLimit(
+					options.providerConfig.name,
+					normalizedModelId,
+					ollamaLimit,
+					'model-lookup',
+				);
+			}
+			return result;
 		}
 
 		return {limit: null, source: 'unknown'};
@@ -483,6 +542,35 @@ export async function getModelContextLimit(
 ): Promise<number | null> {
 	const resolved = await resolveModelContextLimit(modelId, options);
 	return resolved.limit;
+}
+
+/**
+ * Pre-fetch context limits for all models across all providers.
+ * Called on app startup to warm the cache in background.
+ * Runs completely async and doesn't block the UI.
+ */
+export async function prefetchContextLimits(
+	providers: ProviderConfig[],
+): Promise<void> {
+	// Fire and forget - don't await
+	void (async () => {
+		try {
+			for (const provider of providers) {
+				for (const model of provider.models ?? []) {
+					// Check if already cached
+					const cached = await getCachedContextLimit(provider.name, model);
+					if (!cached) {
+						// Resolve and cache in background
+						void resolveModelContextLimit(model, {
+							providerConfig: provider,
+						});
+					}
+				}
+			}
+		} catch {
+			// Silently ignore - this is best-effort warming
+		}
+	})();
 }
 
 /**
@@ -507,5 +595,64 @@ export async function getModelPricing(
 		return null;
 	} catch {
 		return null;
+	}
+}
+
+export interface ModelCapabilities {
+	/** Whether the model accepts image input (vision). */
+	supportsVision: boolean;
+}
+
+/**
+ * Resolve a model's capabilities (currently just vision support) from the
+ * models.dev database. A model counts as vision-capable only when a provider
+ * entry lists `image` in `modalities.input` — models.dev's `attachment` flag
+ * is too loose (it also covers text/PDF/video attachments, e.g. a gateway
+ * that accepts PDFs but not images). Conservative default: unknown models are
+ * treated as text-only so the vision fallback kicks in rather than silently
+ * sending images to a model that can't read them.
+ */
+export async function getModelCapabilities(
+	modelId: string,
+	options: ModelContextLimitOptions = {},
+): Promise<ModelCapabilities> {
+	try {
+		// Provider config can pin a definitive answer; trust it when present.
+		const providerConfig = options.providerConfig;
+		if (providerConfig && 'supportsVision' in providerConfig) {
+			const pinned = (providerConfig as Record<string, unknown>).supportsVision;
+			if (typeof pinned === 'boolean') {
+				return {supportsVision: pinned};
+			}
+		}
+
+		const data = await getModelsData();
+		if (!data) return {supportsVision: false};
+
+		const normalized = modelId.toLowerCase();
+		// Strip a :cloud/-cloud suffix, matching resolveModelContextLimit.
+		const lookupId =
+			normalized.endsWith(':cloud') || normalized.endsWith('-cloud')
+				? normalized.slice(0, -6)
+				: normalized;
+
+		const hasImageInput = (model: ModelsDevModel): boolean =>
+			(model.modalities?.input ?? []).includes('image');
+
+		// Exact id match only. A false "vision-capable" is dangerous — it sends
+		// raw images to a text-only model and 400s — while a false "not
+		// vision-capable" is safe (it routes through the vision fallback). So
+		// we never fuzzy-match: a route keyword like `auto` that has no exact
+		// card resolves to text-only and the fallback handles it.
+		for (const provider of Object.values(data)) {
+			const model = provider?.models?.[lookupId];
+			if (model && hasImageInput(model)) {
+				return {supportsVision: true};
+			}
+		}
+
+		return {supportsVision: false};
+	} catch {
+		return {supportsVision: false};
 	}
 }

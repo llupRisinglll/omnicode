@@ -28,7 +28,7 @@ function createCompletedState(
 // ============================================================================
 
 test('BashProgress renders without crashing', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo hello"
@@ -37,10 +37,11 @@ test('BashProgress renders without crashing', t => {
 	);
 
 	t.truthy(lastFrame());
+	unmount();
 });
 
 test('BashProgress displays the command', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="npm run build"
@@ -51,10 +52,11 @@ test('BashProgress displays the command', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /npm run build/);
+	unmount();
 });
 
 test('BashProgress displays execute_bash tool name', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo test"
@@ -65,10 +67,11 @@ test('BashProgress displays execute_bash tool name', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /execute_bash/);
+	unmount();
 });
 
 test('BashProgress displays Command label', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="ls -la"
@@ -79,6 +82,7 @@ test('BashProgress displays Command label', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Command:/);
+	unmount();
 });
 
 // ============================================================================
@@ -86,7 +90,7 @@ test('BashProgress displays Command label', t => {
 // ============================================================================
 
 test('BashProgress shows status indicator when complete', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo test"
@@ -98,10 +102,11 @@ test('BashProgress shows status indicator when complete', t => {
 	t.truthy(output);
 	t.regex(output!, /Status:/);
 	t.regex(output!, /●/);
+	unmount();
 });
 
 test('BashProgress shows token count when complete', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo test"
@@ -116,6 +121,7 @@ test('BashProgress shows token count when complete', t => {
 	t.truthy(output);
 	t.regex(output!, /Tokens:/);
 	t.regex(output!, /~/);
+	unmount();
 });
 
 // ============================================================================
@@ -123,7 +129,7 @@ test('BashProgress shows token count when complete', t => {
 // ============================================================================
 
 test('BashProgress handles successful exit code', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo success"
@@ -138,10 +144,11 @@ test('BashProgress handles successful exit code', t => {
 	t.truthy(output);
 	// Should render without error
 	t.regex(output!, /●/);
+	unmount();
 });
 
 test('BashProgress handles failed exit code', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="exit 1"
@@ -156,6 +163,7 @@ test('BashProgress handles failed exit code', t => {
 	t.truthy(output);
 	// Should render with status indicator
 	t.regex(output!, /●/);
+	unmount();
 });
 
 // ============================================================================
@@ -163,7 +171,7 @@ test('BashProgress handles failed exit code', t => {
 // ============================================================================
 
 test('BashProgress handles error state', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="invalid-command"
@@ -179,10 +187,11 @@ test('BashProgress handles error state', t => {
 	t.truthy(output);
 	// Should still render status indicator
 	t.regex(output!, /●/);
+	unmount();
 });
 
 test('BashProgress handles cancelled state', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="sleep 100"
@@ -196,6 +205,7 @@ test('BashProgress handles cancelled state', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /●/);
+	unmount();
 });
 
 // ============================================================================
@@ -203,7 +213,7 @@ test('BashProgress handles cancelled state', t => {
 // ============================================================================
 
 test('BashProgress shows output preview when not complete and has preview', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="long-running-command"
@@ -219,10 +229,11 @@ test('BashProgress shows output preview when not complete and has preview', t =>
 	t.truthy(output);
 	t.regex(output!, /Output:/);
 	t.regex(output!, /partial output/);
+	unmount();
 });
 
 test('BashProgress does not show output preview when complete', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo done"
@@ -240,10 +251,11 @@ test('BashProgress does not show output preview when complete', t => {
 	// Status and Tokens should be shown instead
 	t.regex(output!, /Status:/);
 	t.regex(output!, /Tokens:/);
+	unmount();
 });
 
 test('BashProgress does not show status when not complete', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="running"
@@ -258,6 +270,7 @@ test('BashProgress does not show status when not complete', t => {
 	t.truthy(output);
 	// Status should only show when complete
 	t.notRegex(output!, /Status:/);
+	unmount();
 });
 
 // ============================================================================
@@ -265,7 +278,7 @@ test('BashProgress does not show status when not complete', t => {
 // ============================================================================
 
 test('BashProgress renders with isLive=true', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo live"
@@ -277,10 +290,11 @@ test('BashProgress renders with isLive=true', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /echo live/);
+	unmount();
 });
 
 test('BashProgress renders with isLive=false (default)', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo static"
@@ -292,6 +306,7 @@ test('BashProgress renders with isLive=false (default)', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /echo static/);
+	unmount();
 });
 
 // ============================================================================
@@ -299,7 +314,7 @@ test('BashProgress renders with isLive=false (default)', t => {
 // ============================================================================
 
 test('BashProgress calculates tokens from output', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo test"
@@ -315,10 +330,11 @@ test('BashProgress calculates tokens from output', t => {
 	t.regex(output!, /Tokens:/);
 	// Should have a number after ~
 	t.regex(output!, /~\d+/);
+	unmount();
 });
 
 test('BashProgress includes stderr in token calculation', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo test"
@@ -333,10 +349,11 @@ test('BashProgress includes stderr in token calculation', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /Tokens:/);
+	unmount();
 });
 
 test('BashProgress handles empty output for token calculation', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="true"
@@ -352,6 +369,7 @@ test('BashProgress handles empty output for token calculation', t => {
 	t.truthy(output);
 	t.regex(output!, /Tokens:/);
 	t.regex(output!, /~0/);
+	unmount();
 });
 
 // ============================================================================
@@ -360,7 +378,7 @@ test('BashProgress handles empty output for token calculation', t => {
 
 test('BashProgress handles long command', t => {
 	const longCommand = 'echo ' + 'a'.repeat(200);
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command={longCommand}
@@ -372,11 +390,12 @@ test('BashProgress handles long command', t => {
 	t.truthy(output);
 	// Should contain part of the command
 	t.regex(output!, /echo/);
+	unmount();
 });
 
 test('BashProgress handles special characters in command', t => {
 	const command = 'echo "hello $USER" && ls -la | grep test';
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command={command}
@@ -387,10 +406,11 @@ test('BashProgress handles special characters in command', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /echo/);
+	unmount();
 });
 
 test('BashProgress handles multiline output preview', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="cat file"
@@ -405,6 +425,7 @@ test('BashProgress handles multiline output preview', t => {
 	const output = lastFrame();
 	t.truthy(output);
 	t.regex(output!, /line1/);
+	unmount();
 });
 
 // ============================================================================
@@ -412,7 +433,7 @@ test('BashProgress handles multiline output preview', t => {
 // ============================================================================
 
 test('BashProgress uses ToolMessage component', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="echo test"
@@ -424,10 +445,11 @@ test('BashProgress uses ToolMessage component', t => {
 	t.truthy(output);
 	// ToolMessage renders content, so we just verify the component renders
 	t.true(output!.length > 0);
+	unmount();
 });
 
 test('BashProgress renders all required elements when complete', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="my-command"
@@ -446,10 +468,11 @@ test('BashProgress renders all required elements when complete', t => {
 	t.regex(output!, /Status:/);
 	t.regex(output!, /●/);
 	t.regex(output!, /Tokens:/);
+	unmount();
 });
 
 test('BashProgress renders minimal elements when not complete', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		<BashProgress
 			executionId="test-id"
 			command="running-command"
@@ -468,4 +491,5 @@ test('BashProgress renders minimal elements when not complete', t => {
 	// Should not have Status or Tokens when not complete
 	t.notRegex(output!, /Status:/);
 	t.notRegex(output!, /Tokens:/);
+	unmount();
 });

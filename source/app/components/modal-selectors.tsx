@@ -1,18 +1,30 @@
 import React from 'react';
 import {ModelDatabaseDisplay} from '@/commands/model-database';
 import CheckpointSelector from '@/components/checkpoint-selector';
-import ModelSelector from '@/components/model-selector';
+import ModelSelector, {type EffortLevel} from '@/components/model-selector';
 import SessionSelector from '@/components/session-selector';
 import type {ActiveMode} from '@/hooks/useAppState';
+import type {ToolManager} from '@/tools/tool-manager';
 import type {CheckpointListItem, TuneConfig} from '@/types';
+import type {SettingsTabId} from '@/types/settings';
 import {McpWizard} from '@/wizards/mcp-wizard';
 import {ProviderWizard} from '@/wizards/provider-wizard';
 import {SettingsSelector} from './settings-tabs';
 import {TuneSelector} from './tune-selector';
 
 export interface ModalSelectorsProps {
+	onLaunchTune?: () => void;
+	onLaunchIde?: () => void;
+	/** Launch the provider wizard from the model selector's add-provider row. */
+	onAddProvider?: () => void;
+	onMcpChanged?: () => void | Promise<void>;
+	currentSessionId?: string;
+	messageCount?: number;
+	onActivateDeveloperMode?: () => void;
 	activeMode: ActiveMode;
 	isSettingsMode: boolean;
+	settingsInitialTab?: SettingsTabId;
+	toolManager?: ToolManager | null;
 	showAllSessions: boolean;
 
 	// Current values
@@ -24,7 +36,11 @@ export interface ModalSelectorsProps {
 	} | null;
 
 	// Handlers - Model Selection
-	onModelSelect: (provider: string, model: string) => Promise<unknown>;
+	onModelSelect: (
+		provider: string,
+		model: string,
+		effort?: EffortLevel,
+	) => Promise<unknown>;
 	onModelSelectionCancel: () => void;
 
 	// Handlers - Model Database
@@ -62,6 +78,8 @@ export interface ModalSelectorsProps {
 export function ModalSelectors({
 	activeMode,
 	isSettingsMode,
+	settingsInitialTab,
+	toolManager,
 	showAllSessions,
 	currentModel,
 	currentProvider,
@@ -78,6 +96,13 @@ export function ModalSelectors({
 	onSessionSelect,
 	onSessionCancel,
 	onSettingsCancel,
+	onLaunchTune,
+	onLaunchIde,
+	onAddProvider,
+	onMcpChanged,
+	currentSessionId,
+	messageCount,
+	onActivateDeveloperMode,
 	tuneConfig,
 	onTuneSelect,
 	onTuneCancel,
@@ -87,8 +112,11 @@ export function ModalSelectors({
 			<ModelSelector
 				currentProvider={currentProvider}
 				currentModel={currentModel}
-				onModelSelect={(provider, model) => void onModelSelect(provider, model)}
+				onModelSelect={(provider, model, effort) =>
+					void onModelSelect(provider, model, effort)
+				}
 				onCancel={onModelSelectionCancel}
+				onAddProvider={onAddProvider}
 			/>
 		);
 	}
@@ -104,7 +132,19 @@ export function ModalSelectors({
 	}
 
 	if (isSettingsMode) {
-		return <SettingsSelector onCancel={onSettingsCancel} />;
+		return (
+			<SettingsSelector
+				onCancel={onSettingsCancel}
+				initialTab={settingsInitialTab}
+				toolManager={toolManager}
+				onLaunchTune={onLaunchTune}
+				onLaunchIde={onLaunchIde}
+				onMcpChanged={onMcpChanged}
+				currentSessionId={currentSessionId}
+				messageCount={messageCount}
+				onActivateDeveloperMode={onActivateDeveloperMode}
+			/>
+		);
 	}
 
 	if (activeMode === 'modelDatabase') {

@@ -1,5 +1,7 @@
+import {bashExecutor} from '@/services/bash-executor';
 import {agentTool} from '@/tools/agent-tool';
 import {askQuestionTool} from '@/tools/ask-question';
+import {examineImageTool} from '@/tools/examine-image';
 import {executeBashTool} from '@/tools/execute-bash';
 import {fetchUrlTool} from '@/tools/fetch-url';
 import {getFileOpTools} from '@/tools/file-ops';
@@ -8,15 +10,29 @@ import {stringReplaceTool} from '@/tools/file-ops/string-replace';
 import {writeFileTool} from '@/tools/file-ops/write-file';
 import {findFilesTool} from '@/tools/find-files';
 import {getGitTools} from '@/tools/git';
+import {innerdaemonCreateTool} from '@/tools/innerdaemon-create';
+import {startInnerDaemonRuleWatcher} from '@/tools/innerdaemon-rule-watcher';
 import {listDirectoryTool} from '@/tools/list-directory';
 import {getDiagnosticsTool} from '@/tools/lsp-get-diagnostics';
+import {monitorTool} from '@/tools/monitor';
 import {readFileTool} from '@/tools/read-file';
+import {reportReproductionTool} from '@/tools/report-reproduction';
 import {searchFileContentsTool} from '@/tools/search-file-contents';
 import {skillTool} from '@/tools/skill';
 import {checkSkillTool} from '@/tools/skill-check';
 import {writeTasksTool} from '@/tools/tasks';
 import {webSearchTool} from '@/tools/web-search';
 import type {NanocoderToolExport} from '@/types/index';
+import {getShutdownManager} from '@/utils/shutdown';
+
+startInnerDaemonRuleWatcher();
+getShutdownManager().register({
+	name: 'background-bash',
+	priority: 10,
+	handler: async () => {
+		bashExecutor.cancelAll();
+	},
+});
 
 // Static tools (always available)
 const staticTools: NanocoderToolExport[] = [
@@ -24,7 +40,10 @@ const staticTools: NanocoderToolExport[] = [
 	writeFileTool,
 	stringReplaceTool,
 	diffEditTool,
+	examineImageTool,
 	executeBashTool,
+	monitorTool,
+	reportReproductionTool,
 	webSearchTool,
 	fetchUrlTool,
 	findFilesTool,
@@ -41,6 +60,7 @@ const staticTools: NanocoderToolExport[] = [
 	// Skill loader + authoring linter
 	skillTool,
 	checkSkillTool,
+	innerdaemonCreateTool,
 ];
 
 // Conditionally available tools (based on system capabilities)

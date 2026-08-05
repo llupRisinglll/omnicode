@@ -1,4 +1,5 @@
 import {readFileSync, writeFileSync} from 'fs';
+import type {EffortLevel} from '@/components/model-selector';
 import type {TitleShape} from '@/components/ui/styled-title';
 import {getClosestConfigFile} from '@/config/index';
 import type {TuneConfig} from '@/types/config';
@@ -248,6 +249,23 @@ export function updatePrivacyPreference(value: boolean): void {
 }
 
 /**
+ * Get the semantic memory preference from preferences
+ */
+export function getSemanticMemoryEnabled(): boolean {
+	const preferences = loadPreferences();
+	return preferences.semanticMemoryEnabled ?? true;
+}
+
+/**
+ * Save the semantic memory preference
+ */
+export function updateSemanticMemoryEnabled(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.semanticMemoryEnabled = value;
+	savePreferences(preferences);
+}
+
+/**
  * Get the show-working-indicator preference from preferences
  */
 export function getShowWorkingIndicator(): boolean {
@@ -270,7 +288,7 @@ export function updateShowWorkingIndicator(value: boolean): void {
  */
 export function getAlternateScreen(): boolean {
 	const preferences = loadPreferences();
-	return preferences.alternateScreen ?? false;
+	return preferences.alternateScreen ?? true;
 }
 
 /**
@@ -280,4 +298,207 @@ export function updateAlternateScreen(value: boolean): void {
 	const preferences = loadPreferences();
 	preferences.alternateScreen = value;
 	savePreferences(preferences);
+}
+
+export function getDeveloperMode(): boolean {
+	const preferences = loadPreferences();
+	return preferences.developerMode ?? false;
+}
+
+export function updateDeveloperMode(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.developerMode = value;
+	savePreferences(preferences);
+}
+
+// --- Auto-steering (InnerDaemon) preferences -------------------------------
+//
+// These two toggles can be mutated from anywhere (the /innerdaemon slash
+// command, the Settings dialog). useChatHandler subscribes so the steering
+// engine memo can rebuild/teardown reactively; the subscription is a plain
+// listener set (no React dependency here).
+
+type SteeringPrefsListener = () => void;
+const steeringPrefsListeners = new Set<SteeringPrefsListener>();
+let steeringRulesRevision = 0;
+
+/**
+ * Subscribe to InnerDaemon preference changes. Returns an unsubscribe fn.
+ * Backs a `useSyncExternalStore` in useChatHandler so toggling at runtime
+ * rebuilds or tears down the steering engine both directions.
+ */
+export function subscribeSteeringPrefs(
+	listener: SteeringPrefsListener,
+): () => void {
+	steeringPrefsListeners.add(listener);
+	return () => {
+		steeringPrefsListeners.delete(listener);
+	};
+}
+
+function emitSteeringPrefsChanged(): void {
+	for (const listener of steeringPrefsListeners) listener();
+}
+
+/** Revision used to reload steering rules created or edited during a session. */
+export function getSteeringRulesRevision(): number {
+	return steeringRulesRevision;
+}
+
+/** Notify active chats that the on-disk steering rule set changed. */
+export function notifySteeringRulesChanged(): void {
+	steeringRulesRevision += 1;
+	emitSteeringPrefsChanged();
+}
+
+/** Whether auto-steering (InnerDaemon) is enabled. Default true. */
+export function getSteeringEnabled(): boolean {
+	const preferences = loadPreferences();
+	return preferences.steeringEnabled ?? true;
+}
+
+/** Enable/disable auto-steering (InnerDaemon) and notify subscribers. */
+export function updateSteeringEnabled(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.steeringEnabled = value;
+	savePreferences(preferences);
+	emitSteeringPrefsChanged();
+}
+
+/** Whether the verbose "proof-of-life" trace is on. Default false. */
+export function getSteeringVerbose(): boolean {
+	const preferences = loadPreferences();
+	return preferences.steeringVerbose ?? false;
+}
+
+/** Toggle the verbose "proof-of-life" trace and notify subscribers. */
+export function updateSteeringVerbose(value: boolean): void {
+	const preferences = loadPreferences();
+	preferences.steeringVerbose = value;
+	savePreferences(preferences);
+	emitSteeringPrefsChanged();
+}
+
+/**
+ * The model the InnerDaemon steering subagent runs on. null (default) = inherit
+ * the main agent's current session model — today's `model: inherit` behavior.
+ * A non-null value overrides it with a specific model id (on the current
+ * provider). Returns null when unset so callers get an explicit "inherit".
+ */
+export function getInnerDaemonModel(): string | null {
+	const preferences = loadPreferences();
+	return preferences.innerDaemonModel ?? null;
+}
+
+export function getInnerDaemonEffort():
+	| 'minimal'
+	| 'low'
+	| 'medium'
+	| 'high'
+	| undefined {
+	const preferences = loadPreferences();
+	return preferences.innerDaemonEffort;
+}
+
+export function updateInnerDaemonEffort(
+	effort: 'minimal' | 'low' | 'medium' | 'high' | undefined,
+): void {
+	const preferences = loadPreferences();
+	preferences.innerDaemonEffort = effort;
+	savePreferences(preferences);
+	emitSteeringPrefsChanged();
+}
+
+/**
+ * Get the vision fallback model.
+ */
+export function getVisionModel(): string | null {
+	const preferences = loadPreferences();
+	return preferences.visionModel ?? null;
+}
+
+/**
+ * Get the vision model provider.
+ */
+export function getVisionModelProvider(): string | null {
+	const preferences = loadPreferences();
+	return preferences.visionModelProvider ?? null;
+}
+
+/**
+ * Set the vision fallback model.
+ */
+export function updateVisionModel(model: string | null): void {
+	const preferences = loadPreferences();
+	preferences.visionModel = model;
+	savePreferences(preferences);
+}
+
+/**
+ * Set the vision model provider.
+ */
+export function updateVisionModelProvider(provider: string | null): void {
+	const preferences = loadPreferences();
+	preferences.visionModelProvider = provider;
+	savePreferences(preferences);
+}
+
+/**
+ * Set (or clear) the InnerDaemon model and notify subscribers so the steering
+ * executor re-binds with the new model resolver. Pass null to restore the
+ * default (inherit the main agent model).
+ */
+export function updateInnerDaemonModel(value: string | null): void {
+	const preferences = loadPreferences();
+	preferences.innerDaemonModel = value;
+	savePreferences(preferences);
+	emitSteeringPrefsChanged();
+}
+
+export interface SubagentModelPreference {
+	provider: string;
+	model: string;
+	effort?: EffortLevel;
+}
+
+export function getSubagentModelPreference(
+	agentName: string,
+): SubagentModelPreference | null {
+	const preference = loadPreferences().subagentModels?.[agentName];
+	if (
+		preference &&
+		typeof preference.provider === 'string' &&
+		preference.provider.trim().length > 0 &&
+		typeof preference.model === 'string' &&
+		preference.model.trim().length > 0
+	) {
+		return {
+			provider: preference.provider.trim(),
+			model: preference.model.trim(),
+			effort: preference.effort,
+		} satisfies SubagentModelPreference;
+	}
+	return null;
+}
+
+export function updateSubagentModelPreference(
+	agentName: string,
+	value: SubagentModelPreference | null,
+): void {
+	const preferences = loadPreferences();
+	const next = {...(preferences.subagentModels ?? {})};
+	if (value) {
+		next[agentName] = {
+			provider: value.provider,
+			model: value.model,
+			effort: value.effort,
+		};
+	} else {
+		delete next[agentName];
+	}
+	preferences.subagentModels = Object.keys(next).length > 0 ? next : undefined;
+	savePreferences(preferences);
+	if (agentName === 'innerdaemon') {
+		emitSteeringPrefsChanged();
+	}
 }

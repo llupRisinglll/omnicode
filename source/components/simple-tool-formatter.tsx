@@ -7,16 +7,27 @@ import {ThemeContext, useTheme} from '@/hooks/useTheme';
 export function ToolCallHeader({
 	toolName,
 	detail,
+	running = false,
 }: {
 	toolName: string;
 	detail?: string;
+	/** Grey blinking glyph while the tool is still processing; green when done. */
+	running?: boolean;
 }) {
 	const {colors} = useTheme();
 	const cleanedDetail = detail?.replace(/\s+/g, ' ').trim();
+	const [visible, setVisible] = React.useState(true);
+	React.useEffect(() => {
+		if (!running) return;
+		const timer = setInterval(() => setVisible(v => !v), 500);
+		return () => clearInterval(timer);
+	}, [running]);
 
 	return (
 		<Text wrap="truncate-end">
-			<Text color={colors.tool}>⚒ </Text>
+			<Text color={running ? colors.secondary : colors.success}>
+				{running ? (visible ? '\u2726' : ' ') : '\u2726'}{' '}
+			</Text>
 			<Text color={colors.primary}>{toolName}</Text>
 			{cleanedDetail && (
 				<>
@@ -40,7 +51,7 @@ export interface ToolFormatterRow {
 }
 
 /**
- * Build a formatter for the common tool-output shape: a `⚒ <tool_name>(...)` header
+ * Build a formatter for the common tool-output shape: a `✦ <tool_name>(...)` header
  * followed by a column of `Label: value` rows, wrapped in a borderless
  * `ToolMessage`. Tools whose output needs richer rendering (syntax-highlighted
  * diffs, colour-coded stats, etc.) should keep their bespoke formatter.

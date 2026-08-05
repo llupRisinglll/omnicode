@@ -93,6 +93,7 @@ export async function handleContextMaxCommand(
 		'provider-config': 'provider config',
 		env: 'NANOCODER_CONTEXT_LIMIT env',
 		'model-lookup': 'model lookup',
+		cache: 'cached',
 		unknown: 'unknown',
 	} as const;
 

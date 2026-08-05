@@ -106,7 +106,10 @@ export function startAgentExecution(
 	return {agentId, promise};
 }
 
-async function executeAgent(args: AgentToolArgs): Promise<string> {
+async function executeAgent(
+	args: AgentToolArgs,
+	signal?: AbortSignal,
+): Promise<string> {
 	if (!executorInstance) {
 		throw new Error('Subagent executor not initialized');
 	}
@@ -114,23 +117,32 @@ async function executeAgent(args: AgentToolArgs): Promise<string> {
 	const {subagent_type, description, prompt, context} = args;
 
 	const loader = getSubagentLoader();
-	const agentExists = await loader.hasSubagent(subagent_type);
-	if (!agentExists) {
+	const config = await loader.getSubagent(subagent_type);
+	// Internal subagents (e.g. `innerdaemon`) are engine-only — surface them as
+	// "not found" so the main model can neither see nor invoke them here. The
+	// steering engine still reaches them via SubagentExecutor.execute directly.
+	if (!config || config.internal) {
 		throw new Error(
 			`Subagent '${subagent_type}' not found. Available subagents: ${(
-				await loader.listSubagents()
+				await loader.listInvokableSubagents()
 			)
 				.map(a => a.name)
 				.join(', ')}`,
 		);
 	}
 
-	const result = await executorInstance.execute({
-		subagent_type,
-		description,
-		prompt,
-		context,
-	});
+	const agentId = randomUUID();
+	const result = await executorInstance.execute(
+		{
+			subagent_type,
+			description,
+			prompt,
+			context,
+		},
+		signal,
+		0,
+		agentId,
+	);
 
 	if (!result.success) {
 		throw new Error(result.error || 'Subagent execution failed');
@@ -168,8 +180,8 @@ const agentCoreTool = tool({
 		},
 		required: ['subagent_type', 'description'],
 	}),
-	execute: async args => {
-		return await executeAgent(args);
+	execute: async (args, {abortSignal}) => {
+		return await executeAgent(args, abortSignal);
 	},
 });
 
