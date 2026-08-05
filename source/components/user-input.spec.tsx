@@ -6,6 +6,10 @@ import {commandRegistry} from '../commands';
 import {themes} from '../config/themes';
 import {ThemeContext} from '../hooks/useTheme';
 import {UIStateProvider, useUIStateContext} from '../hooks/useUIState';
+import {
+	compactToggleEvents,
+	transcriptToggleEvents,
+} from '../utils/terminal-mouse';
 import UserInput from './user-input';
 
 console.log(`\nuser-input.spec.tsx – ${React.version}`);
@@ -744,6 +748,47 @@ test('UserInput does not show ctrl-o hint when onToggleCompactDisplay is not pro
 	t.truthy(output);
 	t.notRegex(output!, /ctrl-o/);
 	unmount();
+});
+
+test('UserInput ctrl+o / ctrl+r / ctrl+t emit the compact + transcript toggle events', async t => {
+	let compactToggles = 0;
+	let transcriptToggles = 0;
+	const onCompact = () => {
+		compactToggles++;
+	};
+	const onTranscript = () => {
+		transcriptToggles++;
+	};
+	compactToggleEvents.on('toggle', onCompact);
+	transcriptToggleEvents.on('toggle', onTranscript);
+
+	const {stdin, unmount} = render(
+		<TestWrapper>
+			<UserInput
+				forceFocus={true}
+				onToggleCompactDisplay={() => {}}
+				onToggleReasoningExpanded={() => {}}
+			/>
+		</TestWrapper>,
+	);
+	try {
+		// ctrl+o → compactToggleEvents (already-queued compact blocks expand).
+		stdin.write('\x0f');
+		await wait(50);
+		t.is(compactToggles, 1, 'ctrl+o emits compactToggleEvents');
+
+		// ctrl+r and ctrl+t → transcriptToggleEvents (thought / detailed rows).
+		stdin.write('\x12');
+		await wait(50);
+		t.is(transcriptToggles, 1, 'ctrl+r emits transcriptToggleEvents');
+		stdin.write('\x14');
+		await wait(50);
+		t.is(transcriptToggles, 2, 'ctrl+t emits transcriptToggleEvents');
+	} finally {
+		compactToggleEvents.off('toggle', onCompact);
+		transcriptToggleEvents.off('toggle', onTranscript);
+		unmount();
+	}
 });
 
 

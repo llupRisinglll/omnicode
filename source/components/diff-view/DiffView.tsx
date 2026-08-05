@@ -213,10 +213,19 @@ export default function DiffView({
 					<Text backgroundColor={bg} color={lineText}>
 						{prefix}
 					</Text>
-					<Text backgroundColor={bg} color={lineText} wrap="truncate-end">
+					{/* Highlighted lines render with the palette-derived theme
+					    colors (the chalk ANSI carries the foreground); the diff
+					    color is NOT applied on top — the red/green background
+					    conveys add/remove while the code keeps its own colors.
+					    Plain (unhighlighted) lines keep the diff text color. */}
+					<Text
+						backgroundColor={bg}
+						color={highlightEnabled ? undefined : lineText}
+						wrap="truncate-end"
+					>
 						{row.map((part, partIndex) => {
 							const display = highlightEnabled
-								? highlightCode(part.text, language)
+								? highlightCode(part.text, language, colors)
 								: part.text;
 							return part.type === 'unchanged' ? (
 								display

@@ -207,11 +207,14 @@ export const resetLastTurnHadReasoning = () => {
 // merging any tool tally that directly follows onto the same line.
 let pendingThoughtMs = 0;
 let pendingThoughtCount = 0;
+/** Merged reasoning texts of the pending run, so the summary can expand. */
+let pendingThoughtReasoning: string[] = [];
 
 /** Reset the pending-thought accumulator (for testing). */
 export const resetPendingThoughtAccumulator = () => {
 	pendingThoughtMs = 0;
 	pendingThoughtCount = 0;
+	pendingThoughtReasoning = [];
 };
 
 /**
@@ -240,12 +243,14 @@ export const flushPendingActivityToStatic = (
 			<ThoughtRunSummary
 				key={generateKey('thought-run-summary')}
 				totalMs={pendingThoughtMs}
+				reasoning={pendingThoughtReasoning.join('\n\n')}
 				toolCounts={hasToolCounts ? counts : undefined}
 				toolCountsExpanded={!(compactToolDisplayRef?.current ?? true)}
 			/>,
 		);
 		pendingThoughtMs = 0;
 		pendingThoughtCount = 0;
+		pendingThoughtReasoning = [];
 		if (compactToolCountsRef) compactToolCountsRef.current = {};
 		onSetCompactToolCounts?.(null);
 		return;
@@ -700,6 +705,7 @@ export const processAssistantResponse = async (
 		const reasoningStart = getReasoningStartTime() ?? Date.now();
 		pendingThoughtMs += Math.max(0, Date.now() - reasoningStart);
 		pendingThoughtCount += 1;
+		pendingThoughtReasoning.push(fullReasoning ?? '');
 		lastTurnHadReasoning = true;
 	}
 

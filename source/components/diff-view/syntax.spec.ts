@@ -47,6 +47,36 @@ test('highlightCode wraps known-language text in ANSI escape codes', t => {
 	t.regex(result, /\x1b\[/);
 });
 
+test('highlightCode with palette colors uses the theme, not the default clash', t => {
+	const script = `
+		process.env.FORCE_COLOR = '3';
+		const {highlightCode} = await import('./syntax.js');
+		const colors = {
+			primary: '#bb9af7',
+			secondary: '#565f89',
+			text: '#c0caf5',
+			info: '#7dcfff',
+			success: '#9ece6a',
+			error: '#f7768e',
+			warning: '#e0af68',
+			tool: '#bb9af7',
+		};
+		process.stdout.write(highlightCode('const x = 1;', 'typescript', colors));
+	`;
+	const result = execFileSync(
+		process.execPath,
+		['--import=tsx', '--no-warnings', '--input-type=module', '-e', script],
+		{cwd: import.meta.dirname, env: {...process.env}, encoding: 'utf-8'},
+	);
+	// Keyword → theme primary (#bb9af7), number → theme success (#9ece6a),
+	// unmatched text → theme text (#c0caf5) — and never cli-highlight's
+	// hardcoded default blue (34m) that clashes with diff backgrounds.
+	t.regex(result, /\x1b\[38;2;187;154;247mconst/);
+	t.regex(result, /\x1b\[38;2;158;206;106m1/);
+	t.regex(result, /\x1b\[38;2;192;202;245m/);
+	t.false(result.includes('\x1b[34m'), 'default cli-highlight blue must not leak');
+});
+
 test('highlightCode never throws and falls back to plain text on bad input', t => {
 	// A bogus language id makes cli-highlight throw internally; the wrapper
 	// must swallow that and return the original text untouched.

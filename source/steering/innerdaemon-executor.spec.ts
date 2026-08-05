@@ -5,6 +5,10 @@ import type {ToolManager} from '@/tools/tool-manager';
 import type {LLMChatResponse, LLMClient, ToolCall} from '@/types/core';
 import {setGlobalToolApprovalHandler} from '@/utils/tool-approval-queue';
 import {withValidation} from '@/utils/tool-validation';
+import {
+	resetSubagentProgress,
+	subagentProgress,
+} from '@/services/subagent-events';
 import {createInnerDaemonExecutor} from './index.js';
 
 console.log('\ninnerdaemon-executor.spec.ts');
@@ -106,6 +110,7 @@ test.before(async () => {
 
 test.beforeEach(() => {
 	approvalRequests = [];
+	resetSubagentProgress();
 	setGlobalToolApprovalHandler(async req => {
 		approvalRequests.push(req.toolCall);
 		return true;
@@ -115,9 +120,8 @@ test.beforeEach(() => {
 test.serial(
 	'yolo: InnerDaemon benign execute_bash probe runs with NO approval prompt',
 	async t => {
-		const commands: string[] = [];
 		const executor = createInnerDaemonExecutor(
-			createBashToolManager(cmd => commands.push(cmd)),
+			createBashToolManager(() => {}),
 			createProbeClient(BENIGN_PROBE),
 			() => 'yolo',
 		);
@@ -131,16 +135,18 @@ test.serial(
 		t.true(result.success);
 		// The whole bug: in yolo this prompted. It must not.
 		t.is(approvalRequests.length, 0);
-		t.deepEqual(commands, [BENIGN_PROBE]);
+		// The probe runs through the REAL bash executor (execute_bash no
+		// longer routes through the tool handler), so prove it was invoked
+		// via the tool history.
+		t.deepEqual(subagentProgress.toolHistory, ['execute_bash']);
 	},
 );
 
 test.serial(
 	'normal: InnerDaemon execute_bash probe still requires approval (posture unchanged)',
 	async t => {
-		const commands: string[] = [];
 		const executor = createInnerDaemonExecutor(
-			createBashToolManager(cmd => commands.push(cmd)),
+			createBashToolManager(() => {}),
 			createProbeClient(BENIGN_PROBE),
 			() => 'normal',
 		);
@@ -155,7 +161,7 @@ test.serial(
 		t.is(approvalRequests.length, 1);
 		t.is(approvalRequests[0].function.name, 'execute_bash');
 		// Approved by the test handler, so it still ran.
-		t.deepEqual(commands, [BENIGN_PROBE]);
+		t.deepEqual(subagentProgress.toolHistory, ['execute_bash']);
 	},
 );
 

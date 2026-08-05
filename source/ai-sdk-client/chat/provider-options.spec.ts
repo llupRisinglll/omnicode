@@ -49,6 +49,7 @@ test('chatgpt-codex always returns providerOptions.openai with defaults', t => {
 	t.deepEqual(result, {
 		openai: {
 			instructions: 'hello system',
+			promptCacheRetention: '24h',
 			store: false,
 			reasoningEffort: 'medium',
 			reasoningSummary: 'auto',
@@ -65,6 +66,7 @@ test('chatgpt-codex honours overridden reasoningEffort and reasoningSummary', t 
 	t.deepEqual(result, {
 		openai: {
 			instructions: 'hello',
+			promptCacheRetention: '24h',
 			store: false,
 			reasoningEffort: 'high',
 			reasoningSummary: 'detailed',

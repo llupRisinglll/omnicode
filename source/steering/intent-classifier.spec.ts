@@ -157,3 +157,50 @@ test('worktree-creation is checked before git-history: a hand-roll turn that mix
 	// A pure history probe (no worktree signal) still classifies git-history.
 	t.is(classifyIntent([bash('git log --oneline -20')]), 'git-history');
 });
+
+test('worktree-creation over-fire guard: READING the script or listing worktrees is not creation', t => {
+	// Regression: the first turn after `/worktree` was `ls -l worktree-create.sh`
+	// (a healthy "read the verified script" step). The bare `worktree-create`
+	// keyword matched WORKTREE_OP_KEYWORDS, classifying the turn as
+	// worktree-creation and firing the hilinga-local-dev-skill announce with the
+	// full skill body — duplicating the /worktree command guidance that was just
+	// injected. Reads must stay out of the creation class.
+	t.not(
+		classifyIntent([bash('ls -l worktree-create.sh')]),
+		'worktree-creation',
+	);
+	t.not(classifyIntent([bash('cat worktree-create.sh')]), 'worktree-creation');
+	t.not(classifyIntent([bash('head -40 worktree-create.sh')]), 'worktree-creation');
+	// `git worktree list` / `git worktree path` are read-only inspections of
+	// existing worktrees, not creation.
+	t.not(classifyIntent([bash('git worktree list')]), 'worktree-creation');
+	t.not(
+		classifyIntent([bash('git worktree list --porcelain')]),
+		'worktree-creation',
+	);
+	// Reading the batch-git config is investigation, not creation.
+	t.not(classifyIntent([tool('read_file', {path: '.gitopolis.toml'})]), 'worktree-creation');
+	t.not(classifyIntent([bash('cat .gitopolis.toml')]), 'worktree-creation');
+});
+
+test('worktree-creation still fires on script INVOCATION', t => {
+	// The actual verified-script run (the case the announce/supervision rules
+	// exist for) must keep classifying worktree-creation.
+	t.is(
+		classifyIntent([bash('./worktree-create.sh e2e-testing staging')]),
+		'worktree-creation',
+	);
+	t.is(
+		classifyIntent([bash('bash worktree-create.sh nanocoder-counter')]),
+		'worktree-creation',
+	);
+	t.is(
+		classifyIntent([bash('bun run worktree-create.ts e2e --no-ui')]),
+		'worktree-creation',
+	);
+	// Worktree removal is worktree activity too (supervision scope).
+	t.is(
+		classifyIntent([bash('./worktree-remove.sh e2e-testing')]),
+		'worktree-creation',
+	);
+});

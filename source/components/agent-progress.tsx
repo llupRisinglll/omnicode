@@ -99,7 +99,11 @@ export default function AgentProgress({
 
 	const messageContent = (
 		<Box flexDirection="column">
-			<ToolCallHeader toolName="agent" detail={subagentName} />
+			<ToolCallHeader
+				toolName="agent"
+				detail={subagentName}
+				running={!isComplete}
+			/>
 
 			<Box flexShrink={1}>
 				<Text wrap="truncate-end" color={colors.text}>

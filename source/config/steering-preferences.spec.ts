@@ -81,6 +81,7 @@ test.serial('subagent model preference defaults to inherit and can be cleared', 
 	t.deepEqual(getSubagentModelPreference('explore'), {
 		provider: 'OmniRoute',
 		model: 'combo/free-only',
+		effort: undefined,
 	});
 
 	updateSubagentModelPreference('explore', null);

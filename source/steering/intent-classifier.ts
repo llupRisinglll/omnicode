@@ -43,20 +43,23 @@ interface IntentRule {
 	 * Custom per-blob predicate, used when a plain substring list over-matches.
 	 * When present, takes the place of {@link keywords} for this rule.
 	 */
-	readonly predicate?: (blob: string) => boolean;
+	readonly predicate?: (blob: string, tc: ToolCall) => boolean;
 }
 
 /**
- * Standalone worktree operations that classify as `worktree-creation` on their
- * own — the tool itself IS the create/remove op (`git worktree add`, the
- * verified scripts, or a `.gitopolis` batch config read for the multi-repo
- * worktree).
+ * Standalone `git worktree` MUTATION verbs that classify as worktree-creation
+ * on their own. Deliberately NOT the bare `git worktree` prefix: a
+ * `git worktree list` (or any other read of existing worktrees) is inspection,
+ * and tagging it as creation kept worktree-supervision (and the local-dev
+ * announce) in scope on reproduce/fix turns that merely looked at a worktree.
  */
-const WORKTREE_OP_KEYWORDS = [
-	'git worktree',
-	'worktree-create',
-	'worktree-remove',
-	'.gitopolis',
+const WORKTREE_MUTATION_KEYWORDS = [
+	'git worktree add',
+	'git worktree remove',
+	'git worktree prune',
+	'git worktree lock',
+	'git worktree unlock',
+	'git worktree move',
 ];
 
 /**
@@ -70,6 +73,24 @@ const WORKTREE_CREATION_VERBS = [
 ];
 
 /**
+ * Verified-script invocation shapes: `./worktree-create.sh <name>`,
+ * `bash worktree-create.sh <name>`, `bun run worktree-create.ts <name>` —
+ * the tool call actually RUNS the script (with at least one argument / the
+ * name it would create). A bare filename mention (`ls -l worktree-create.sh`,
+ * `cat worktree-create.sh`) is a read of the script and must NOT match.
+ */
+const WORKTREE_SCRIPT_INVOKE =
+	/(?:^|[;"\s&|>])\.{1,2}\/worktree-(?:create|remove)(?:\.sh|\.ts)?(?=\s)|(?:^|[;"\s&|])(?:bash|bun|sh|node|npx)(?:\s+run)?\s+(?:\.\/)?worktree-(?:create|remove)(?:\.sh|\.ts)?(?=\s|$)/;
+
+/**
+ * Bash commands that merely READ a file (the script, `.gitopolis.toml`, …).
+ * When the command STARTS with one of these, a `worktree-create` filename in
+ * the args is a read, not an invocation.
+ */
+const BASH_READ_PREFIX =
+	/(?:^|[;"\s&|>:])(?:ls|cat|head|tail|grep|rg|sed|file|stat|echo|find|which|type|awk)\s+(?:-\w+\s+)*/;
+
+/**
  * Classify `worktree-creation` precisely (finding #5). A standalone worktree
  * op always classifies. A bare `.claude/worktrees/<name>` PATH reference
  * classifies ONLY when it co-occurs with a creation/mutation verb (the
@@ -79,8 +100,22 @@ const WORKTREE_CREATION_VERBS = [
  * reference as worktree-creation, so reproduce/TDD/fix turns kept the rule in
  * scope.
  */
-function matchesWorktreeCreation(blob: string): boolean {
-	if (WORKTREE_OP_KEYWORDS.some(kw => blob.includes(kw))) return true;
+function matchesWorktreeCreation(blob: string, tc: ToolCall): boolean {
+	const toolName = tc.function?.name ?? '';
+	// Pure read tools (read_file / grep / list_directory / find / glob …) never
+	// create a worktree — inspecting an existing one is investigation.
+	if (READ_ONLY_TOOLS.has(toolName)) return false;
+	// Bash reads of the scripts/config (`ls -l worktree-create.sh`,
+	// `cat .gitopolis.toml`) are inspection too — the exact false trigger that
+	// fired hilinga-local-dev-skill on the first turn after `/worktree`.
+	if (toolName === 'execute_bash' && BASH_READ_PREFIX.test(blob)) return false;
+	// Explicit git worktree mutations are unambiguous creation/removal.
+	if (WORKTREE_MUTATION_KEYWORDS.some(kw => blob.includes(kw))) return true;
+	// Running the verified script (`./worktree-create.sh <name>`) is creation.
+	if (WORKTREE_SCRIPT_INVOKE.test(blob)) return true;
+	// A `.gitopolis` batch-config reference via a non-read command is
+	// multi-repo worktree tooling.
+	if (blob.includes('.gitopolis')) return true;
 	if (blob.includes('.claude/worktrees/')) {
 		return WORKTREE_CREATION_VERBS.some(v => blob.includes(v));
 	}
@@ -318,14 +353,11 @@ export function classifyIntent(toolCalls: ToolCall[]): IntentClass {
 		return 'reproduce';
 	}
 
-	// Build per-call blobs once.
-	const blobs = toolCalls.map(toolCallBlob);
-
 	for (const rule of RULES) {
-		const matched = blobs.some(blob =>
+		const matched = toolCalls.some(tc =>
 			rule.predicate
-				? rule.predicate(blob)
-				: (rule.keywords ?? []).some(kw => blob.includes(kw)),
+				? rule.predicate(toolCallBlob(tc), tc)
+				: (rule.keywords ?? []).some(kw => toolCallBlob(tc).includes(kw)),
 		);
 		if (matched) return rule.intent;
 	}

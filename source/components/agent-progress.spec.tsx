@@ -4,7 +4,7 @@ import {renderWithTheme} from '../test-utils/render-with-theme.js';
 import AgentProgress from './agent-progress.js';
 
 test('AgentProgress renders a string description', t => {
-	const {lastFrame} = renderWithTheme(
+	const {lastFrame, unmount} = renderWithTheme(
 		React.createElement(AgentProgress, {
 			subagentName: 'explorer',
 			description: 'investigate the auth flow',
@@ -12,6 +12,7 @@ test('AgentProgress renders a string description', t => {
 	);
 	t.regex(lastFrame()!, /investigate the auth flow/);
 	t.regex(lastFrame()!, /explorer/);
+	unmount();
 });
 
 // Regression: a weak model can emit the agent tool's `description` arg as a
@@ -20,24 +21,26 @@ test('AgentProgress renders a string description', t => {
 // object with keys {description})" and took down the whole TUI.
 test('AgentProgress does not crash when description is a non-string object', t => {
 	t.notThrows(() => {
-		const {lastFrame} = renderWithTheme(
+		const {lastFrame, unmount} = renderWithTheme(
 			React.createElement(AgentProgress, {
 				subagentName: 'explorer',
 				description: {description: 'nested'} as unknown as string,
 			}),
 		);
 		lastFrame();
+		unmount();
 	});
 });
 
 test('AgentProgress does not crash when description is undefined', t => {
 	t.notThrows(() => {
-		const {lastFrame} = renderWithTheme(
+		const {lastFrame, unmount} = renderWithTheme(
 			React.createElement(AgentProgress, {
 				subagentName: 'explorer',
 				description: undefined as unknown as string,
 			}),
 		);
 		lastFrame();
+		unmount();
 	});
 });

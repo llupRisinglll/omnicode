@@ -1,20 +1,40 @@
-import fs from 'fs';
-import path from 'path';
-import {fileURLToPath} from 'url';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import test from 'ava';
 import React from 'react';
-import {renderWithTheme} from '../test-utils/render-with-theme.js';
-import WelcomeMessage from './welcome-message';
+
+// CRITICAL: redirect preference reads to a temp dir BEFORE welcome-message
+// (and its @/config/preferences import chain) loads, so tips are always shown
+// regardless of what earlier spec files wrote to the shared config.
+process.env.NANOCODER_CONFIG_DIR = mkdtempSync(
+	join(tmpdir(), 'nanocoder-welcome-spec-'),
+);
+const {resetPreferencesCache} = await import('@/config/preferences');
+resetPreferencesCache();
+
+const {renderWithTheme} = await import('../test-utils/render-with-theme');
+const {default: WelcomeMessage} = await import('./welcome-message');
+const packageJson = JSON.parse(
+	await (await import('node:fs/promises')).readFile(
+		join(process.cwd(), 'package.json'),
+		'utf8',
+	),
+) as {version: string};
 
 console.log('\nwelcome-message.spec.tsx');
 
-// Read version from package.json dynamically to avoid hardcoding
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const packageJson = JSON.parse(
-	fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8'),
-) as {version: string};
 const VERSION = packageJson.version;
+
+// Each test renders a FRESH welcome (the component writes `lastWelcomeShown`
+// on mount, which would hide tips for the next test in this file). A new
+// config dir per test keeps every render on "first run".
+test.beforeEach(() => {
+	process.env.NANOCODER_CONFIG_DIR = mkdtempSync(
+		join(tmpdir(), 'nanocoder-welcome-spec-'),
+	);
+	resetPreferencesCache();
+});
 
 // ============================================================================
 // Narrow Terminal Tests (width < 80)
@@ -56,7 +76,8 @@ test('WelcomeMessage shows quick tips in narrow layout', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Quick tips/);
+	// The fork banner's narrow tips box is titled "Tips".
+	t.regex(output!, /Tips/);
 	t.regex(output!, /Use natural language/);
 	t.regex(output!, /\/help for commands/);
 	t.regex(output!, /Ctrl\+C to quit/);
@@ -91,7 +112,8 @@ test('WelcomeMessage renders full layout for normal terminal', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Nanocoder/); // Should show full logo
+	// Fork banner (ASCII art + attribution) instead of the upstream logo.
+	t.regex(output!, /A fork of nanocoder by llupRisinglll/);
 
 	process.stdout.columns = originalColumns;
 });
@@ -104,7 +126,9 @@ test('WelcomeMessage shows welcome message for normal terminal', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Welcome to Nanocoder/);
+	// Fork banner: ASCII art + attribution, not the upstream "Welcome to
+	// Nanocoder" line.
+	t.regex(output!, /A fork of nanocoder by llupRisinglll/);
 	t.regex(output!, new RegExp(VERSION.replace(/\./g, '\\.')));
 
 	process.stdout.columns = originalColumns;
@@ -118,7 +142,7 @@ test('WelcomeMessage shows concise tips for normal terminal', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Tips for getting started/);
+	t.regex(output!, /Tips/);
 	t.regex(output!, /1\. Use natural language to describe your task\./);
 	t.regex(output!, /2\. Ask for file analysis, editing, bash commands and more\./);
 	t.regex(output!, /3\. Be specific for best results\./);
@@ -152,7 +176,8 @@ test('WelcomeMessage renders full layout for wide terminal', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Nanocoder/); // Full logo
+	// Fork attribution stands in for the upstream "Nanocoder" logo.
+	t.regex(output!, /A fork of nanocoder by llupRisinglll/);
 
 	process.stdout.columns = originalColumns;
 });
@@ -225,8 +250,8 @@ test('WelcomeMessage handles boundary at width 80', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	// At width 80, should be normal, not narrow
-	t.regex(output!, /Nanocoder/); // Full logo for normal
+	// At width 80, should be normal, not narrow (fork attribution banner).
+	t.regex(output!, /A fork of nanocoder by llupRisinglll/);
 
 	process.stdout.columns = originalColumns;
 });
@@ -267,7 +292,7 @@ test('WelcomeMessage handles very wide terminal', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Nanocoder/);
+	t.regex(output!, /A fork of nanocoder by llupRisinglll/);
 
 	process.stdout.columns = originalColumns;
 });
