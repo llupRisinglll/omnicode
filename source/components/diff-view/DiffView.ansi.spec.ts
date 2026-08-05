@@ -60,11 +60,12 @@ test('DiffView layers syntax fg codes inside both the line bg and word-diff bg (
 	);
 	t.true(frame.includes('\x1b[48;2;51;136;68m'), 'missing added-word bg SGR');
 
-	// cli-highlight fg codes (e.g. the `const` keyword) are present, proving
-	// syntax highlighting actually ran rather than silently falling back to
-	// plain text.
+	// Palette-derived syntax fg codes (e.g. the `const` keyword in the
+	// theme's primary #bb9af7 -> 187;154;247) are present, proving syntax
+	// highlighting actually ran with the app palette rather than
+	// cli-highlight's hardcoded default blue.
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: raw ANSI proof
-	t.regex(frame, /\x1b\[34mconst/);
+	t.regex(frame, /\x1b\[38;2;187;154;247mconst/);
 
 	// After a word-bg segment closes, output returns to the *outer line bg*
 	// color (not a bare reset) — the mechanic the plan calls out: chalk's
