@@ -1,4 +1,8 @@
 import test from 'ava';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {resetPreferencesCache} from '@/config/preferences';
 import {getSubagentLoader} from '@/subagents/subagent-loader';
 import {executeBashTool} from '@/tools/execute-bash';
 import type {ToolManager} from '@/tools/tool-manager';
@@ -105,7 +109,20 @@ function createProbeClient(command: string): LLMClient {
 }
 
 test.before(async () => {
+	// Isolate from the user's real saved preferences: innerDaemonModel and
+	// subagentModels would otherwise make the executor replace the injected
+	// mock client with a real provider client (or throw "model not available")
+	// instead of exercising the approval/mode logic under test.
+	process.env.NANOCODER_CONFIG_DIR = mkdtempSync(
+		join(tmpdir(), 'nanocoder-innerdaemon-spec-'),
+	);
+	resetPreferencesCache();
 	await getSubagentLoader().initialize();
+});
+
+test.after(() => {
+	delete process.env.NANOCODER_CONFIG_DIR;
+	resetPreferencesCache();
 });
 
 test.beforeEach(() => {

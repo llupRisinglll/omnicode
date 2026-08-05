@@ -27,7 +27,7 @@ export interface NonInteractiveShellProps {
  * the scheduler view, and any other interactive-only surface.
  *
  * Provides NonInteractiveRenderContext to its subtree so shared message
- * components (AssistantMessage, UserMessage, StreamingMessage, etc.) can
+ * components (AssistantMessage, UserMessage, etc.) can
  * drop boxes/headers/token counters and render plain text.
  */
 export function NonInteractiveShell({
