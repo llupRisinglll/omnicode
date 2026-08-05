@@ -1,4 +1,8 @@
 import test from 'ava';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {resetPreferencesCache} from '@/config/preferences';
 import {SubagentExecutor} from './subagent-executor.js';
 import {getModelContextLimit} from '@/models';
 import {SubagentLoader, getSubagentLoader} from './subagent-loader.js';
@@ -72,11 +76,25 @@ function createMockClient(
 
 // Ensure loader is initialized before tests and set up auto-approve handler
 test.before(async () => {
+	// Isolate from the user's real saved preferences (subagentModels /
+	// innerDaemonModel). Without this, prepareClient replaces the injected
+	// mock client with a REAL provider client for agents that have a saved
+	// model preference, making the suite depend on live API availability.
+	process.env.NANOCODER_CONFIG_DIR = mkdtempSync(
+		join(tmpdir(), 'nanocoder-subagent-spec-'),
+	);
+	resetPreferencesCache();
+
 	const loader = getSubagentLoader();
 	await loader.initialize();
 
 	// Auto-approve all tool calls in tests (mirrors auto-accept mode)
 	setGlobalToolApprovalHandler(async () => true);
+});
+
+test.after(() => {
+	delete process.env.NANOCODER_CONFIG_DIR;
+	resetPreferencesCache();
 });
 
 test.serial('executes a simple task without tool calls', async t => {
