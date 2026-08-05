@@ -12,6 +12,7 @@ This lives outside README.md so routine branch churn doesn't touch the README.
 | Feature | Upstream status |
 |---|---|
 | Omnicode theme + chat layout overhaul (rounded input/message boxes, merged tool-activity lines, truncated output previews) | Fork-exclusive: `fork/omnicode-theme` |
+| Preview mock harness for `nanocoder preview tui` (all scenarios, compacted tool groups expand to individual calls, streaming thinking, `/mock:confirm` tool-confirmation preview) | Fork-exclusive: `fork/preview-mock-polish` |
 | Statusline position control (`/statusline position top\|bottom`) | Incubating on `rc/statusline` |
 | Animated working/thinking indicators (`⚙ Working... (12s)`, `⚙ Thought (5s)`) | Incubating on `rc/indicators` |
 | Compact file diff display with inline word highlighting | Incubating on `rc/compact-diff` |
