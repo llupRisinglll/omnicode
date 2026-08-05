@@ -203,7 +203,7 @@ test('executeToolsDirectly - executes tool successfully', async t => {
 	t.true(results[0].content.includes('Tool executed'));
 });
 
-test('displayExecutedTool - omnicode compact execute_bash renders command detail before grouping', async t => {
+test('displayExecutedTool - omnicode compact execute_bash queues the detailed row (not the tally)', async t => {
 	const conversationStateManager = createMockConversationStateManager();
 	const addToChatQueueCalls: unknown[] = [];
 	const countedTools: Array<[string, string | undefined]> = [];
@@ -238,8 +238,17 @@ test('displayExecutedTool - omnicode compact execute_bash renders command detail
 		},
 	);
 
-	t.deepEqual(countedTools, [['execute_bash', 'echo one']]);
-	t.is(addToChatQueueCalls.length, 0);
+	// Interactive compact bash now renders the detailed command + output row
+	// instead of only tallying into the "Ran Bash ×N" summary.
+	t.is(countedTools.length, 0);
+	t.is(addToChatQueueCalls.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(
+		addToChatQueueCalls[0] as React.ReactElement,
+	);
+	const output = lastFrame();
+	t.regex(output!, /Bash\(echo one\)/);
+	t.regex(output!, /one/);
+	unmount();
 });
 
 test('displayExecutedTool - omnicode non-interactive execute_bash renders command detail', async t => {
@@ -293,6 +302,7 @@ test.serial(
 	async t => {
 		const runningCounts: unknown[] = [];
 		const compactCounts: Array<[string, string | string[] | undefined]> = [];
+		const queued: unknown[] = [];
 		const command = "printf 'start\\n'; sleep 0.05; printf 'done\\n'";
 
 		const results = await executeToolsDirectly(
@@ -307,9 +317,12 @@ test.serial(
 			],
 			createMockToolManager() as any,
 			createMockConversationStateManager() as any,
-			() => {},
+			component => {
+				queued.push(component);
+			},
 			{
 				compactDisplay: true,
+				iconTheme: true,
 				setLiveComponent: () => {},
 				onRunningToolCounts: counts => {
 					if (counts) runningCounts.push(counts);
@@ -326,7 +339,10 @@ test.serial(
 		t.is(firstRunning.execute_bash.count, 1);
 		t.deepEqual(firstRunning.execute_bash.details, [command]);
 		t.deepEqual(firstRunning.execute_bash.liveDetails(), [command]);
-		t.deepEqual(compactCounts, [['execute_bash', command]]);
+		// Completion queues the detailed command + output row instead of
+		// tallying into the "Ran Bash ×N" summary.
+		t.is(compactCounts.length, 0);
+		t.is(queued.length, 1);
 	},
 );
 

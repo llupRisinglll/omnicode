@@ -1,4 +1,5 @@
 import {chmodSync, existsSync} from 'fs';
+import {tmpdir} from 'os';
 import * as path from 'path';
 import test from 'ava';
 import * as fs from 'fs/promises';
@@ -6,9 +7,11 @@ import {FileSnapshotService} from './file-snapshot';
 
 // Helper to create a temporary directory for tests
 async function createTempDir(): Promise<string> {
+	// Use the OS temp dir, NOT the repo: this repo can live on filesystems
+	// without POSIX permission bits (e.g. NTFS via fuseblk) where chmod is a
+	// no-op — the read-only-path tests would never fail.
 	const tempDir = path.join(
-		process.cwd(),
-		'.test-temp',
+		tmpdir(),
 		`snapshot-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 	);
 	await fs.mkdir(tempDir, {recursive: true});

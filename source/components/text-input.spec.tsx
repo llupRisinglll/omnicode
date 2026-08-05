@@ -2,7 +2,7 @@ import test from 'ava';
 import {render} from 'ink-testing-library';
 import React, {useState} from 'react';
 import stripAnsi from 'strip-ansi';
-import TextInput from './text-input';
+import TextInput, {getSlashCommandRanges} from './text-input';
 
 console.log(`\ntext-input.spec.tsx – ${React.version}`);
 
@@ -39,7 +39,23 @@ function Harness({
 				setValue('');
 			}}
 		/>
-	);
+);
+
+test('getSlashCommandRanges colorizes namespaced commands like /mock:bash', t => {
+	const valid = new Set(['worktree', 'mock:bash']);
+	// `/mock:bash` matches the same range shape as a plain `/worktree` — the
+	// colon is part of the token and the name must still be in the known set.
+	t.deepEqual(getSlashCommandRanges('/mock:bash', valid), [
+		{start: 0, end: 10},
+	]);
+	t.deepEqual(getSlashCommandRanges('/worktree', valid), [
+		{start: 0, end: 9},
+	]);
+	// Unknown namespaced commands are NOT colorized.
+	t.deepEqual(getSlashCommandRanges('/mock:nope', valid), []);
+	// Slash commands not at the start of the input don't colorize.
+	t.deepEqual(getSlashCommandRanges('run /mock:bash', valid), []);
+});
 }
 
 // Regression: a run of chars + Enter coalesces into ONE stdin chunk that Ink

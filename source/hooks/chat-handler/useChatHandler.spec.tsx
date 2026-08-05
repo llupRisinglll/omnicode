@@ -60,6 +60,10 @@ const createMockToolManager = () => ({
 	getToolNames: () => ['read_file'],
 	getFilteredTools: () => ({}),
 	getFilteredToolsForProvider: () => ({}),
+	// The hook calls getMCPInstructions while building the system prompt at
+	// init — a missing method throws during the harness render and the
+	// useEffect that surfaces hookResult never runs.
+	getMCPInstructions: () => [],
 }) as NonNullable<UseChatHandlerProps['toolManager']>;
 
 const waitForCondition = async (
@@ -513,6 +517,7 @@ test('getBaseSystemPrompt - headless mode ignores cached prompt', t => {
 	// rather than whatever the interactive TUI cached at boot.
 	const toolManager = {
 		getAvailableToolNames: (_tune: unknown, mode: string) => [`tool-for-${mode}`],
+		getMCPInstructions: () => [],
 	} as NonNullable<UseChatHandlerProps['toolManager']>;
 
 	const result = getBaseSystemPrompt(

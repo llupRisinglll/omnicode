@@ -16,6 +16,7 @@ test('createStaticComponents includes welcome message when shouldShowWelcome is 
 		shouldShowWelcome: true,
 		currentProvider: 'test-provider',
 		currentModel: 'test-model',
+		nonInteractiveMode: true,
 	};
 
 	const components = createStaticComponents(props);
@@ -27,7 +28,8 @@ test('createStaticComponents includes welcome message when shouldShowWelcome is 
 	const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /Nanocoder/); // Welcome message should contain "Nanocoder"
+	// Fork banner: ASCII art + attribution, not the upstream "Nanocoder" logo.
+	t.regex(output!, /A fork of nanocoder by llupRisinglll/);
 	unmount();
 });
 
@@ -36,6 +38,7 @@ test('createStaticComponents excludes welcome message when shouldShowWelcome is 
 		shouldShowWelcome: false,
 		currentProvider: 'test-provider',
 		currentModel: 'test-model',
+		nonInteractiveMode: true,
 	};
 
 	const components = createStaticComponents(props);
@@ -56,6 +59,7 @@ test('createStaticComponents includes boot summary with provider and model', t =
 		shouldShowWelcome: false,
 		currentProvider: 'local',
 		currentModel: 'gpt-4',
+		nonInteractiveMode: true,
 	};
 
 	const components = createStaticComponents(props);
@@ -117,13 +121,12 @@ test('createStaticComponents omits mode label when interactive', t => {
 	};
 
 	const components = createStaticComponents(props);
-	t.is(components.length, 1);
+	// Interactive mode has no static boot summary at all — provider/model/mode
+	// live in the live status bar.
+	t.is(components.length, 0);
 
 	const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
 	const output = lastFrame();
-	t.truthy(output);
-	// Interactive mode relies on the live status bar — mode label is not in
-	// the static boot line.
 	t.notRegex(output!, /yolo/);
 	unmount();
 });
@@ -174,6 +177,7 @@ test.serial(
 			shouldShowWelcome: false,
 			currentProvider: 'test-provider',
 			currentModel: 'test-model',
+			nonInteractiveMode: true,
 		};
 
 		const components = createStaticComponents(props);
@@ -196,6 +200,7 @@ test.serial(
 				shouldShowWelcome: false,
 				currentProvider: 'test-provider',
 				currentModel: 'test-model',
+				nonInteractiveMode: true,
 			};
 
 			const components = createStaticComponents(props);
@@ -221,6 +226,7 @@ test.serial(
 				shouldShowWelcome: false,
 				currentProvider: 'test-provider',
 				currentModel: 'test-model',
+				nonInteractiveMode: true,
 			};
 			const components = createStaticComponents(props);
 			const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
@@ -244,6 +250,7 @@ test.serial(
 				shouldShowWelcome: false,
 				currentProvider: 'test-provider',
 				currentModel: 'test-model',
+				nonInteractiveMode: true,
 			};
 			const components = createStaticComponents(props);
 			const {lastFrame, unmount} = renderWithTheme(<>{components}</>);
