@@ -4,6 +4,7 @@ import ChatQueue from '@/components/chat-queue';
 import {RenderErrorBoundary} from '@/components/render-error-boundary';
 import {useTerminalRows} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
+import {offsetSelection, setSelectionMaxRow} from '@/utils/selection';
 import {wheelEvents} from '@/utils/terminal-mouse';
 
 function measureNaturalHeight(node: DOMElement): number {
@@ -78,6 +79,7 @@ export const ChatHistory = React.memo(function ChatHistory({
 	const viewportRef = React.useRef<DOMElement>(null);
 	const contentRef = React.useRef<DOMElement>(null);
 	const [scrollOffset, setScrollOffset] = React.useState(0);
+	const scrollOffsetRef = React.useRef(0);
 
 	// New content or a vertical resize snaps the view back to the bottom
 	// (sticky scroll) — matching every chat TUI's behavior.
@@ -87,8 +89,27 @@ export const ChatHistory = React.memo(function ChatHistory({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: these are intentional growth/reset triggers.
 	React.useEffect(() => {
 		setScrollOffset(0);
+		scrollOffsetRef.current = 0;
 	}, [
 		clearKey,
+		queuedComponents.length,
+		staticComponents.length,
+		terminalRows,
+	]);
+
+	// Bound the selection to the chat viewport so dragging/scrolling the
+	// highlight downward can't paint the input box / status line below it.
+	// The viewport height tracks terminal resizes + transcript growth.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure on both.
+	React.useEffect(() => {
+		const viewport = viewportRef.current
+			? measureElement(viewportRef.current)
+			: undefined;
+		if (viewport && fullscreen) {
+			setSelectionMaxRow(Math.max(0, viewport.height - 1));
+		}
+	}, [
+		fullscreen,
 		queuedComponents.length,
 		staticComponents.length,
 		terminalRows,
@@ -97,33 +118,50 @@ export const ChatHistory = React.memo(function ChatHistory({
 	// Scroll by `delta` rows (positive = towards older content), clamped to
 	// the measured content extent. Shared by PageUp/PageDown and the mouse
 	// wheel. `halfPage: true` scales the step to half the viewport height.
-	const scrollBy = React.useCallback((delta: number, halfPage = false) => {
-		const viewport = viewportRef.current
-			? measureElement(viewportRef.current)
-			: undefined;
-		const viewportHeight = viewport?.height ?? 0;
-		const contentHeight = contentRef.current
-			? measureNaturalHeight(contentRef.current)
-			: 0;
-		// Once scrolled, the indicator consumes one viewport row. Include it in
-		// the initial clamp so the oldest transcript row remains reachable.
-		const maxOffset = Math.max(
-			0,
-			contentHeight - viewportHeight + (contentHeight > viewportHeight ? 1 : 0),
-		);
-		const step = halfPage
-			? Math.max(1, Math.floor(viewportHeight / 2)) * Math.sign(delta)
-			: delta;
+	const scrollBy = React.useCallback(
+		(delta: number, halfPage = false) => {
+			const viewport = viewportRef.current
+				? measureElement(viewportRef.current)
+				: undefined;
+			const viewportHeight = viewport?.height ?? 0;
+			const contentHeight = contentRef.current
+				? measureNaturalHeight(contentRef.current)
+				: 0;
+			// Once scrolled, the indicator consumes one viewport row. Include it in
+			// the initial clamp so the oldest transcript row remains reachable.
+			const maxOffset = Math.max(
+				0,
+				contentHeight -
+					viewportHeight +
+					(contentHeight > viewportHeight ? 1 : 0),
+			);
+			const step = halfPage
+				? Math.max(1, Math.floor(viewportHeight / 2)) * Math.sign(delta)
+				: delta;
 
-		setScrollOffset(current => {
-			if (step > 0) return Math.min(current + step, maxOffset);
-			// The indicator row shifts the viewport height by 1 between
-			// scrolled/unscrolled states, so clamping can strand the view
-			// a couple of rows above the bottom — snap those to 0.
-			const next = Math.max(current + step, 0);
-			return next <= 2 ? 0 : next;
-		});
-	}, []);
+			const current = scrollOffsetRef.current;
+			let next: number;
+			if (step > 0) {
+				next = Math.min(current + step, maxOffset);
+			} else {
+				// The indicator row shifts the viewport height by 1 between
+				// scrolled/unscrolled states, so clamping can strand the view
+				// a couple of rows above the bottom — snap those to 0.
+				const candidate = Math.max(current + step, 0);
+				next = candidate <= 2 ? 0 : candidate;
+			}
+			const applied = next - current;
+			if (applied !== 0) {
+				scrollOffsetRef.current = next;
+				setScrollOffset(next);
+				// Keep an active selection attached to the text it highlights:
+				// scrolling moves the content on screen, so the highlight must
+				// follow it instead of sticking to a fixed screen position.
+				if (fullscreen) offsetSelection(applied);
+			}
+		},
+		[fullscreen],
+	);
 
 	useInput(
 		(_input, key) => {

@@ -117,8 +117,11 @@ function ExecuteBashFormatterComponent({
 
 	return (
 		<Box flexDirection="column" marginBottom={1} width={boxWidth}>
-			<ToolCallHeader toolName="execute_bash" detail={command} />
-			<Box flexDirection="column">
+			{/* The command is NOT part of the tool header — it would duplicate
+			    the body below. The header names the tool; the body shows the
+			    full (wrapped) command. */}
+			<ToolCallHeader toolName="execute_bash" />
+			<Box flexDirection="column" marginTop={1}>
 				<Text color={colors.secondary}>Command:</Text>
 				<Text wrap="wrap" color={colors.text}>
 					{command}

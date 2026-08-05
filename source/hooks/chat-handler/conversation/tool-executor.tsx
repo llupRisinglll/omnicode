@@ -379,7 +379,23 @@ export const displayExecutedTool = async (
 				iconDisplay,
 			);
 		} else if (isDetailedOmnicodeOp) {
-			options.onCompactToolCount?.(result.name, compactToolDetail?.detail);
+			if (result.name === 'execute_bash') {
+				// Interactive compact: queue the detailed bash row (command +
+				// output preview) instead of only tallying it — the tally
+				// summary hid the output behind "Ran Bash ×N". Matches the
+				// preview mock's consolidated bash flow (running tally in the
+				// live region → detailed row in the transcript).
+				await displayToolResult(
+					toolCall,
+					result,
+					toolManager,
+					addToChatQueue,
+					true,
+					iconDisplay,
+				);
+			} else {
+				options.onCompactToolCount?.(result.name, compactToolDetail?.detail);
+			}
 		} else {
 			options.onCompactToolCount?.(result.name, compactToolDetail?.detail);
 		}

@@ -41,6 +41,11 @@ export const selectionEvents = new EventEmitter();
 /** Terminal dimensions — set by cli.tsx on init and resize. */
 let terminalCols = 80;
 let terminalRows = 24;
+// Last row the selection may PAINT on (the chat viewport's bottom). The app
+// sets this so dragging/scrolling the selection downward can't highlight the
+// input box / status line below the chat. The selection STATE is not clamped —
+// it stays attached to content that may be scrolled off-screen.
+let selectionMaxRow = -1;
 
 /** The current selection. Module-level singleton, no React involvement. */
 const sel: SelectionState = {
@@ -54,6 +59,15 @@ let hover: {row: number; startCol: number; endCol: number} | null = null;
 export function setTerminalSize(cols: number, rows: number): void {
 	terminalCols = cols;
 	terminalRows = rows;
+}
+
+/** Restrict selection painting/extraction to rows ≤ maxRow (chat bottom). */
+export function setSelectionMaxRow(maxRow: number): void {
+	selectionMaxRow = maxRow;
+}
+
+function effectiveSelectionMaxRow(): number {
+	return selectionMaxRow >= 0 ? selectionMaxRow : terminalRows - 1;
 }
 
 export function getTerminalSize(): {cols: number; rows: number} {
@@ -310,6 +324,7 @@ function normalizeSelection(): {
 	endCol: number;
 } | null {
 	if (!sel.anchor || !sel.focus) return null;
+	const maxRow = effectiveSelectionMaxRow();
 	const anchorRow = sel.anchor.row;
 	const anchorCol = sel.anchor.col;
 	const focusRow = sel.focus.row;
@@ -319,17 +334,24 @@ function normalizeSelection(): {
 		anchorRow < focusRow ||
 		(anchorRow === focusRow && anchorCol <= focusCol)
 	) {
+		const startRow = Math.max(0, Math.min(maxRow, anchorRow));
+		const endRow = Math.max(0, Math.min(maxRow, focusRow));
+		// Entirely below the chat area → nothing is painted/copied.
+		if (anchorRow > maxRow && focusRow > maxRow) return null;
 		return {
-			startRow: anchorRow,
+			startRow,
 			startCol: anchorCol,
-			endRow: focusRow,
+			endRow,
 			endCol: focusCol,
 		};
 	}
+	const startRow = Math.max(0, Math.min(maxRow, focusRow));
+	const endRow = Math.max(0, Math.min(maxRow, anchorRow));
+	if (focusRow > maxRow && anchorRow > maxRow) return null;
 	return {
-		startRow: focusRow,
+		startRow,
 		startCol: focusCol,
-		endRow: anchorRow,
+		endRow,
 		endCol: anchorCol,
 	};
 }
@@ -444,6 +466,45 @@ export function clearSelection(): void {
 	sel.focus = null;
 	sel.isDragging = false;
 	sel.anchorSpan = null;
+	selectionEvents.emit('change', {immediate: true});
+}
+
+/**
+ * Shift an active selection by `deltaRows` screen rows (positive = the content
+ * moved DOWN on screen, i.e. the user scrolled up). Keeps the highlight
+ * attached to the text it highlights instead of sticking to a fixed screen
+ * position while the conversation scrolls. No-op when nothing is selected.
+ */
+export function offsetSelection(deltaRows: number): void {
+	if (deltaRows === 0) return;
+	// Do NOT clamp to the terminal rows here: the selection is attached to
+	// CONTENT, which may be scrolled off-screen (negative/large rows). The
+	// highlight painter only draws visible cells, so an off-screen selection
+	// simply isn't painted — and scrolling back restores it exactly.
+	const shift = (cell: SelectionCell | null): SelectionCell | null => {
+		if (!cell) return null;
+		return {col: cell.col, row: cell.row + deltaRows};
+	};
+	const anchor = shift(sel.anchor);
+	const focus = shift(sel.focus);
+	const anchorSpan = sel.anchorSpan
+		? {
+				lo: shift(sel.anchorSpan.lo) ?? sel.anchorSpan.lo,
+				hi: shift(sel.anchorSpan.hi) ?? sel.anchorSpan.hi,
+				kind: sel.anchorSpan.kind,
+			}
+		: null;
+	if (
+		anchor === sel.anchor &&
+		focus === sel.focus &&
+		anchorSpan?.lo === sel.anchorSpan?.lo &&
+		anchorSpan?.hi === sel.anchorSpan?.hi
+	) {
+		return;
+	}
+	sel.anchor = anchor;
+	sel.focus = focus;
+	sel.anchorSpan = anchorSpan;
 	selectionEvents.emit('change', {immediate: true});
 }
 

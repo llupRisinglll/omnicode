@@ -21,7 +21,6 @@ import {useInputState} from '@/hooks/useInputState';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {useUIStateContext} from '@/hooks/useUIState';
-
 import type {
 	QueuedUserMessage,
 	UserMessageQueueDraft,
@@ -39,6 +38,10 @@ import type {
 	SubmittedInputDraft,
 } from '@/types/hooks';
 import {Completion, CustomCommandCompletionSource} from '@/types/index';
+import {
+	compactToggleEvents,
+	transcriptToggleEvents,
+} from '@/utils/terminal-mouse';
 
 const EMPTY_CUSTOM_COMMANDS: CustomCommandCompletionSource[] = [];
 
@@ -851,12 +854,25 @@ export default function UserInput({
 
 		// Handle ctrl+o to toggle compact tool display (always available)
 		if (key.ctrl && inputChar === 'o' && onToggleCompactDisplay) {
+			compactToggleEvents.emit('toggle');
 			onToggleCompactDisplay();
 			return;
 		}
 
 		// Handle ctrl+r to toggle expanded reasoning traces (always available)
 		if (key.ctrl && inputChar === 'r' && onToggleReasoningExpanded) {
+			transcriptToggleEvents.emit('toggle');
+			onToggleReasoningExpanded();
+			return;
+		}
+
+		// Handle ctrl+t to toggle the expanded transcript view of compact tool
+		// details ("… +N lines (ctrl + t to view transcript)"). Shares the same
+		// expand state as ctrl+r: it widens SUBSEQUENT queued entries, while
+		// already-queued rows expand via their clickable footer OR the global
+		// toggle event (so the hint actually works on visible blocks).
+		if (key.ctrl && inputChar === 't' && onToggleReasoningExpanded) {
+			transcriptToggleEvents.emit('toggle');
 			onToggleReasoningExpanded();
 			return;
 		}

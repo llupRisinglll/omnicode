@@ -41,7 +41,9 @@ export function getSlashCommandRanges(
 	value: string,
 	validNames?: ReadonlySet<string>,
 ): Array<{start: number; end: number}> {
-	const match = value.match(/^\/[A-Za-z0-9][A-Za-z0-9_-]*/);
+	// Allow `:` so namespaced commands like `/mock:bash` colorize the same way
+	// plain `/worktree` does — the name must still be in the known set.
+	const match = value.match(/^\/[A-Za-z0-9][A-Za-z0-9_:.-]*/);
 	if (!match) return [];
 	const token = match[0];
 	const name = token.slice(1);

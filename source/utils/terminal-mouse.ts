@@ -27,6 +27,15 @@ export const wheelEvents = new EventEmitter();
 export const clickEvents = new EventEmitter();
 /** Singleton bus for pointer movement stripped from stdin. */
 export const pointerEvents = new EventEmitter();
+/**
+ * Keyboard-driven expand/collapse buses, emitted from the input shortcuts
+ * (ctrl+o → compact tool tallies, ctrl+t/ctrl+r → detailed rows / thoughts).
+ * Queued components subscribe so the "(ctrl-o to expand)" / "(ctrl + t to
+ * view transcript)" hints actually toggle the already-visible blocks, not
+ * just subsequent renders.
+ */
+export const compactToggleEvents = new EventEmitter();
+export const transcriptToggleEvents = new EventEmitter();
 /** Singleton bus for mouse button press events (left/middle/right). */
 export const mouseDownEvents = new EventEmitter();
 /** Singleton bus for mouse button release events. */
