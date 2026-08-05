@@ -3,11 +3,11 @@ import {Box, Text} from 'ink';
 import React, {useEffect, useReducer} from 'react';
 import {computeDiffLines} from '@/components/diff-view/compute';
 import DiffView from '@/components/diff-view/DiffView';
-import {highlightCode} from '@/components/diff-view/syntax';
+import {highlightCode, languageForPath} from '@/components/diff-view/syntax';
 import {ErrorMessage} from '@/components/message-box';
-import {ToolCallHeader} from '@/components/simple-tool-formatter';
 import ToolMessage from '@/components/tool-message';
 import {getCompactDiffMaxLines} from '@/config/preferences';
+import {themes} from '@/config/themes';
 import {DEFAULT_TERMINAL_COLUMNS} from '@/constants';
 import {useNonInteractiveRender} from '@/hooks/useNonInteractiveRender';
 import {useTerminalWidth} from '@/hooks/useTerminalWidth';
@@ -16,8 +16,19 @@ import {generateKey} from '@/session/key-generator';
 import {displayForFormat} from '@/tools/tool-aliases';
 import type {ToolManager} from '@/tools/tool-manager';
 import type {ToolCall, ToolResult} from '@/types/index';
-import {isScreenTextAt, isScreenTextBlockAt} from '@/utils/selection';
-import {clickEvents, pointerEvents} from '@/utils/terminal-mouse';
+import {
+	isScreenTextAt,
+	isScreenTextBlockAt,
+	isScreenTextBlockFromEndOccurrenceAt,
+	isScreenTextOccurrenceFromEndAt,
+} from '@/utils/selection';
+import {
+	clickEvents,
+	compactToggleEvents,
+	pointerEvents,
+	transcriptToggleEvents,
+} from '@/utils/terminal-mouse';
+import {wrapWithTrimmedContinuations} from '@/utils/text-wrapping';
 import {parseToolArguments} from '@/utils/tool-args-parser';
 
 /**
@@ -32,6 +43,38 @@ export const ALWAYS_EXPANDED_TOOLS = new Set(['write_tasks', 'ask_user']);
  */
 export const LIVE_TASK_TOOLS = new Set(['write_tasks']);
 
+/**
+ * Related-tool families for compacted tool groups. Tools in the same family
+ * share ONE compacted block (`web_search` + `fetch_url` → "✦ WebSearch ×2 and
+ * WebFetch") whose individual call entries stay visible inside it; unrelated
+ * tools (WebSearch vs git_diff) and file-write tools (which render their own
+ * CompactFileResult rows) stay standalone.
+ */
+const TOOL_GROUP_FAMILIES: Record<string, string> = {
+	web_search: 'web',
+	fetch_url: 'web',
+	read_file: 'file-read',
+	list_directory: 'file-read',
+	find_files: 'search',
+	search_file_contents: 'search',
+	git_status: 'git',
+	git_diff: 'git',
+	git_log: 'git',
+	git_add: 'git',
+	git_commit: 'git',
+	git_pr: 'git',
+	skill: 'skill',
+	check_skill: 'skill',
+};
+
+/**
+ * The family key for a tool name, or null when the tool has no related
+ * siblings (it renders standalone).
+ */
+export function getToolGroupFamily(toolName: string): string | null {
+	return TOOL_GROUP_FAMILIES[toolName] ?? null;
+}
+
 export interface CompactToolActivity {
 	count: number;
 	detail?: string;
@@ -40,6 +83,13 @@ export interface CompactToolActivity {
 	liveRunning?: () => boolean;
 	failed?: boolean;
 	running?: boolean;
+	/**
+	 * Individual call entries revealed INSIDE the compact block (e.g. the 3
+	 * bash calls behind `✦ Ran Bash ×3`). When present they render as their
+	 * own `✦ Tool(detail)` rows with output tails — streaming while running —
+	 * consistently for every compact family.
+	 */
+	calls?: Array<{detail: string; output: string}>;
 }
 
 export type CompactToolActivityMap = Record<
@@ -68,7 +118,7 @@ function normalizeCompactToolEntries(
 	]);
 }
 
-function mergeCompactToolEntries(
+export function mergeCompactToolEntries(
 	entries: Array<[string, CompactToolActivity]>,
 ): {
 	entries: Array<[string, CompactToolActivity]>;
@@ -84,6 +134,7 @@ function mergeCompactToolEntries(
 					count: (current?.count ?? 0) + activity.count,
 					detail: current?.detail ?? activity.detail,
 					details: [...(current?.details ?? []), ...(activity.details ?? [])],
+					calls: [...(current?.calls ?? []), ...(activity.calls ?? [])],
 					liveRunning:
 						current?.liveRunning || activity.liveRunning
 							? () =>
@@ -120,8 +171,11 @@ function getAgentCompactParts(activity?: CompactToolActivity): {
 	const separator = detail.indexOf(':');
 	const agentName = separator === -1 ? detail : detail.slice(0, separator);
 	const task = separator === -1 ? '' : detail.slice(separator + 1).trim();
+	const baseName = agentName.trim() || displayForFormat('agent', 'claude-code');
 	return {
-		name: agentName.trim() || displayForFormat('agent', 'claude-code'),
+		// Prefix with `agent:` so delegated-agent rows read `agent:explore(...)`
+		// and are distinguishable from plain tool rows at a glance.
+		name: baseName.startsWith('agent:') ? baseName : `agent:${baseName}`,
 		detail: task,
 	};
 }
@@ -133,7 +187,7 @@ function getAgentCompactDisplayName(activity?: CompactToolActivity): string {
 		: name;
 }
 
-function getCompactDisplayToolName(
+export function getCompactDisplayToolName(
 	toolName: string,
 	activity?: CompactToolActivity,
 ): string {
@@ -143,14 +197,24 @@ function getCompactDisplayToolName(
 	return displayForFormat(toolName, 'claude-code');
 }
 
-export function ToolGlyph({running = false}: {running?: boolean}) {
+export function ToolGlyph({
+	running = false,
+	background = false,
+}: {
+	running?: boolean;
+	/** Background job: static grey glyph (no blink, no green). */
+	background?: boolean;
+}) {
 	const {colors} = useTheme();
 	const [visible, setVisible] = React.useState(true);
 	useEffect(() => {
-		if (!running) return;
+		if (!running || background) return;
 		const timer = setInterval(() => setVisible(v => !v), 500);
 		return () => clearInterval(timer);
-	}, [running]);
+	}, [background, running]);
+	if (background) {
+		return <Text color={colors.secondary}>{'\u2726'} </Text>;
+	}
 	if (running) {
 		return <Text color={colors.secondary}>{visible ? '\u2726' : ' '} </Text>;
 	}
@@ -234,7 +298,6 @@ function formatGroupedToolEntriesText(
 
 export function getCompactToolCountsHeaderText(
 	entries: Array<[string, number | CompactToolActivity]>,
-	running = false,
 ): string {
 	const normalizedEntries = entries.map(([toolName, value]) => [
 		toolName,
@@ -246,10 +309,14 @@ export function getCompactToolCountsHeaderText(
 		normalizedEntries[0]?.[1].detail;
 
 	if (singleInline) {
-		return `✦  ${formatToolNameWithCountText(normalizedEntries[0][0], normalizedEntries[0][1])}(${truncateDetail(normalizedEntries[0][1].detail ?? '')})`;
+		return `✦ ${formatToolNameWithCountText(normalizedEntries[0][0], normalizedEntries[0][1])}(${truncateDetail(normalizedEntries[0][1].detail ?? '')})`;
 	}
 
-	return `✦  ${running ? 'Running ' : 'Ran '}${formatGroupedToolEntriesText(normalizedEntries)}`;
+	// Single space after the glyph to match the rendered ToolGlyph row exactly.
+	// Always "Ran": the block renderer appends "(running)"/state separately, so
+	// this string is a substring of the header row in every state and anchors
+	// the expanded collapse hit-test.
+	return `✦ Ran ${formatGroupedToolEntriesText(normalizedEntries)}`;
 }
 
 function ToolNameWithCount({
@@ -296,40 +363,129 @@ function ToolNameWithCount({
 	);
 }
 
+/**
+ * The single-tool-with-detail case for a compact line ("✦ Bash(<command>)"),
+ * when exactly one non-agent tool ran once and carries a detail. Shared by
+ * the truncated one-liner and the running wrapped header so they agree.
+ */
+function getCompactSingleDetail(
+	entries: Array<[string, CompactToolActivity]>,
+): {toolName: string; detail: string} | null {
+	if (
+		entries.length === 1 &&
+		entries[0]?.[1].count === 1 &&
+		entries[0]?.[1].detail &&
+		!isAgentCompactToolName(entries[0]?.[0])
+	) {
+		return {toolName: entries[0][0], detail: entries[0][1].detail ?? ''};
+	}
+	return null;
+}
+
+/**
+ * Running single-tool header: WORD-WRAPS the command detail with the same
+ * tree-style "│" continuations as the completed detailed row (no ellipsis),
+ * capped at {@link COMMAND_MAX_LINES} with a "+N more lines (running)" hint
+ * when the command is long — so the live block and the completed row agree
+ * on how long content collapses.
+ */
+function CompactRunningDetailHeader({
+	toolName,
+	detail,
+	running,
+	boxWidth,
+	background = false,
+}: {
+	toolName: string;
+	detail: string;
+	running: boolean;
+	boxWidth: number;
+	/** Background job: static grey glyph + a "(running in background)" note. */
+	background?: boolean;
+}) {
+	const {colors} = useTheme();
+	const displayName = getCompactDisplayToolName(toolName);
+	const prefixWidth = 2 + displayName.length + 1;
+	const runningSuffix = background ? ' (running in background)' : ' (running)';
+	const runningSuffixWidth = runningSuffix.length;
+	const wrapWidth = Math.max(
+		1,
+		boxWidth - Math.max(prefixWidth, 4) - runningSuffixWidth,
+	);
+	const allLines = wrapWithTrimmedContinuations(
+		`${detail.replace(/\s+/g, ' ').trim()})`,
+		wrapWidth,
+	).split('\n');
+	const commandLines = allLines.slice(0, COMMAND_MAX_LINES);
+	const hiddenCount = allLines.length - commandLines.length;
+	const lastIndex = commandLines.length - 1;
+	return (
+		<Box flexDirection="column">
+			{commandLines.map((line, index) => {
+				const isLast = index === lastIndex;
+				if (index === 0) {
+					return (
+						<Text key="run-header-0" wrap="truncate-end">
+							<ToolGlyph running={running} background={background} />
+							<Text color={colors.primary}>{displayName}</Text>
+							<Text color={colors.secondary}>(</Text>
+							<Text color={colors.text}>{highlightCode(line, 'bash')}</Text>
+							{isLast && hiddenCount === 0 && (
+								<Text color={colors.secondary}>{runningSuffix}</Text>
+							)}
+						</Text>
+					);
+				}
+				return (
+					<Text key={`run-header-${index}`}>
+						<Text color={colors.secondary}>{'  │ '}</Text>
+						<Text color={colors.text}>{highlightCode(line, 'bash')}</Text>
+						{isLast && hiddenCount === 0 && (
+							<Text color={colors.secondary}>{runningSuffix}</Text>
+						)}
+					</Text>
+				);
+			})}
+			{hiddenCount > 0 && (
+				<Text color={colors.secondary}>
+					{'    '}… +{hiddenCount} more line{hiddenCount === 1 ? '' : 's'}{' '}
+					{runningSuffix}
+				</Text>
+			)}
+		</Box>
+	);
+}
+
 /** Compact grouped tool display - shows "✦ toolA ×N, toolB ×N". */
 export function CompactToolCountsLine({
 	entries,
 	running = false,
+	background = false,
 }: {
 	entries: Array<[string, number | CompactToolActivity]>;
 	running?: boolean;
+	background?: boolean;
 }) {
 	const {colors} = useTheme();
 	const normalizedEntries = entries.map(([toolName, value]) => [
 		toolName,
 		typeof value === 'number' ? {count: value} : value,
 	]) as Array<[string, CompactToolActivity]>;
-	const singleInline =
-		normalizedEntries.length === 1 &&
-		normalizedEntries[0]?.[1].count === 1 &&
-		normalizedEntries[0]?.[1].detail &&
-		!isAgentCompactToolName(normalizedEntries[0]?.[0]);
+	const singleInline = getCompactSingleDetail(normalizedEntries);
 
 	return (
 		<Text>
-			<ToolGlyph running={running} />
+			<ToolGlyph running={running} background={background} />
 			{singleInline ? (
 				<>
 					<ToolNameWithCount
-						toolName={normalizedEntries[0][0]}
+						toolName={singleInline.toolName}
 						count={normalizedEntries[0][1].count}
 						failed={normalizedEntries[0][1].failed}
 						activity={normalizedEntries[0][1]}
 					/>
 					<Text color={colors.secondary}>(</Text>
-					<Text color={colors.text}>
-						{truncateDetail(normalizedEntries[0][1].detail ?? '')}
-					</Text>
+					<Text color={colors.text}>{truncateDetail(singleInline.detail)}</Text>
 					<Text color={colors.secondary}>)</Text>
 				</>
 			) : (
@@ -416,17 +572,22 @@ function compactRunningDetailLines(
 function CompactDetailLineText({
 	toolName,
 	text,
+	color,
+	highlight = true,
 }: {
 	toolName: string;
 	text: string;
+	color?: string;
+	highlight?: boolean;
 }) {
 	const {colors} = useTheme();
 	const display =
-		toolName === 'execute_bash' || toolName.startsWith('execute_bash:')
+		highlight &&
+		(toolName === 'execute_bash' || toolName.startsWith('execute_bash:'))
 			? highlightCode(text, 'bash')
 			: text;
 	return (
-		<Text wrap="truncate-end" color={colors.text}>
+		<Text wrap="truncate-end" color={color ?? colors.text}>
 			{display}
 		</Text>
 	);
@@ -470,16 +631,20 @@ export function getLiveCompactToolExpandHitboxColumns(
 	};
 }
 
-function CompactToolActivityBlock({
+export function CompactToolActivityBlock({
 	entries,
 	expanded,
 	running = false,
+	background = false,
 }: {
 	entries: Array<[string, CompactToolActivity]>;
 	expanded: boolean;
 	running?: boolean;
+	/** Background job: static grey glyph + a "(running in background)" note. */
+	background?: boolean;
 }) {
 	const {colors} = useTheme();
+	const boxWidth = useTerminalWidth();
 	const [mouseExpansion, setMouseExpansion] = React.useState<{
 		base: boolean;
 		value: boolean;
@@ -491,8 +656,28 @@ function CompactToolActivityBlock({
 		expanded: effectiveExpanded,
 		runningOnly: running,
 	});
+	// Individual call entries behind this compact block (e.g. the 3 bash calls
+	// behind `✦ Ran Bash ×3`). When present, EXPANDING reveals these entries
+	// as their own `✦ Tool(detail)` rows — consistently for every compact
+	// family — instead of the combined detail lines.
+	const callEntries = entries.flatMap(([toolName, activity]) =>
+		(activity.calls ?? []).map(call => ({toolName, ...call})),
+	);
 	const failedAlreadyInTitle = entries.some(([, activity]) => activity.failed);
 	const headerText = getCompactToolCountsHeaderText(entries);
+	// While a single tool runs, its command/path detail WORD-WRAPS instead of
+	// ellipsizing (see the wrapped header branch below).
+	const runningHeader = running ? getCompactSingleDetail(entries) : null;
+	// Anchor for the expanded collapse hit-test: must be a substring of the
+	// ACTUAL rendered header row. The wrapped running header differs from
+	// getCompactToolCountsHeaderText (command wraps instead of truncating), so
+	// it gets its own head-anchored prefix.
+	const headerStartText = runningHeader
+		? `✦ ${getCompactDisplayToolName(runningHeader.toolName)}(${runningHeader.detail
+				.replace(/\s+/g, ' ')
+				.trim()
+				.slice(0, 24)}`
+		: headerText;
 	const collapsedSummary = `${
 		detailPreview.hiddenCount > 0
 			? `… +${detailPreview.hiddenCount} more ${
@@ -516,18 +701,71 @@ function CompactToolActivityBlock({
 				} (ctrl-o to ${effectiveExpanded ? 'collapse' : 'expand'})`
 			: '';
 	const expandedEndText =
-		detailPreview.footer ??
-		detailPreview.lines.at(-1)?.text ??
-		getCompactToolExpandHintText(effectiveExpanded);
+		callEntries.length > 0
+			? '(ctrl-o to collapse)'
+			: (detailPreview.footer ??
+				detailPreview.lines.at(-1)?.text ??
+				getCompactToolExpandHintText(effectiveExpanded));
+	// Instance registration for occurrence-based hit-testing (see the module
+	// registry above). The footer identity is the collapsed click target; the
+	// header identity anchors the expanded block span.
+	const footerIdentity =
+		collapsedFooterText || collapsedSummary || headerStartText;
+	const [instanceId] = React.useState(() => nextCompactBlockInstanceId++);
+	compactBlockInstances.set(instanceId, {
+		footer: footerIdentity,
+		header: headerStartText,
+	});
+	React.useEffect(() => {
+		return () => {
+			compactBlockInstances.delete(instanceId);
+		};
+	}, [instanceId]);
 	const isMouseTarget = React.useCallback(
 		(x: number, y: number) => {
+			// Occurrences are computed HERE (event time), not during render:
+			// sibling blocks mount during the same commit, so a render-time
+			// index would see only the blocks registered so far and mis-map
+			// identical stacked blocks.
+			const footerOccurrenceFromEnd = [...compactBlockInstances]
+				.filter(([, record]) => record.footer === footerIdentity)
+				.reverse()
+				.findIndex(([id]) => id === instanceId);
+			const headerOccurrenceFromEnd = [...compactBlockInstances]
+				.filter(([, record]) => record.header === headerStartText)
+				.reverse()
+				.findIndex(([id]) => id === instanceId);
 			if (effectiveExpanded) {
-				return isScreenTextBlockAt(x, y, headerText, expandedEndText);
+				return isScreenTextBlockFromEndOccurrenceAt(
+					x,
+					y,
+					headerStartText,
+					headerOccurrenceFromEnd,
+					expandedEndText,
+				);
 			}
 			// Collapsed: check header expand hint and/or footer hidden-count text
-			if (isScreenTextAt(x, y, collapsedSummary)) return true;
-			if (collapsedFooterText && isScreenTextAt(x, y, collapsedFooterText))
+			if (
+				isScreenTextOccurrenceFromEndAt(
+					x,
+					y,
+					collapsedSummary,
+					footerOccurrenceFromEnd,
+				)
+			) {
 				return true;
+			}
+			if (
+				collapsedFooterText &&
+				isScreenTextOccurrenceFromEndAt(
+					x,
+					y,
+					collapsedFooterText,
+					footerOccurrenceFromEnd,
+				)
+			) {
+				return true;
+			}
 			return false;
 		},
 		[
@@ -535,7 +773,9 @@ function CompactToolActivityBlock({
 			collapsedSummary,
 			effectiveExpanded,
 			expandedEndText,
-			headerText,
+			footerIdentity,
+			headerStartText,
+			instanceId,
 		],
 	);
 	const activeBackground = effectiveExpanded ? colors.secondary : undefined;
@@ -556,6 +796,21 @@ function CompactToolActivityBlock({
 	}, [expanded, isMouseTarget]);
 
 	React.useEffect(() => {
+		// ctrl+o toggles every compact tool tally (the "(ctrl-o to expand)"
+		// hint on the footer) — already-queued blocks included.
+		const onToggle = () => {
+			setMouseExpansion(value => ({
+				base: expanded,
+				value: !(value?.base === expanded ? value.value : expanded),
+			}));
+		};
+		compactToggleEvents.on('toggle', onToggle);
+		return () => {
+			compactToggleEvents.off('toggle', onToggle);
+		};
+	}, [expanded]);
+
+	React.useEffect(() => {
 		const onPointer = ({x, y}: {x: number; y: number}) => {
 			const hovered = isMouseTarget(x - 1, y - 1);
 			setMouseHovered(value => (value === hovered ? value : hovered));
@@ -569,31 +824,81 @@ function CompactToolActivityBlock({
 	return (
 		<Box flexDirection="column" width="100%" backgroundColor={activeBackground}>
 			<Box>
-				<Text
-					color={effectiveExpanded ? colors.text : undefined}
-					backgroundColor={activeBackground}
-				>
-					<CompactToolCountsLine entries={entries} running={running} />
-					{!running &&
-						detailPreview.state &&
-						!(detailPreview.state === 'failed' && failedAlreadyInTitle) && (
-							<Text color={colors.secondary}> {detailPreview.state}</Text>
+				{runningHeader ? (
+					<CompactRunningDetailHeader
+						toolName={runningHeader.toolName}
+						detail={runningHeader.detail}
+						running={running}
+						boxWidth={boxWidth}
+						background={background}
+					/>
+				) : (
+					<Text
+						color={effectiveExpanded ? colors.text : undefined}
+						backgroundColor={activeBackground}
+					>
+						<CompactToolCountsLine
+							entries={entries}
+							running={running}
+							background={background}
+						/>
+						{!running &&
+							detailPreview.state &&
+							!(detailPreview.state === 'failed' && failedAlreadyInTitle) && (
+								<Text color={colors.secondary}> {detailPreview.state}</Text>
+							)}
+						{running && (
+							<Text color={colors.secondary}>
+								{background ? ' (running in background)' : ' (running)'}
+							</Text>
 						)}
-					{running && <Text color={colors.secondary}> (running)</Text>}
-				</Text>
-			</Box>
-			{detailPreview.lines.map((line, index) => (
-				<Text
-					key={`${index}-${line.text.slice(0, 24)}`}
-					color={effectiveExpanded ? colors.text : undefined}
-					backgroundColor={activeBackground}
-				>
-					<Text color={colors.secondary}>
-						{index === 0 ? '  \u2514  ' : '     '}
 					</Text>
-					<CompactDetailLineText toolName={line.toolName} text={line.text} />
-				</Text>
-			))}
+				)}
+			</Box>
+			{effectiveExpanded && callEntries.length > 0 ? (
+				// Expanded with per-call data: the individual entries render as
+				// their own detailed rows (indented under the compact header),
+				// each independently expandable via its own "+N lines" footer.
+				<Box flexDirection="column" marginLeft={2}>
+					{callEntries.map((call, index) => (
+						<CompactDetailResult
+							key={`${call.toolName}-${index}`}
+							toolName={call.toolName}
+							detail={call.detail}
+							output={call.output}
+							running={running}
+							interactive={false}
+							bright
+						/>
+					))}
+					<Text color={colors.secondary}>{'    '}(ctrl-o to collapse)</Text>
+				</Box>
+			) : (
+				detailPreview.lines.map((line, index) => (
+					<Text
+						key={`${index}-${line.text.slice(0, 24)}`}
+						color={effectiveExpanded ? colors.text : undefined}
+						backgroundColor={activeBackground}
+					>
+						<Text
+							color={effectiveExpanded ? colors.text : colors.secondary}
+							dimColor={effectiveExpanded}
+						>
+							{index === 0 ? '  \u2514  ' : '     '}
+						</Text>
+						<CompactDetailLineText
+							toolName={line.toolName}
+							text={line.text}
+							// Output stays muted (grey) in BOTH running and
+							// completed states — matching the detailed bash row's
+							// plain secondary output. Bright text + highlighting
+							// is reserved for the expanded detail view.
+							color={effectiveExpanded ? colors.text : colors.secondary}
+							highlight={effectiveExpanded}
+						/>
+					</Text>
+				))
+			)}
 			{(detailPreview.hiddenCount > 0 ||
 				(running &&
 					detailPreview.footer &&
@@ -653,7 +958,7 @@ function CompactToolError({toolName}: {toolName: string}) {
 	return <CompactToolResult toolName={toolName} failed={true} />;
 }
 
-interface CompactFileResultProps {
+export interface CompactFileResultProps {
 	toolName: 'write_file' | 'string_replace' | 'diff_edit';
 	path: string;
 	oldStr?: string;
@@ -665,13 +970,13 @@ interface CompactFileResultProps {
  * Shows file path, line count changes, and a git-style inline diff with line numbers.
  * Wraps in ToolMessage to match the design system.
  */
-function CompactFileResult({
+export function CompactFileResult({
 	toolName,
 	path,
 	oldStr,
 	newStr,
 }: CompactFileResultProps) {
-	const {colors} = useTheme();
+	const {colors, currentTheme} = useTheme();
 	const [mouseExpansion, setMouseExpansion] = React.useState<{
 		base: boolean;
 		value: boolean;
@@ -718,16 +1023,26 @@ function CompactFileResult({
 		// there's nothing to diff against. Keep the existing first-N-lines
 		// preview rather than inventing snapshot plumbing to fabricate an
 		// all-additions diff.
+		// Syntax-highlight the preview with the ACTIVE palette (same theme +
+		// dark-theme contrast guard as DiffView) — the Write preview must
+		// look like real code, not plain text.
+		const themeType = themes[currentTheme]?.themeType ?? 'dark';
+		const detectedLanguage = path ? languageForPath(path) : '';
+		const highlightEnabled =
+			detectedLanguage.length > 0 && themeType === 'dark';
 		const previewCount = effectiveExpanded
 			? newLines.length
 			: Math.min(newLines.length, 3);
 		const previewElements: React.ReactElement[] = [];
 		for (let i = 0; i < previewCount; i++) {
 			const lineNumStr = String(i + 1).padStart(4, ' ');
+			const display = highlightEnabled
+				? highlightCode(newLines[i] ?? '', detectedLanguage, colors)
+				: newLines[i];
 			previewElements.push(
 				<Box key={`line-${i}`}>
 					<Text wrap="truncate-end">
-						{lineNumStr} {newLines[i]}
+						{lineNumStr} {display}
 					</Text>
 				</Box>,
 			);
@@ -882,6 +1197,15 @@ export function getCompactToolDetail(
 			const path = str(args.path) ?? '.';
 			return {detail: path};
 		}
+		case 'write_file':
+		case 'string_replace':
+		case 'diff_edit': {
+			// File-edit tools render CompactFileResult when settled; the
+			// running entry shows the target path so it reads `✦ Edit(path)`
+			// instead of a bare `✦ Edit()`.
+			const path = str(args.path) ?? str(args.file_path);
+			return path ? {detail: path} : null;
+		}
 		case 'fetch_url': {
 			const url = str(args.url);
 			return url ? {detail: url} : null;
@@ -924,39 +1248,99 @@ export function getCompactToolDetail(
 const PREVIEW_COLLAPSED_LINES = 3;
 const PREVIEW_EXPANDED_LINES = 50;
 
+// Collapsed command allowance: the flattened detail may wrap to this many
+// lines before a "+N more lines" hint appears (mirrors the 3-line output cap).
+const COMMAND_MAX_LINES = 3;
+// Module-level instance registry so multiple compact detail rows (even with
+// identical commands/footers) each hit-test only their own block — same
+// occurrence-from-end mechanism AssistantReasoning uses for Thought rows.
+let nextCompactDetailInstanceId = 0;
+const compactDetailInstances = new Map<number, string>();
+// Per-instance registry for compact tool blocks, so stacked blocks with
+// IDENTICAL headers/footers (e.g. repeated mock agent runs) each respond only
+// to their own rows — expanding one must not expand the others.
+let nextCompactBlockInstanceId = 0;
+const compactBlockInstances = new Map<
+	number,
+	{footer: string; header: string}
+>();
+
 /**
- * Detailed compact display for omnicode: one "✦ <toolName>(<detail>)" line
- * (actual command / path / pattern / URL — the user's security-visibility
- * ask), optionally followed by a "⎿"-prefixed preview of the tool's output
- * and a "… +N lines (ctrl+r to expand)" hint when truncated. Single header
- * line, flattened newlines, truncated to terminal width.
- *
- * `expanded` is captured at queue time from reasoningExpandedRef — exactly
- * how AssistantReasoning's expand works: ctrl+r changes what SUBSEQUENT
- * renders show; already-queued static scrollback never re-renders (Ink
- * Static).
+ * Detailed compact display for omnicode: a "✦ <toolName>(<detail>)" header
+ * whose shell command WORD-WRAPS (tree-style `│` continuation) up to
+ * {@link COMMAND_MAX_LINES} lines when collapsed, followed by a `└`-prefixed
+ * tail preview of the tool's output (3 lines collapsed, 50 expanded) and a
+ * clickable "… +N lines (ctrl + t to view transcript)" footer BELOW the
+ * output. Clicking the footer (or the command's "+N more lines" hint) expands
+ * the whole entry with a Thought-style highlight; clicking anywhere on the
+ * highlighted entry collapses it again. The header glyph follows the other
+ * compact tool rows: green when the tool is done, grey/blinking while running.
  */
-function CompactDetailResult({
+export function CompactDetailResult({
 	toolName,
 	detail,
 	output,
 	expanded,
+	running = false,
+	interactive = true,
+	bright = false,
 }: {
 	toolName: string;
 	detail: string;
 	output?: string;
 	expanded?: boolean;
+	running?: boolean;
+	/**
+	 * Render output/footer text bright even while collapsed. Used when the
+	 * row sits inside an expanded group whose highlight background would make
+	 * the normal muted grey unreadable (grey-on-grey).
+	 */
+	bright?: boolean;
+	/**
+	 * Set false when the row is rendered inside a grouped/compacted block:
+	 * the row keeps its exact visual shape but yields mouse/keyboard handling
+	 * to the parent block (clicking anywhere collapses the group).
+	 */
+	interactive?: boolean;
 }) {
 	const {colors} = useTheme();
 	const boxWidth = useTerminalWidth();
 	const nonInteractive = useNonInteractiveRender();
 	const flatDetail = flattenToOneLine(detail);
+	const displayName = getCompactDisplayToolName(toolName);
+	const [mouseExpansion, setMouseExpansion] = React.useState<{
+		base: boolean;
+		value: boolean;
+	} | null>(null);
+	const [mouseHovered, setMouseHovered] = React.useState(false);
+	const effectiveExpanded =
+		mouseExpansion !== null && mouseExpansion.base === Boolean(expanded)
+			? mouseExpansion.value
+			: Boolean(expanded);
+
+	// Word-wrap the command (plus the closing paren) to the width available
+	// after the "✦ <name>(" prefix. Collapsed caps at COMMAND_MAX_LINES with a
+	// "+N more lines" hint; expanded shows the whole chain.
+	const prefixWidth = 2 + displayName.length + 1; // glyph+space + name + '('
+	const commandWrapWidth = Math.max(1, boxWidth - Math.max(prefixWidth, 4));
+	const wrappedCommand = wrapWithTrimmedContinuations(
+		`${flatDetail})`,
+		commandWrapWidth,
+	).split('\n');
+	const commandVisibleCount = effectiveExpanded
+		? wrappedCommand.length
+		: Math.min(wrappedCommand.length, COMMAND_MAX_LINES);
+	const commandHiddenCount = wrappedCommand.length - commandVisibleCount;
+	const commandLines = wrappedCommand.slice(0, commandVisibleCount);
+	const commandHintText =
+		commandHiddenCount > 0
+			? `… +${commandHiddenCount} more line${commandHiddenCount === 1 ? '' : 's'}`
+			: '';
 
 	// Build the output preview: strip ANSI so escape codes from bash output
 	// can't corrupt the layout, drop trailing blank lines, cap line count.
 	// The preview keeps the TAIL of the output (the last lines are what show
-	// results/errors), with a "… +N earlier lines" hint above it when truncated
-	// — long content collapses but its tail stays visible in the transcript.
+	// results/errors); the clickable "+N lines" footer sits BELOW the tail.
 	let previewLines: string[] = [];
 	let hiddenCount = 0;
 	if (output) {
@@ -964,36 +1348,169 @@ function CompactDetailResult({
 			.replace(/\r\n/g, '\n')
 			.replace(/\s+$/, '')
 			.split('\n');
-		const cap = expanded ? PREVIEW_EXPANDED_LINES : PREVIEW_COLLAPSED_LINES;
+		const cap = effectiveExpanded
+			? PREVIEW_EXPANDED_LINES
+			: PREVIEW_COLLAPSED_LINES;
 		previewLines = allLines.slice(-cap);
 		hiddenCount = allLines.length - previewLines.length;
 	}
+	const footerText =
+		hiddenCount > 0
+			? `… +${hiddenCount} line${hiddenCount === 1 ? '' : 's'} (ctrl + t to view transcript)`
+			: '';
+
+	// Hit-target identity: the header row's distinctive start (glyph + tool
+	// name + the first wrapped command fragment), registered so duplicate
+	// footers in one transcript each respond only to their own rows.
+	const identityText = `✦ ${displayName}(`;
+	const [instanceId] = React.useState(() => nextCompactDetailInstanceId++);
+	compactDetailInstances.set(instanceId, identityText);
+	React.useEffect(() => {
+		return () => {
+			compactDetailInstances.delete(instanceId);
+		};
+	}, [instanceId]);
+	const occurrenceFromEnd = [...compactDetailInstances]
+		.filter(([, text]) => text === identityText)
+		.reverse()
+		.findIndex(([id]) => id === instanceId);
+	// When expanded, the collapse target spans the header through the last
+	// output row. The last line is rendered with truncate-end, so anchor the
+	// block end on the line's HEAD (always visible). The START anchor includes
+	// the first command fragment so a header clipped off-screen (or a different
+	// command above) can't hijack the hit-test.
+	const headerStartText = `✦ ${displayName}(${(commandLines[0] ?? '').slice(0, 24)}`;
+	const expandedEndText =
+		previewLines.length > 0
+			? (previewLines.at(-1) ?? '').slice(0, 16) || identityText
+			: identityText;
+
+	const isMouseTarget = React.useCallback(
+		(x: number, y: number) => {
+			if (effectiveExpanded) {
+				return isScreenTextBlockAt(x, y, headerStartText, expandedEndText);
+			}
+			if (
+				footerText &&
+				isScreenTextOccurrenceFromEndAt(x, y, footerText, occurrenceFromEnd)
+			) {
+				return true;
+			}
+			// The command's "+N more lines" hint is intentionally NOT clickable
+			// — only the output footer toggles the entry.
+			return false;
+		},
+		[
+			effectiveExpanded,
+			expandedEndText,
+			footerText,
+			headerStartText,
+			occurrenceFromEnd,
+		],
+	);
+
+	React.useEffect(() => {
+		if (nonInteractive || !interactive) return;
+		const onClick = ({x, y}: {x: number; y: number}) => {
+			if (!isMouseTarget(x, y)) return;
+			setMouseExpansion(value => ({
+				base: Boolean(expanded),
+				value: !(value !== null && value.base === Boolean(expanded)
+					? value.value
+					: Boolean(expanded)),
+			}));
+		};
+		clickEvents.on('click', onClick);
+		return () => {
+			clickEvents.off('click', onClick);
+		};
+	}, [expanded, interactive, isMouseTarget, nonInteractive]);
+
+	React.useEffect(() => {
+		if (nonInteractive || !interactive) return;
+		// ctrl+t toggles the expanded transcript view of detailed tool rows
+		// (the "(ctrl + t to view transcript)" footer hint) — already-queued
+		// rows included.
+		const onToggle = () => {
+			setMouseExpansion(value => ({
+				base: Boolean(expanded),
+				value: !(value !== null && value.base === Boolean(expanded)
+					? value.value
+					: Boolean(expanded)),
+			}));
+		};
+		transcriptToggleEvents.on('toggle', onToggle);
+		return () => {
+			transcriptToggleEvents.off('toggle', onToggle);
+		};
+	}, [expanded, interactive, nonInteractive]);
+
+	React.useEffect(() => {
+		if (nonInteractive || !interactive) return;
+		const onPointer = ({x, y}: {x: number; y: number}) => {
+			const hovered = isMouseTarget(x - 1, y - 1);
+			setMouseHovered(value => (value === hovered ? value : hovered));
+		};
+		pointerEvents.on('pointer', onPointer);
+		return () => {
+			pointerEvents.off('pointer', onPointer);
+		};
+	}, [interactive, isMouseTarget, nonInteractive]);
 
 	return (
-		<Box flexDirection="column" width={boxWidth}>
-			<ToolCallHeader
-				toolName={getCompactDisplayToolName(toolName)}
-				detail={flatDetail}
-			/>
-			{hiddenCount > 0 && (
-				<Box>
-					<Text color={colors.secondary}>{' ⎿ '}</Text>
-					<Text color={colors.secondary}>
-						… +{hiddenCount} earlier line{hiddenCount === 1 ? '' : 's'}
-						{!nonInteractive && !expanded ? ' (ctrl+r to expand)' : ''}
+		<Box
+			flexDirection="column"
+			width={boxWidth}
+			marginBottom={1}
+			backgroundColor={effectiveExpanded ? colors.secondary : undefined}
+		>
+			<Box flexDirection="column">
+				<Text wrap="truncate-end">
+					<ToolGlyph running={running} />
+					<Text color={colors.primary}>{displayName}</Text>
+					<Text color={colors.secondary}>(</Text>
+					<Text color={colors.text}>
+						{highlightCode(commandLines[0] ?? '', 'bash')}
 					</Text>
-				</Box>
-			)}
+				</Text>
+				{commandLines.slice(1).map((line, index) => (
+					<Text key={`command-${index}`}>
+						<Text color={colors.secondary}>{'  │ '}</Text>
+						<Text color={colors.text}>{highlightCode(line, 'bash')}</Text>
+					</Text>
+				))}
+				{commandHiddenCount > 0 && (
+					<Text color={bright ? colors.text : colors.secondary}>
+						{'    '}
+						{commandHintText}
+					</Text>
+				)}
+			</Box>
 			{previewLines.map((line, i) => (
-				<Box key={`preview-${i}-${line.slice(0, 16)}`}>
-					<Text color={colors.secondary}>
-						{i === 0 && hiddenCount === 0 ? ' ⎿ ' : '   '}
+				<Text key={`preview-${i}-${line.slice(0, 16)}`}>
+					<Text
+						color={effectiveExpanded || bright ? colors.text : colors.secondary}
+						dimColor={effectiveExpanded || bright}
+					>
+						{i === 0 ? '  └   ' : '      '}
 					</Text>
-					<Text wrap="truncate-end" color={colors.secondary}>
+					<Text
+						wrap="truncate-end"
+						color={effectiveExpanded || bright ? colors.text : colors.secondary}
+					>
 						{line || ' '}
 					</Text>
-				</Box>
+				</Text>
 			))}
+			{hiddenCount > 0 && (
+				<Text
+					color={mouseHovered || bright ? colors.text : colors.secondary}
+					backgroundColor={mouseHovered ? colors.secondary : undefined}
+				>
+					{'    '}
+					{footerText}
+				</Text>
+			)}
 		</Box>
 	);
 }
@@ -1092,6 +1609,9 @@ export function LiveCompactCounts({
 					running={hasRegularRunning}
 				/>
 			)}
+			{regularEntries.length > 0 && agentEntries.length > 0 && (
+				<Box height={1} />
+			)}
 			{agentEntries.map(([toolName, activity], idx) => (
 				<React.Fragment key={toolName}>
 					<CompactToolActivityBlock
@@ -1140,10 +1660,13 @@ export function CompactToolCountsSummaryBlock({
 	expanded,
 	entries,
 	indent,
+	running,
 }: {
 	expanded: boolean;
 	entries: Array<[string, number | CompactToolActivity]>;
 	indent: boolean;
+	/** Live-region only: keep the tally glyph grey/blinking while active. */
+	running?: boolean;
 }) {
 	const {colors} = useTheme();
 	const normalizedEntries = entries.map(([toolName, value]) => [
@@ -1162,13 +1685,18 @@ export function CompactToolCountsSummaryBlock({
 				<CompactToolActivityBlock
 					entries={regularEntries}
 					expanded={expanded}
+					running={running}
 				/>
+			)}
+			{regularEntries.length > 0 && agentEntries.length > 0 && (
+				<Box height={1} />
 			)}
 			{agentEntries.map(([toolName, activity], idx) => (
 				<React.Fragment key={toolName}>
 					<CompactToolActivityBlock
 						entries={[[toolName, activity]]}
 						expanded={expanded}
+						running={running}
 					/>
 					{idx < agentEntries.length - 1 && <Box height={1} />}
 				</React.Fragment>
