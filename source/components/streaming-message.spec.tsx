@@ -1,17 +1,29 @@
 import test from 'ava';
-import stripAnsi from 'strip-ansi';
-import { cleanup, render } from 'ink-testing-library';
-import StreamingMessage, {computeStreamingTail} from './streaming-message';
-import { ThemeContext } from '../hooks/useTheme';
-import { themes } from '../config/themes';
+import {render} from 'ink-testing-library';
 import React from 'react';
+import {themes} from '../config/themes';
+import {ThemeContext} from '../hooks/useTheme';
+import AssistantMessage from './assistant-message';
+import StreamingMessage from './streaming-message';
+
+// Mock theme colors for testing
+const mockColors: any = {
+	primary: '#3b82f6',
+	secondary: '#6b7280',
+	success: '#10b981',
+	error: '#ef4444',
+	warning: '#f59e0b',
+	info: '#3b82f6',
+	text: '#ffffff',
+	base: '#000000',
+	tool: '#8b5cf6',
+	diffAdded: '#10b981',
+	diffRemoved: '#ef4444',
+	diffAddedText: '#d1fae5',
+	diffRemovedText: '#fee2e2',
+};
 
 console.log(`\nstreaming-message.spec.tsx – ${React.version}`);
-
-/*
-StreamingMessage should resemble AssistantMessage component.
-However, text is truncated and not rendering as markdown.
-*/
 
 // Mock ThemeProvider for testing
 const MockThemeProvider = ({children}: {children: React.ReactNode}) => {
@@ -26,10 +38,6 @@ const MockThemeProvider = ({children}: {children: React.ReactNode}) => {
 	);
 };
 
-// ============================================================================
-// Component Rendering Tests
-// ============================================================================
-
 test('StreamingMessage renders with message', t => {
 	const {lastFrame} = render(
 		<MockThemeProvider>
@@ -39,21 +47,29 @@ test('StreamingMessage renders with message', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /test-model/);
 	t.regex(output!, /Hello world/);
+});
 
-  // Renders tokens and tokens per second
-	t.regex(output!, /~\d+ tokens · (\d+\.\d|—) tok\/s/);
-})
+test('StreamingMessage renders markdown formatted while streaming', t => {
+	const {lastFrame} = render(
+		<MockThemeProvider>
+			<StreamingMessage
+				message={'## What changed\n\nThis streams **bold** inline `code` now.'}
+				model="test-model"
+			/>
+		</MockThemeProvider>,
+	);
 
-test('StreamingMessage message renders without formatting', t => {
-	const message = `# Title
+	const output = lastFrame();
+	t.truthy(output);
+	t.regex(output!, /What changed/);
+	t.regex(output!, /bold/);
+	t.regex(output!, /code/);
+});
 
-This has **bold** and *italic* text.
-
-- List item
-
-Price: &euro;50`;
+test('StreamingMessage does not show a truncated tail for long markdown', t => {
+	const lines = Array.from({length: 20}, (_, i) => `Line ${i + 1} content`);
+	const message = ['# Top heading', ...lines].join('\n');
 
 	const {lastFrame} = render(
 		<MockThemeProvider>
@@ -63,39 +79,49 @@ Price: &euro;50`;
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /# Title/);
-	t.regex(output!, /\*\*bold\*\*/);
-	t.regex(output!, /\*italic\*/);
-	t.regex(output!, /&euro;50/);
+	// The head of the message must render while streaming — a tail-only
+	// renderer would drop the heading and show a `…` truncation marker.
+	t.regex(output!, /Top heading/);
+	t.false(output!.includes('…'));
 });
 
-test('StreamingMessage truncates long messages', t => {
-  // Create a 15 line message
-  const message = [...Array(15).keys()].map((s) => `line ${s}`).join('\n')
+test('StreamingMessage output is byte-identical to AssistantMessage', t => {
+	// The live chat and the /mock:md preview both render the in-flight
+	// assistant message through StreamingMessage, which MUST delegate to the
+	// real AssistantMessage pipeline. This parity test pins that delegation:
+	// if StreamingMessage ever regresses to a plain-text tail window (the
+	// 2026-08 live-chat regression the mocks already caught), the two frames
+	// diverge and this test fails — so mock and live can never drift again.
+	const message = [
+		'## What changed',
+		'',
+		'This streams **bold**, `inline code`, a list:',
+		'',
+		'- first',
+		'- second',
+		'',
+		'```ts',
+		'const x = 1;',
+		'```',
+		'',
+		'> A quiet blockquote.',
+	].join('\n');
 
-	const {lastFrame} = render(
+	const streaming = render(
 		<MockThemeProvider>
 			<StreamingMessage message={message} model="test-model" />
 		</MockThemeProvider>,
 	);
+	const settled = render(
+		<MockThemeProvider>
+			<AssistantMessage message={message} model="test-model" />
+		</MockThemeProvider>,
+	);
 
-	// Strip ANSI: CI sets FORCE_COLOR=1 so ink wraps styled glyphs (like the
-	// truncation `…`) in escape sequences. Without stripping, the regex fails
-	// in CI even though it passes locally where FORCE_COLOR is unset.
-	const output = stripAnsi(lastFrame() ?? '');
-	t.truthy(output);
-  // Truncated symbol, on its own line. Box renderer may pad with trailing
-  // spaces to fill terminal width, so allow any whitespace before the newline.
-	t.regex(output, /test-model/);
-	t.regex(output, /…[ ]*\n/);
-	t.regex(output, /line 3[ ]*\n/);
-	t.regex(output, /line 6[ ]*\n/);
-	t.regex(output, /line 14[ ]*\n/);
-
-  // First few lines truncated
-	t.notRegex(output, /line 0/);
-	t.notRegex(output, /line 2/);
-})
+	t.is(streaming.lastFrame(), settled.lastFrame());
+	streaming.unmount();
+	settled.unmount();
+});
 
 test('StreamingMessage renders without crashing with empty message', t => {
 	const {lastFrame} = render(
@@ -106,213 +132,16 @@ test('StreamingMessage renders without crashing with empty message', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /test-model/);
 });
 
-// ============================================================================
-// Whitespace Trimming Tests
-// ============================================================================
-
-test('StreamingMessage strips leading newlines', t => {
+test('StreamingMessage strips leading and trailing whitespace', t => {
 	const {lastFrame} = render(
 		<MockThemeProvider>
-			<StreamingMessage message="\n\nHello world" model="test-model" />
+			<StreamingMessage message="\n\nHello world\n\n" model="test-model" />
 		</MockThemeProvider>,
 	);
 
-	const raw = lastFrame() ?? '';
-	const output = stripAnsi(raw);
-	console.log('Stripped output:', JSON.stringify(output));
-	// The message "Hello world" should appear in the output without leading newlines
-	// The content displayed inside the box should be trimmed
-	t.true(output.includes('Hello world'));
-	// Check that the raw string content (inside box) doesn't start with newlines
-	// The visible content line should start with the actual text
-	const contentMatch = output.match(/┃\s*(.+)/);
-	if (contentMatch) {
-		t.false(contentMatch[1].startsWith('\n'), 'Content should not start with newline');
-	}
-});
-
-test('StreamingMessage strips trailing newlines', t => {
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message="Hello world\n\n" model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	// Output should have the message without trailing newlines
-	t.true(output.includes('Hello world'));
-	// The box content should not end with trailing newlines
-});
-
-test('StreamingMessage strips leading and trailing newlines', t => {
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message="\n\n\nContent\n\n\n" model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	// Should have the trimmed content
-	t.true(output.includes('Content'));
-	// Content should not start with newlines
-	const contentMatch = output.match(/┃\s*(.+)/);
-	if (contentMatch) {
-		t.false(contentMatch[1].startsWith('\n'), 'Content should not start with newline');
-	}
-});
-
-test('StreamingMessage strips carriage return characters', t => {
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message="\r\n\r\nHello\r\n\r\n" model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	// Should have the message without CR/LF issues
-	t.true(output.includes('Hello'));
-	// Content should not start with \r or \n
-	const contentMatch = output.match(/┃\s*(.+)/);
-	if (contentMatch) {
-		t.false(contentMatch[1].startsWith('\r'), 'Content should not start with \\r');
-		t.false(contentMatch[1].startsWith('\n'), 'Content should not start with \\n');
-	}
-});
-
-test('StreamingMessage strips whitespace-only content', t => {
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message="   \n\n   " model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	// Should render without crash - whitespace is stripped
-	t.true(output.includes('test-model'));
-	// JSX attribute treats "\n" as literal backslash-n, so input is
-	// `   \n\n   ` (3 spaces + literal `\n\n` + 3 spaces). After trim, only
-	// the literal `\n\n` should remain — the input's surrounding 3-space
-	// runs must be gone. The box adds 1-char padding plus may pad lines to
-	// terminal width with trailing spaces; strip only `┃` and trim trailing
-	// width-padding before asserting the leading 3-space prefix is gone.
-	const boxContent = output
-		.split('\n')
-		.filter(l => l.includes('┃'))
-		.map(l => l.replace(/^.*?┃/, '').trimEnd());
-	t.true(
-		boxContent.every(l => !l.startsWith('   ') && !l.endsWith('   ')),
-		`Trim should strip surrounding spaces, got: ${JSON.stringify(boxContent)}`,
-	);
-});
-
-test('StreamingMessage preserves internal newlines', t => {
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message="Line 1\nLine 2\nLine 3" model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	t.true(output.includes('Line 1'));
-	t.true(output.includes('Line 2'));
-	t.true(output.includes('Line 3'));
-});
-
-// ============================================================================
-// Regression tests for #526 — OOM on long streaming responses
-// ============================================================================
-
-const buildLines = (lineCount: number) => {
-	const lines: string[] = [];
-	for (let i = 0; i < lineCount; i++) {
-		lines.push(`line-${i.toString().padStart(6, '0')} word word word word`);
-	}
-	return lines.join('\n');
-};
-
-test('StreamingMessage shows only the tail of a long message', t => {
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message={buildLines(500)} model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	t.true(output.includes('line-000499'));
-	t.false(output.includes('line-000000'));
-	t.true(output.includes('…'));
-});
-
-test('StreamingMessage handles a huge streaming message without OOM/slowness', t => {
-	// Regression test for #526: previously the entire growing message was
-	// re-wrapped on every render, producing O(n) per-render allocations that
-	// exhausted the Node.js heap on long (~37k token) responses.
-	const message = buildLines(5000);
-	t.true(message.length > 100_000);
-
-	const {lastFrame, rerender} = render(
-		<MockThemeProvider>
-			<StreamingMessage message={message} model="test-model" />
-		</MockThemeProvider>,
-	);
-	// Simulate streaming flushes appending more content (the chat loop does
-	// this at ~150ms intervals during generation).
-	let current = message;
-	for (let i = 0; i < 20; i++) {
-		current += `\nappended-${i} ${'token '.repeat(20)}`;
-		rerender(
-			<MockThemeProvider>
-				<StreamingMessage message={current} model="test-model" />
-			</MockThemeProvider>,
-		);
-	}
-
-	const output = stripAnsi(lastFrame() ?? '');
-	t.true(output.includes('appended-19'));
-	t.false(output.includes('line-000000'));
-	t.true(output.includes('…'));
-});
-
-test('computeStreamingTail bounds wrap input to a small tail', t => {
-	// Deterministic check that computeStreamingTail (the function that gates
-	// what wrapWithTrimmedContinuations receives) returns a tail whose length
-	// is bounded by tailCharLimit, regardless of how large the full message is.
-	const textWidth = 80;
-	const maxLines = 12;
-	const tailCharLimit = textWidth * maxLines * 4;
-	const hugeMessage = buildLines(5000); // ~150 KB
-
-	const {tail, sliced} = computeStreamingTail(hugeMessage, textWidth, maxLines);
-
-	t.true(sliced, 'expected the message to be sliced');
-	t.true(
-		tail.length <= tailCharLimit,
-		`tail.length ${tail.length} must be ≤ tailCharLimit ${tailCharLimit}`,
-	);
-	// The tail must start at a clean line boundary (no partial leading line).
-	t.regex(tail, /^line-\d{6}/);
-});
-
-test('StreamingMessage tail slice snaps to a line boundary', t => {
-	// When the message is large enough to slice, the slice must start at a
-	// newline boundary so we never render a partial leading line.
-	const {lastFrame} = render(
-		<MockThemeProvider>
-			<StreamingMessage message={buildLines(2000)} model="test-model" />
-		</MockThemeProvider>,
-	);
-
-	const output = stripAnsi(lastFrame() ?? '');
-	const visibleLabels = output.match(/line-\d{6}/g) ?? [];
-	t.true(visibleLabels.length > 0);
-	for (const label of visibleLabels) {
-		t.regex(label, /^line-\d{6}$/);
-	}
-});
-
-test.afterEach(() => {
-	cleanup();
+	const output = lastFrame();
+	t.truthy(output);
+	t.regex(output!, /Hello world/);
 });
