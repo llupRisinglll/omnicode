@@ -120,13 +120,20 @@ function _parseMarkdownCore(
 	});
 
 	// Links [text](url)
-	result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
-		return (
-			chalk.hex(themeColors.info).underline(text) +
-			' ' +
-			chalk.hex(themeColors.secondary)(`(${url})`)
-		);
-	});
+	// The opening `[` must not be the one inside an ANSI escape sequence
+	// (`\x1b[38;2;…m`) emitted by an earlier formatting step — otherwise a
+	// heading + link in the same message makes the link regex treat the
+	// heading's color code as the link opener and mangle the whole block.
+	result = result.replace(
+		/(?<!\x1b)\[([^\]]+)\]\(([^)]+)\)/g,
+		(_match, text, url) => {
+			return (
+				chalk.hex(themeColors.info).underline(text) +
+				' ' +
+				chalk.hex(themeColors.secondary)(`(${url})`)
+			);
+		},
+	);
 
 	// Blockquotes (> text)
 	result = result.replace(/^>\s+(.+)$/gm, (_match, text) => {
