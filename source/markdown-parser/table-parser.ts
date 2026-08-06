@@ -67,13 +67,22 @@ export function parseMarkdownTable(
 	const paddingWidth = numCols * 2; // 1 space on each side of each column
 	const availableWidth = terminalWidth - borderWidth - paddingWidth;
 
-	// Distribute width proportionally
+	// Column widths: FIT CONTENT by default — a narrow table renders at its
+	// natural content width instead of stretching to the full terminal width.
+	// Only when the content is wider than the available width (narrow
+	// terminal, long cells) do we distribute the available width
+	// proportionally, so rows wrap instead of overflowing the screen.
 	const totalContentWidth = contentWidths.reduce((a, b) => a + b, 0);
+	const fitsContent = totalContentWidth <= availableWidth;
 	const colWidths = contentWidths.map(width =>
-		Math.max(
-			TABLE_COLUMN_MIN_WIDTH,
-			Math.floor((width / totalContentWidth) * availableWidth),
-		),
+		fitsContent
+			// cli-table3 reserves padding-left/right inside each column, so a
+			// cell needs colWidth >= content + 2 to render unwrapped.
+			? Math.max(TABLE_COLUMN_MIN_WIDTH, width + 2)
+			: Math.max(
+					TABLE_COLUMN_MIN_WIDTH,
+					Math.floor((width / totalContentWidth) * availableWidth),
+				),
 	);
 
 	// Create table with cli-table3 - full borders, proper alignment
