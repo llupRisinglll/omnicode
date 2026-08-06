@@ -1,11 +1,22 @@
 import {useEffect, useState} from 'react';
+import {loadPreferences} from '@/config/preferences';
 import {DEFAULT_TERMINAL_COLUMNS} from '@/constants';
 
 type TerminalSize = 'narrow' | 'normal' | 'wide';
 
 // Calculate box width (leave some padding and ensure minimum width).
-export const calculateBoxWidth = (columns: number) =>
-	Math.max(Math.min(columns - 4, 120), 40);
+// Responsive like Codex by default: no cap — content grows with the terminal
+// so wide panes use the full width instead of leaving a dead right margin.
+// A positive `maxWidth` (from the `terminalMaxWidth` preference) caps it for
+// a bounded layout.
+export const calculateBoxWidth = (columns: number, maxWidth?: number) =>
+	Math.max(
+		Math.min(
+			columns - 4,
+			maxWidth && maxWidth > 0 ? maxWidth : Number.POSITIVE_INFINITY,
+		),
+		40,
+	);
 
 /**
  * Decide whether cli.tsx's INLINE-mode resize guard should wipe the screen
@@ -16,10 +27,11 @@ export const calculateBoxWidth = (columns: number) =>
  * matches the physical screen and every repaint composites stale fragments
  * over the live UI (garbled input box / echo). A clear + home fixes that —
  * but only when Ink is guaranteed to rewrite the frame afterwards: any
- * column shrink (Ink resets its last output on shrink), or a growth that
- * changes the computed box width (and thus the rendered output). Wiping
- * without a guaranteed rewrite would leave the screen blank until the next
- * state change. Vertical-only resizes never reflow, so they never wipe.
+ * column change (Ink resets its last output on shrink; growth always changes
+ * the computed box width now that the width cap is gone, so the rendered
+ * output always changes). Wiping without a guaranteed rewrite would leave the
+ * screen blank until the next state change. Vertical-only resizes never
+ * reflow, so they never wipe.
  */
 export const shouldClearOnInlineResize = (
 	previousColumns: number | undefined,
@@ -27,14 +39,19 @@ export const shouldClearOnInlineResize = (
 ): boolean => {
 	if (!currentColumns || !previousColumns) return false;
 	if (currentColumns === previousColumns) return false;
+	const maxWidth = loadPreferences().terminalMaxWidth;
 	return (
 		currentColumns < previousColumns ||
-		calculateBoxWidth(currentColumns) !== calculateBoxWidth(previousColumns)
+		calculateBoxWidth(currentColumns, maxWidth) !==
+			calculateBoxWidth(previousColumns, maxWidth)
 	);
 };
 
 const computeWidth = () =>
-	calculateBoxWidth(process.stdout.columns || DEFAULT_TERMINAL_COLUMNS);
+	calculateBoxWidth(
+		process.stdout.columns || DEFAULT_TERMINAL_COLUMNS,
+		loadPreferences().terminalMaxWidth,
+	);
 
 // A single shared 'resize' listener fans out to every useTerminalWidth
 // consumer. Each hook instance used to attach its own stdout listener, so a
