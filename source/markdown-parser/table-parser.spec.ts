@@ -29,6 +29,39 @@ test('parseMarkdownTable handles simple two-column table', t => {
 	t.true(result.includes('30'));
 });
 
+test('parseMarkdownTable fits content instead of stretching to full width', t => {
+	const table = `| Name | Age |
+|------|-----|
+| John | 25  |
+| Jane | 30  |`;
+	const result = parseMarkdownTable(table, mockColors, 80);
+	const borderLines = result
+		.split('\n')
+		.filter(line => line.includes('─'));
+	t.true(borderLines.length > 0);
+	const maxLine = Math.max(
+		...result.split('\n').map(line => line.replace(/\x1b\[[0-9;]*m/g, '').length),
+	);
+	// Content columns are 4 + 3 wide (+ 2 padding each + 3 borders) — the
+	// table must NOT span the full 80-column width.
+	t.true(maxLine < 30, `expected a compact table, got ${maxLine} columns`);
+});
+
+test('parseMarkdownTable wraps long cells when content exceeds the width', t => {
+	const table = `| A | B |
+|---|--:|
+| Short | ${'x'.repeat(40)} |
+| Longer content | short |`;
+	const result = parseMarkdownTable(table, mockColors, 50);
+	const cleanLines = result
+		.split('\n')
+		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ''));
+	const maxLine = Math.max(...cleanLines.map(line => line.length));
+	// 50 - 3 borders - 4 padding = 43 content columns; rows must wrap, never
+	// overflow the terminal width.
+	t.true(maxLine <= 50, `table overflowed: ${maxLine} columns`);
+});
+
 test('parseMarkdownTable handles table with varying cell lengths', t => {
 	const table = `| Short | Very Long Column Name |
 |-------|----------------------|
