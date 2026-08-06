@@ -121,7 +121,6 @@ const formatAgentProgressTail = (
 	agentName: string,
 	description: string,
 	progress: ReturnType<typeof getSubagentProgress>,
-	options?: {includeToolHistory?: boolean},
 ): string[] => {
 	const details: string[] = [];
 	const statusParts: string[] = [];
@@ -153,11 +152,10 @@ const formatAgentProgressTail = (
 				progress.currentBashExecutionId,
 			),
 		);
-	} else if (
-		options?.includeToolHistory ||
-		progress.status === 'complete' ||
-		progress.status === 'error'
-	) {
+	} else {
+		// Recent tool history streams while running too, so the compact agent
+		// entry carries a live tail (and an expandable +N more lines footer)
+		// exactly like the bash path — never just a one-line stats row.
 		for (const toolName of progress.toolHistory.slice(-3)) {
 			details.push(toolName);
 		}
@@ -201,9 +199,9 @@ const formatCompletedAgentDetails = (
 	}
 	details.push(result.success === false ? 'state:failed' : 'state:completed');
 	details.push(
-		...formatAgentProgressTail(agentName, description, progress, {
-			includeToolHistory: true,
-		}).filter(detail => !detail.startsWith('stats:')),
+		...formatAgentProgressTail(agentName, description, progress).filter(
+			detail => !detail.startsWith('stats:'),
+		),
 	);
 	const stats: string[] = statusParts.slice(1);
 	if (typeof result.executionTimeMs === 'number') {
