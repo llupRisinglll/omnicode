@@ -453,6 +453,12 @@ export interface UserPreferences {
 	/** Max diff lines shown in compact-mode file results. 0 = unlimited. Default 20. */
 	compactDiffMaxLines?: number;
 	/**
+	 * Maximum content width (in columns) for the interactive TUI. Unset or 0 =
+	 * use the full terminal width (Codex-style responsive layout). A positive
+	 * number caps the rendered box width (e.g. 200) for a bounded layout.
+	 */
+	terminalMaxWidth?: number;
+	/**
 	 * Developer mode switch. Enables mock/test features and development-mode
 	 * behavior. Off by default.
 	 */
