@@ -13,6 +13,7 @@ import AssistantReasoning, {
 import InnerDaemonDetails from '@/components/innerdaemon-details';
 import InnerDaemonTrace from '@/components/innerdaemon-trace';
 import ModelSelector from '@/components/model-selector';
+import StreamingMessage from '@/components/streaming-message';
 import {TextSelection} from '@/components/TextSelection';
 import {TaskListDisplay} from '@/components/task-list-display';
 import ToolConfirmation from '@/components/tool-confirmation';
@@ -132,21 +133,21 @@ const MOCK_THOUGHT_RUN_REASONING = [
 ].join('\n');
 
 // A long markdown assistant response for `/mock:md` — long enough that the
-// streaming tail window (StreamingMessage shows the last 12 lines) has
-// something to show before the run completes, with every markdown feature
-// (headings, lists, code, table, blockquote) present in the final render.
+// realtime formatting is visibly streaming before the run completes, with
+// every markdown feature (headings, lists, code, table, blockquote) present
+// in the final render.
 export const MOCK_MD_RESPONSE = [
 	'## What changed',
 	'',
-	'The preview mock now streams a full markdown response exactly like a real model turn: while the run is active, `StreamingMessage` shows the trailing window of the text with a live token / tok-per-sec status; when it completes, the transcript flushes the final `AssistantMessage` with the whole markdown rendered.',
+	'The preview mock now streams a full markdown response exactly like a real model turn: while the run is active, the markdown renders formatted through the same `AssistantMessage` pipeline the live chat uses — headings, lists, code and tables grow in realtime, with no truncated tail window and no `…` marker.',
 	'',
 	'### Why this matters',
 	'',
-	'You can now verify how long markdown behaves **while it renders** (the truncation marker and status line) and **once it is done** (headings, lists, code blocks, tables) without spending provider tokens.',
+	'You can now verify how long markdown behaves **while it renders** (formatted in realtime, exactly as the live chat does) and **once it is done** (headings, lists, code blocks, tables) without spending provider tokens.',
 	'',
 	'1. The run starts and the live region streams the response.',
-	'2. The tail window keeps the render cheap while typing.',
-	'3. On completion the full message renders with markdown.',
+	'2. Markdown renders formatted in realtime as the text grows.',
+	'3. On completion the same formatted message stays in the transcript.',
 	'',
 	'### Code block',
 	'',
@@ -167,9 +168,9 @@ export const MOCK_MD_RESPONSE = [
 	'',
 	'> A blockquote keeps its quiet tone under the assistant column.',
 	'',
-	'The last paragraph is long on purpose: it wraps across several lines so the streaming tail has plenty to show before the run completes, exactly like a verbose real answer that keeps typing past the visible window. It also exercises paragraph wrapping, inline code like `NANOCODER_CONFIG_DIR`, and links like [the fork workflow](/docs/fork-differences.md) in one go.',
+	'The last paragraph is long on purpose: it wraps across several lines while the response streams, exactly like a verbose real answer that keeps typing. It also exercises paragraph wrapping, inline code like `NANOCODER_CONFIG_DIR`, and links like [the fork workflow](/docs/fork-differences.md) in one go.',
 	'',
-	'One more paragraph pushes the message comfortably past the streaming window so the truncated marker and the tail behavior are exercised on every run, not just occasionally.',
+	'One more paragraph keeps the message long enough that the realtime formatting stays visibly active for the full mock run, not just occasionally.',
 ].join('\n');
 
 /**
@@ -1251,7 +1252,6 @@ function makeSubagentCounts(tick: number, runId = 0): CompactToolActivityMap {
 	for (const [index, agent] of SUBAGENTS.entries()) {
 		const toolCount = 1 + ((tick + index) % 4);
 		const tokens = agent.tokenBase + tick * (index + 1) * 23;
-		const elapsed = ((tick + 1) * 0.5 + index * 0.4).toFixed(1);
 		const stream = agent.tool === 'execute_bash' ? bashStream : readStream;
 		const streamedCount = Math.min(
 			stream.length,
@@ -1266,7 +1266,7 @@ function makeSubagentCounts(tick: number, runId = 0): CompactToolActivityMap {
 			details: [`${agent.name}: ${agent.task}`],
 			liveDetails: () => [
 				...stream.slice(0, streamedCount),
-				`stats:running ${agent.tool} · ${toolCount} tool call${toolCount === 1 ? '' : 's'} · ${elapsed}s · ~${tokens.toLocaleString()} tokens`,
+				`stats:running ${agent.tool} · ${toolCount} tool call${toolCount === 1 ? '' : 's'} · preview-model · ~${tokens.toLocaleString()} tokens`,
 			],
 			// Running agents stay grey/blinking for the whole scenario run —
 			// the completed state is a separate phase once the scenario ends.
@@ -2248,10 +2248,11 @@ export function PreviewBody({
 								.map(run => (
 									// The streamed markdown renders FORMATTED as it
 									// arrives (headings/lists/code/table grow each tick)
-									// through the real AssistantMessage pipeline — no
+									// through the SAME component the live chat uses
+									// (StreamingMessage → AssistantMessage) — no
 									// plain-text tail window, no truncation dots. The
 									// completed message flushes the same shape.
-									<AssistantMessage
+									<StreamingMessage
 										key={run.runId}
 										message={streamedMarkdownByTick(tick)}
 										model="preview"
