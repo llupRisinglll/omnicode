@@ -1252,7 +1252,6 @@ function makeSubagentCounts(tick: number, runId = 0): CompactToolActivityMap {
 	for (const [index, agent] of SUBAGENTS.entries()) {
 		const toolCount = 1 + ((tick + index) % 4);
 		const tokens = agent.tokenBase + tick * (index + 1) * 23;
-		const elapsed = ((tick + 1) * 0.5 + index * 0.4).toFixed(1);
 		const stream = agent.tool === 'execute_bash' ? bashStream : readStream;
 		const streamedCount = Math.min(
 			stream.length,
@@ -1267,7 +1266,7 @@ function makeSubagentCounts(tick: number, runId = 0): CompactToolActivityMap {
 			details: [`${agent.name}: ${agent.task}`],
 			liveDetails: () => [
 				...stream.slice(0, streamedCount),
-				`stats:running ${agent.tool} · ${toolCount} tool call${toolCount === 1 ? '' : 's'} · ${elapsed}s · ~${tokens.toLocaleString()} tokens`,
+				`stats:running ${agent.tool} · ${toolCount} tool call${toolCount === 1 ? '' : 's'} · preview-model · ~${tokens.toLocaleString()} tokens`,
 			],
 			// Running agents stay grey/blinking for the whole scenario run —
 			// the completed state is a separate phase once the scenario ends.

@@ -280,6 +280,13 @@ export function InteractiveApp({
 	const terminalRows = useTerminalRows();
 	const terminalWidth = useTerminalWidth();
 	const backgroundTaskCount = useBackgroundTaskCount();
+	// Running-agent tally for the mode line (agents: N) — mirrors the preview
+	// mock's status count so live and mock footers render identically.
+	const agentCount = React.useMemo(() => {
+		const counts = appState.compactToolCounts;
+		if (!counts) return 0;
+		return Object.keys(counts).filter(key => key.startsWith('agent:')).length;
+	}, [appState.compactToolCounts]);
 	const statusLineConfig = loadPreferences().statusLine;
 	const statusInfo = useMemo(() => {
 		let git:
@@ -521,6 +528,8 @@ export function InteractiveApp({
 					!appState.planReviewState?.show && (
 						<UIStateProvider>
 							<ChatInput
+								agentCount={agentCount}
+								backgroundCount={backgroundTaskCount}
 								isCancelling={appState.isCancelling}
 								isToolExecuting={appState.isToolExecuting}
 								isQuestionMode={appState.isQuestionMode}

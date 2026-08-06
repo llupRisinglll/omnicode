@@ -1081,6 +1081,7 @@ test.serial(
 		t.truthy(runningKey);
 		const liveDetails = latestRunning[runningKey!].liveDetails();
 		t.deepEqual(liveDetails, [
+			'read_file',
 			'stats:running read_file · 1 tool call · ~42 tokens',
 		]);
 

@@ -56,6 +56,19 @@ test('ChatInput shows UserInput when ready for input', t => {
 	unmount();
 });
 
+test('ChatInput forwards agent and background counts to the mode line footer', t => {
+	const props = createDefaultProps({
+		agentCount: 3,
+		backgroundCount: 2,
+	});
+
+	const {lastFrame, unmount} = renderWithTheme(<ChatInput {...props} />);
+	const output = lastFrame() ?? '';
+	t.regex(output, /agents: 3/);
+	t.regex(output, /bg: 2/);
+	unmount();
+});
+
 test('ChatInput shows loading spinner when not initialized', t => {
 	const props = createDefaultProps({
 		mcpInitialized: false,

@@ -69,6 +69,10 @@ export interface ChatInputProps {
 	contextPercentUsed: number | null;
 	contextSource: ContextSource | null;
 	sessionName?: string;
+	/** Running subagent tally for the mode line footer (`agents: N`). */
+	agentCount?: number;
+	/** Running background-task tally for the mode line footer (`bg: N`). */
+	backgroundCount?: number;
 
 	// Tool display
 	onToggleCompactDisplay?: () => void;
@@ -132,6 +136,8 @@ export function ChatInput({
 	contextPercentUsed,
 	contextSource,
 	sessionName,
+	agentCount = 0,
+	backgroundCount = 0,
 	onToggleCompactDisplay,
 	compactToolDisplay,
 	liveCompactCounts,
@@ -215,6 +221,8 @@ export function ChatInput({
 						contextPercentUsed={contextPercentUsed}
 						contextSource={contextSource}
 						sessionName={sessionName}
+						agentCount={agentCount}
+						backgroundCount={backgroundCount}
 						tune={tune}
 						currentModel={currentModel}
 						statusInfo={statusInfo}
