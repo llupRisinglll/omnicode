@@ -14,6 +14,7 @@ import {
 	LiveCompactRunningSummary,
 	displayCompactCountsSummary,
 	displayToolResult,
+	getCompactDisplayToolName,
 	getCompactToolDetail,
 	getCompactToolRunningSummary,
 	getLiveCompactToolExpandHitboxColumns,
@@ -227,6 +228,16 @@ test('getCompactToolDetail extracts the target path for file-edit tools', t => {
 	);
 	// Missing path → no single detail (falls through to the tally).
 	t.is(getCompactToolDetail('string_replace', {}), null);
+});
+
+test('user-invoked direct bash renders as "Executed Bash" with the command detail', t => {
+	t.is(getCompactDisplayToolName('execute_bash:user'), 'Executed Bash');
+	t.is(
+		getCompactToolDetail('execute_bash:user', {command: 'npm run build'})
+			?.detail,
+		'npm run build',
+	);
+	t.is(getCompactToolDetail('execute_bash:user', {}), null);
 });
 
 test('displayToolResult - compact mode condenses a validation failure too', async t => {

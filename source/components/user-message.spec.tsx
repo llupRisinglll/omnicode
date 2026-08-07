@@ -37,6 +37,26 @@ test('UserMessage renders with basic message', t => {
 	t.regex(output!, /Hello world/);
 });
 
+test('UserMessage highlights a leading slash command in the primary color', async t => {
+	// Force truecolor ANSI just for this render (chalk is a shared singleton,
+	// so re-level it around the render and restore for the other tests).
+	const {default: chalk} = await import('chalk');
+	chalk.level = 3;
+	const {lastFrame} = render(
+		<MockThemeProvider>
+			<UserMessage message="/worktree purpose: adding more tests" />
+		</MockThemeProvider>,
+	);
+	chalk.level = 0;
+
+	const output = lastFrame() ?? '';
+	// The leading command token renders in the prompt's primary color
+	// (#bb9af7 → 38;2;187;154;247); its arguments stay in the message text
+	// color (#c0caf5 → 38;2;192;202;245).
+	t.regex(output, /\x1b\[38;2;187;154;247m\/worktree/);
+	t.regex(output, /\x1b\[38;2;192;202;245m purpose: adding more tests/);
+});
+
 test('UserMessage renders without file placeholders', t => {
 	const {lastFrame} = render(
 		<MockThemeProvider>

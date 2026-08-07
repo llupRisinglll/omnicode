@@ -194,6 +194,12 @@ export function getCompactDisplayToolName(
 	if (toolName.startsWith('agent:')) {
 		return getAgentCompactDisplayName(activity);
 	}
+	// User-invoked direct bash (`! command`) renders as "Executed Bash" so it
+	// reads as an action the user took, distinct from the model's own Bash tool
+	// calls.
+	if (toolName === 'execute_bash:user') {
+		return 'Executed Bash';
+	}
 	return displayForFormat(toolName, 'claude-code');
 }
 
@@ -877,7 +883,10 @@ export function CompactToolActivityBlock({
 				detailPreview.lines.map((line, index) => (
 					<Text
 						key={`${index}-${line.text.slice(0, 24)}`}
-						color={effectiveExpanded ? colors.text : undefined}
+						// Color on the outer Text so wrapped continuation lines of
+						// a long detail keep the muted grey (nested inner Text
+						// only styles the first physical line).
+						color={effectiveExpanded ? colors.text : colors.secondary}
 						backgroundColor={activeBackground}
 					>
 						<Text
@@ -1153,6 +1162,10 @@ export function getCompactToolDetail(
 
 	switch (toolName) {
 		case 'execute_bash': {
+			const command = str(args.command);
+			return command ? {detail: command} : null;
+		}
+		case 'execute_bash:user': {
 			const command = str(args.command);
 			return command ? {detail: command} : null;
 		}
@@ -1487,19 +1500,18 @@ export function CompactDetailResult({
 				)}
 			</Box>
 			{previewLines.map((line, i) => (
-				<Text key={`preview-${i}-${line.slice(0, 16)}`}>
-					<Text
-						color={effectiveExpanded || bright ? colors.text : colors.secondary}
-						dimColor={effectiveExpanded || bright}
-					>
+				// The color lives on the OUTER Text so long lines that wrap keep
+				// the muted preview color on every continuation line — a nested
+				// inner Text only styles the first physical line (Ink wrap
+				// quirk), leaving the rest in the terminal's default white.
+				<Text
+					key={`preview-${i}-${line.slice(0, 16)}`}
+					color={effectiveExpanded || bright ? colors.text : colors.secondary}
+				>
+					<Text dimColor={effectiveExpanded || bright}>
 						{i === 0 ? '  └   ' : '      '}
 					</Text>
-					<Text
-						wrap="truncate-end"
-						color={effectiveExpanded || bright ? colors.text : colors.secondary}
-					>
-						{line || ' '}
-					</Text>
+					<Text wrap="truncate-end">{line || ' '}</Text>
 				</Text>
 			))}
 			{hiddenCount > 0 && (
