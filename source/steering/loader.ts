@@ -77,6 +77,9 @@ function parseCondition(raw: unknown): SteeringCondition | undefined {
 		cond.userTriggeredSkill = asString(o.userTriggeredSkill);
 	if (o.userTaskKind) cond.userTaskKind = asString(o.userTaskKind) as never;
 	if (o.pathMatches) cond.pathMatches = asString(o.pathMatches);
+	if (o.backgroundTasksRunning !== undefined) {
+		cond.backgroundTasksRunning = o.backgroundTasksRunning === true;
+	}
 	if (o.cwdIn) {
 		const arr = asStringArray(o.cwdIn);
 		if (arr) cond.cwdIn = arr;

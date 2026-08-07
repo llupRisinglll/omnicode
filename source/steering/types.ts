@@ -78,6 +78,14 @@ export interface TurnFact {
 	/** First-line digest of the error content, when {@link hadError}. */
 	errorMessageDigest?: string;
 	/**
+	 * Whether a background bash task is currently running at the turn boundary
+	 * (e.g. an auto-backgrounded worktree script). Lets steering rules know the
+	 * model may legitimately be waiting on long-running work instead of idling
+	 * — a rule that pressures progress can gate on `backgroundTasksRunning:
+	 * false` so it doesn't fire REPRO BLOCKER-style stops mid-task.
+	 */
+	backgroundTasksRunning?: boolean;
+	/**
 	 * Slash command the user invoked at the start of this loop, if any
 	 * (e.g. `'worktree'`). Set by the command-integration path; used by
 	 * `condition.userTriggeredSkill`.
@@ -117,6 +125,13 @@ export interface SteeringCondition {
 	userTaskKind?: UserTaskKind;
 	/** A tool edited a path matching this glob (e.g. `'ui/**'`). */
 	pathMatches?: string;
+	/**
+	 * Require the background-task state at the turn boundary to equal this
+	 * value. `true` matches only while a background bash task is running,
+	 * `false` only when none are. Lets rules pause while long-running work is
+	 * in flight (and resume once it finishes).
+	 */
+	backgroundTasksRunning?: boolean;
 	/** Current working directory must match this glob. */
 	cwdIn?: ModelGlob[];
 	/**

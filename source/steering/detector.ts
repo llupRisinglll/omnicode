@@ -113,6 +113,12 @@ export function conditionMatches(
 	if (condition.userTaskKind && fact.userTaskKind !== condition.userTaskKind) {
 		return false;
 	}
+	if (
+		condition.backgroundTasksRunning !== undefined &&
+		Boolean(fact.backgroundTasksRunning) !== condition.backgroundTasksRunning
+	) {
+		return false;
+	}
 	if (condition.cwdIn && fact.cwd) {
 		if (!modelMatchesAny(fact.cwd, condition.cwdIn)) return false;
 	} else if (condition.cwdIn && !fact.cwd) {

@@ -646,7 +646,11 @@ export function useChatHandler({
 		// keyed on `userTriggeredSkill` can fire for this conversation loop.
 		const commandMatch = /^\s*\/([a-zA-Z0-9:_-]+)/.exec(message);
 		userTriggeredSkillRef.current = commandMatch ? commandMatch[1] : undefined;
-		userTaskKindRef.current = classifyUserTask(message);
+		// Classify the USER's own words (the display version), never the
+		// expanded command text: expansion boilerplate (e.g. "Use staging for
+		// normal feature and bug-fix work") can contain false bug keywords that
+		// misclassify a routine task as bug-reproduction.
+		userTaskKindRef.current = classifyUserTask(displayValue ?? message);
 
 		// The submit chain hands us the display version (with [@file]
 		// placeholders) alongside the fully assembled message. Use it directly

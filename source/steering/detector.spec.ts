@@ -101,6 +101,22 @@ test('conditionMatches: task kind and recursive negation', t => {
 	);
 });
 
+test('conditionMatches: backgroundTasksRunning gates on the fact flag', t => {
+	const busyFact = makeFact({backgroundTasksRunning: true});
+	t.true(conditionMatches({backgroundTasksRunning: true}, MIMO, busyFact));
+	t.false(conditionMatches({backgroundTasksRunning: false}, MIMO, busyFact));
+
+	const idleFact = makeFact({backgroundTasksRunning: false});
+	t.true(conditionMatches({backgroundTasksRunning: false}, MIMO, idleFact));
+	t.false(conditionMatches({backgroundTasksRunning: true}, MIMO, idleFact));
+
+	// Absent fact flag behaves like false; a rule with no condition still matches.
+	t.true(
+		conditionMatches({backgroundTasksRunning: false}, MIMO, makeFact({})),
+	);
+	t.true(conditionMatches({}, MIMO, busyFact));
+});
+
 test('modelMatchesGlob: contains wildcard', t => {
 	t.true(modelMatchesGlob('gpt-4o-mini-2024', '*mini*'));
 });

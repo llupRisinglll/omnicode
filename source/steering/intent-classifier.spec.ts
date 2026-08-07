@@ -17,6 +17,25 @@ test('classifyUserTask keeps reproduction distinct from general investigation', 
 	t.is(classifyUserTask('How does authentication work?'), 'question');
 });
 
+test('classifyUserTask ignores command-expansion boilerplate in the raw user input', t => {
+	// The user's OWN words determine the task kind. An expanded command's
+	// instructions (e.g. worktree.md's "Use staging for normal feature and
+	// bug-fix work") contain false bug keywords that must not classify a
+	// routine worktree/test task as bug-reproduction.
+	t.is(classifyUserTask('/worktree purpose: adding more tests'), 'unknown');
+	t.is(
+		classifyUserTask('Create a Hilinga worktree for purpose: adding more tests'),
+		'implementation',
+	);
+	t.is(
+		classifyUserTask(
+			'Use staging for normal feature and bug-fix work. purpose: adding more tests',
+		),
+		'bug-reproduction',
+		'expanded boilerplate alone would misclassify — callers must pass the raw input',
+	);
+});
+
 test('explore delegation stays reproduce despite setup keywords in its prompt', t => {
 	t.is(
 		classifyIntent([
