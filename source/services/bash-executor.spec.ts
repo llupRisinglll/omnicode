@@ -528,6 +528,16 @@ test('getActiveBackgroundCount() counts only background executions', async t => 
 	await Promise.all([foreground.promise, background.promise]);
 });
 
+test('getActiveBackgroundCount() excludes completed background executions', async t => {
+	const executor = createExecutor();
+	const {promise} = executor.execute('printf done', {background: true});
+	t.is(executor.getActiveBackgroundCount(), 1);
+	await promise;
+	// The 'complete' event fires before the entry leaves the map; the count
+	// must already exclude it so `bg: n` drops the moment a task finishes.
+	t.is(executor.getActiveBackgroundCount(), 0);
+});
+
 test('background command completes when an inherited output pipe outlives its shell', async t => {
 	const executor = createExecutor();
 	const start = Date.now();

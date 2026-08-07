@@ -3,6 +3,7 @@ import {Text} from 'ink';
 import React from 'react';
 import type {Message} from '@/types';
 import {renderWithTheme} from '../../test-utils/render-with-theme.js';
+import {bashExecutor} from '@/services/bash-executor';
 import {InteractiveApp} from './interactive-app.js';
 
 console.log(`\ninteractive-app.spec.tsx – ${React.version}`);
@@ -26,6 +27,7 @@ interface Overrides {
 	messages?: Message[];
 	updateMessages?: (messages: Message[]) => void;
 	chatComponents?: React.ReactNode[];
+	addToChatQueue?: (component: React.ReactNode) => void;
 	setChatComponents?: (components: React.ReactNode[]) => void;
 	setIsCancelling?: (value: boolean) => void;
 	setAbortController?: (controller: AbortController | null) => void;
@@ -88,7 +90,7 @@ function makeProps(o: Overrides = {}) {
 		setCompactToolDisplay: noop,
 		setCompactToolCounts: noop,
 		setReasoningExpanded: noop,
-		addToChatQueue: noop,
+		addToChatQueue: o.addToChatQueue ?? noop,
 		updateMessages: o.updateMessages ?? noop,
 		setChatComponents: o.setChatComponents ?? noop,
 		setIsCancelling: o.setIsCancelling ?? noop,
@@ -642,6 +644,110 @@ test('ChatInput is NOT rendered while plan review bar is showing', t => {
 	// The ChatInput prompt line should be absent — both inputs must not be
 	// active at the same time (double-input blocker).
 	t.notRegex(output, /What now\?/);
+});
+
+// ============================================================================
+// Status-line badge focus (↓ enters the badges, Enter opens details)
+// ============================================================================
+
+test('down arrow at the input bottom focuses the bg badge and Enter opens its details', async t => {
+	const execution = bashExecutor.execute('sleep 30', {
+		background: true,
+	});
+	try {
+		const {stdin, lastFrame, unmount} = renderWithTheme(
+			<InteractiveApp {...makeProps({startChat: true, client: {}})} />,
+		);
+		await tickInteractive();
+
+		// ↓ at the bottom of the input enters the status-line badges. With no
+		// agents running, bg is the first (and only) badge.
+		stdin.write('\u001B[B');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		stdin.write('\r');
+		await waitForCondition(() => lastFrame()!.includes('Background Task Details'));
+
+		const output = lastFrame()!;
+		t.regex(output, /Background Task Details/);
+		t.regex(output, /Command: sleep 30/);
+		// The details panel REPLACES the input (its ESC/arrow handlers must not
+		// reach the prompt behind the modal).
+		t.notRegex(output, /commands, ! bash/);
+
+		// Esc closes the details panel; the badge still holds focus.
+		await pressEscape(stdin);
+		await tickInteractive();
+		t.notRegex(lastFrame()!, /Background Task Details/);
+		t.regex(lastFrame()!, /commands, ! bash/, 'input returns after the panel closes');
+
+		unmount();
+	} finally {
+		bashExecutor.cancelAll();
+	}
+});
+
+test('bg details panel lists only active tasks, never completed ones', async t => {
+	const active = bashExecutor.execute('sleep 30', {
+		background: true,
+	});
+	const done = bashExecutor.execute('printf done', {
+		background: true,
+	});
+	await done.promise;
+	try {
+		const {stdin, lastFrame, unmount} = renderWithTheme(
+			<InteractiveApp {...makeProps({startChat: true, client: {}})} />,
+		);
+		await tickInteractive();
+
+		stdin.write('\u001B[B');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		stdin.write('\r');
+		await waitForCondition(() => lastFrame()!.includes('Background Task Details'));
+
+		const output = lastFrame()!;
+		t.regex(output, /Command: sleep 30/, 'active task is listed');
+		t.notRegex(output, /Command: printf done/, 'completed task is excluded');
+		unmount();
+	} finally {
+		bashExecutor.cancelAll();
+	}
+});
+
+test('a completed background task queues a completion indicator in the transcript', async t => {
+	const execution = bashExecutor.execute('sleep 0.3; printf done', {
+		background: true,
+	});
+	try {
+		const components: React.ReactNode[] = [];
+		const {lastFrame, unmount} = renderWithTheme(
+			<InteractiveApp
+				{...makeProps({
+					startChat: true,
+					client: {},
+					chatComponents: components,
+					addToChatQueue: node => {
+						components.push(node);
+					},
+				})}
+			/>,
+		);
+		// The transcript frame in this harness doesn't re-render async-queued
+		// chat components, so assert the queue received the real SuccessMessage
+		// with the live wording (ChatHistory rendering is covered elsewhere).
+		await waitForCondition(() => components.length === 1, 5000);
+		t.is(components.length, 1);
+		const {lastFrame: indicatorFrame, unmount: indicatorUnmount} =
+			renderWithTheme(components[0] as React.ReactElement);
+		t.regex(
+			indicatorFrame()!,
+			/Background task completed: sleep 0\.3; printf done · exit 0/,
+		);
+		indicatorUnmount();
+		unmount();
+	} finally {
+		bashExecutor.cancelAll();
+	}
 });
 
 // FileExplorer/IdeSelector start watchers that keep the event loop alive

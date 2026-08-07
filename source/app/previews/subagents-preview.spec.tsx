@@ -322,6 +322,66 @@ test('subagents preview tools compacted groups expand to the individual entries'
 	}
 });
 
+test('subagents preview tools shows the Web Search fallback indicator when a fallback model is configured', async t => {
+	const {existsSync, mkdtempSync, rmSync, writeFileSync} = await import(
+		'node:fs'
+	);
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache} = await import('@/config/preferences');
+	const {clearAppConfig} = await import('@/config/index');
+
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-preview-search-'));
+	writeFileSync(
+		join(testConfigDir, 'nanocoder-preferences.json'),
+		JSON.stringify({webSearchModel: 'deepseek-v4-flash'}),
+		'utf-8',
+	);
+	const previousConfigDir = process.env.NANOCODER_CONFIG_DIR;
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	clearAppConfig();
+
+	const origRows = process.stdout.rows;
+	process.stdout.rows = 80;
+	const {stdin, lastFrame, unmount} = render(
+		<SubagentsPreviewApp mockRunMs={120} />,
+	);
+	process.stdout.rows = origRows;
+	try {
+		await delay(250);
+		stdin.write('clear');
+		await delay(50);
+		stdin.write('\r');
+		await delay(100);
+		stdin.write('mock:tools');
+		await delay(50);
+		stdin.write('\r');
+		await delay(500);
+
+		const output = lastFrame()!;
+		// One indicator per web_search call, mirroring the live executor line.
+		t.is(
+			(output.match(/✦ WebSearch fallback: deepseek-v4-flash searched/g) ?? [])
+				.length,
+			2,
+		);
+		t.regex(output, /→ preview model responds/);
+	} finally {
+		unmount();
+		if (previousConfigDir === undefined) {
+			delete process.env.NANOCODER_CONFIG_DIR;
+		} else {
+			process.env.NANOCODER_CONFIG_DIR = previousConfigDir;
+		}
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
+});
+
 test('subagents preview thoughtrun compacted bash ×3 expands to 3 individual calls', async t => {
 	const origRows = process.stdout.rows;
 	process.stdout.rows = 80;
@@ -509,6 +569,36 @@ test('subagents preview clear starts a fresh conversation and resets mock state'
 		t.notRegex(cleared, /bg: 2/, 'background indicator cleared');
 		t.notRegex(cleared, /agents: 3/, 'agents indicator cleared');
 		t.notRegex(cleared, /vite v5\.4\.2/, 'background task blocks cleared');
+	} finally {
+		unmount();
+	}
+});
+
+test('subagents preview completes a background task and shows the completion indicator', async t => {
+	const origRows = process.stdout.rows;
+	process.stdout.rows = 80;
+	const {stdin, lastFrame, unmount} = render(<SubagentsPreviewApp />);
+	process.stdout.rows = origRows;
+	try {
+		// Let the auto-started subagents scenario finish, then start one bg task.
+		await delay(250);
+		stdin.write('clear');
+		await delay(50);
+		stdin.write('\r');
+		await delay(100);
+		stdin.write('mock:bg 1');
+		await delay(50);
+		stdin.write('\r');
+		await delay(300);
+		t.regex(lastFrame()!, /bg: 1/);
+
+		// After MOCK_BG_COMPLETE_MS the task completes: the badge drops and
+		// the same "Background task completed" line the live app queues lands
+		// in the transcript (real SuccessMessage component).
+		await delay(6300);
+		const output = lastFrame()!;
+		t.regex(output, /Background task completed: npm run dev · exit 0/);
+		t.notRegex(output, /bg: 1/);
 	} finally {
 		unmount();
 	}
