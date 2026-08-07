@@ -337,12 +337,56 @@ test.serial(
 		t.true(runningCounts.length > 0);
 		const firstRunning = runningCounts[0] as Record<string, any>;
 		t.is(firstRunning.execute_bash.count, 1);
+		t.is(firstRunning.execute_bash.detail, command);
 		t.deepEqual(firstRunning.execute_bash.details, [command]);
 		t.deepEqual(firstRunning.execute_bash.liveDetails(), [command]);
 		// Completion queues the detailed command + output row instead of
 		// tallying into the "Ran Bash ×N" summary.
 		t.is(compactCounts.length, 0);
 		t.is(queued.length, 1);
+	},
+);
+
+test.serial(
+	'executeToolsDirectly - omnicode bash exposes the live compact block even without compact display',
+	async t => {
+		const runningCounts: unknown[] = [];
+		const queued: unknown[] = [];
+
+		const results = await executeToolsDirectly(
+			[
+				{
+					id: 'call_bash_icon_only',
+					function: {
+						name: 'execute_bash',
+						arguments: JSON.stringify({
+							command: "printf 'start\\n'; sleep 0.05; printf 'done\\n'",
+						}),
+					},
+				},
+			],
+			createMockToolManager() as any,
+			createMockConversationStateManager() as any,
+			component => {
+				queued.push(component);
+			},
+			{
+				// Omnicode (iconTheme) with compact display OFF: the running
+				// bash still populates the compact live block (the BashProgress
+				// card would otherwise hide realtime output).
+				iconTheme: true,
+				setLiveComponent: () => {},
+				onRunningToolCounts: counts => {
+					if (counts) runningCounts.push(counts);
+				},
+			},
+		);
+
+		t.is(results.length, 1);
+		t.true(runningCounts.length > 0);
+		const firstRunning = runningCounts[0] as Record<string, any>;
+		t.is(firstRunning.execute_bash.count, 1);
+		t.is(firstRunning.execute_bash.detail, "printf 'start\\n'; sleep 0.05; printf 'done\\n'");
 	},
 );
 
@@ -1216,4 +1260,304 @@ test.serial(
 
 test('executeToolsDirectly passes privacy options to rehydrate tools', async t => {
 	t.pass(); // Add proper structural verification if stream testing is hard
+});
+
+// ============================================================================
+// Web Search fallback indicator
+// ============================================================================
+
+const withWebSearchFallbackConfig = async (
+	fallbackModel: string | null,
+	run: () => Promise<void>,
+): Promise<void> => {
+	const {existsSync, mkdtempSync, rmSync} = await import('node:fs');
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache, updateWebSearchModel} = await import(
+		'@/config/preferences'
+	);
+	const {clearAppConfig} = await import('@/config/index');
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-executor-search-'));
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	clearAppConfig();
+	if (fallbackModel) {
+		updateWebSearchModel(fallbackModel);
+	}
+	try {
+		await run();
+	} finally {
+		updateWebSearchModel(null);
+		delete process.env.NANOCODER_CONFIG_DIR;
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
+};
+
+const webSearchToolCall = (id: string): ToolCall => ({
+	id,
+	function: {
+		name: 'web_search',
+		arguments: '{"query": "ink tui"}',
+	},
+});
+
+const webSearchToolResult = (id: string): ToolResult => ({
+	tool_call_id: id,
+	role: 'tool',
+	name: 'web_search',
+	content: '# Web Search Results: "ink tui"\n\n## 1. Result',
+});
+
+// displayToolResult renders the web_search row through the tool manager's
+// formatter; a null manager skips the row entirely (live always passes one).
+const webSearchManager = async () => {
+	const {webSearchFormatter} = await import('@/tools/web-search');
+	return {
+		getToolFormatter: () => webSearchFormatter,
+	} as any;
+};
+
+test('displayExecutedTool - full-display web_search via fallback queues the fallback indicator', async t => {
+	await withWebSearchFallbackConfig('deepseek-v4-flash', async () => {
+		const conversationStateManager = createMockConversationStateManager();
+		const queued: unknown[] = [];
+		const toolCall = webSearchToolCall('call_web_full');
+
+		await displayExecutedTool(
+			{toolCall, result: webSearchToolResult(toolCall.id)},
+			await webSearchManager(),
+			component => {
+				queued.push(component);
+			},
+			conversationStateManager as any,
+			{currentModel: 'test-model'},
+		);
+
+		// Tool row first, then the fallback indicator right after it.
+		t.is(queued.length, 2);
+		const {lastFrame, unmount} = renderWithTheme(
+			queued[1] as React.ReactElement,
+		);
+		const output = lastFrame();
+		t.regex(
+			output!,
+			/✦ WebSearch fallback: deepseek-v4-flash searched → test-model responds/,
+		);
+		unmount();
+	});
+});
+
+test('displayExecutedTool - compact web_search via fallback defers the indicator to onWebSearchFallback', async t => {
+	await withWebSearchFallbackConfig('deepseek-v4-flash', async () => {
+		const conversationStateManager = createMockConversationStateManager();
+		const queued: unknown[] = [];
+		const countedTools: Array<[string, string | undefined]> = [];
+		const fallbackModels: string[] = [];
+		const toolCall = webSearchToolCall('call_web_compact');
+
+		await displayExecutedTool(
+			{toolCall, result: webSearchToolResult(toolCall.id)},
+			await webSearchManager(),
+			component => {
+				queued.push(component);
+			},
+			conversationStateManager as any,
+			{
+				compactDisplay: true,
+				iconTheme: true,
+				currentModel: 'test-model',
+				onCompactToolCount: (toolName, detail) => {
+					countedTools.push([toolName, detail]);
+				},
+				onWebSearchFallback: model => {
+					fallbackModels.push(model);
+				},
+			},
+		);
+
+		t.deepEqual(countedTools, [['web_search', 'ink tui']]);
+		t.deepEqual(fallbackModels, ['deepseek-v4-flash']);
+		// The indicator is deferred to the compact-summary flush, so nothing
+		// with "WebSearch fallback" lands in the transcript here.
+		t.is(queued.length, 0);
+	});
+});
+
+test('displayExecutedTool - web_search without an active fallback queues no indicator', async t => {
+	await withWebSearchFallbackConfig(null, async () => {
+		const conversationStateManager = createMockConversationStateManager();
+		const queued: unknown[] = [];
+		const fallbackModels: string[] = [];
+		const toolCall = webSearchToolCall('call_web_inactive');
+
+		await displayExecutedTool(
+			{toolCall, result: webSearchToolResult(toolCall.id)},
+			await webSearchManager(),
+			component => {
+				queued.push(component);
+			},
+			conversationStateManager as any,
+			{
+				currentModel: 'test-model',
+				onWebSearchFallback: model => {
+					fallbackModels.push(model);
+				},
+			},
+		);
+
+		t.is(queued.length, 1);
+		t.deepEqual(fallbackModels, []);
+	});
+});
+
+test('displayExecutedTool - monitor streams its result output into the compact tally', async t => {
+	const conversationStateManager = createMockConversationStateManager();
+	const counted: Array<[string, string | string[] | undefined]> = [];
+	const toolCall: ToolCall = {
+		id: 'call_monitor_1',
+		function: {
+			name: 'monitor',
+			arguments: '{"action": "list"}',
+		},
+	};
+	const result: ToolResult = {
+		tool_call_id: toolCall.id,
+		role: 'tool',
+		name: 'monitor',
+		content: [
+			'task-1 | running | npm run dev',
+			'task-2 | exited 0 | pnpm build',
+			'No background bash tasks.',
+			'',
+			'  trailing whitespace line  ',
+		].join('\n'),
+	};
+
+	await displayExecutedTool(
+		{toolCall, result},
+		null,
+		() => {},
+		conversationStateManager as any,
+		{
+			compactDisplay: true,
+			iconTheme: true,
+			onCompactToolCount: (toolName, detail) => {
+				counted.push([toolName, detail]);
+			},
+		},
+	);
+
+	// Up to 4 trimmed, non-empty output lines feed the compact tail so the
+	// block shows what the monitor calls did instead of a bare "Ran monitor".
+	t.is(counted.length, 1);
+	t.is(counted[0]?.[0], 'monitor');
+	t.deepEqual(counted[0]?.[1], [
+		'task-1 | running | npm run dev',
+		'task-2 | exited 0 | pnpm build',
+		'No background bash tasks.',
+		'trailing whitespace line',
+	]);
+});
+
+test('displayExecutedTool - omnicode non-compact execute_bash renders the compact detailed row', async t => {
+	const conversationStateManager = createMockConversationStateManager();
+	const queued: unknown[] = [];
+	const toolCall: ToolCall = {
+		id: 'call_bash_full',
+		function: {
+			name: 'execute_bash',
+			arguments: '{"command": "echo one"}',
+		},
+	};
+	const result: ToolResult = {
+		tool_call_id: toolCall.id,
+		role: 'tool',
+		name: 'execute_bash',
+		content: 'EXIT_CODE: 0\none',
+	};
+	const bashState = {
+		executionId: 'exec-full',
+		command: 'echo one',
+		startedAt: Date.now(),
+		isBackground: false,
+		outputPreview: 'one',
+		fullOutput: 'one',
+		stderr: '',
+		isComplete: true,
+		exitCode: 0,
+		error: null,
+	};
+
+	await displayExecutedTool(
+		{toolCall, result, bashState},
+		null,
+		component => {
+			queued.push(component);
+		},
+		conversationStateManager as any,
+		// Omnicode (iconTheme) with compact display OFF — bash must still
+		// render as the compact detailed row, matching the mock.
+		{iconTheme: true},
+	);
+
+	t.is(queued.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(
+		queued[0] as React.ReactElement,
+	);
+	t.regex(lastFrame()!, /Bash\(echo one\)/);
+	t.notRegex(lastFrame()!, /Status:/);
+	unmount();
+});
+
+test('displayExecutedTool - classic non-compact execute_bash keeps the BashProgress card', async t => {
+	const conversationStateManager = createMockConversationStateManager();
+	const queued: unknown[] = [];
+	const toolCall: ToolCall = {
+		id: 'call_bash_classic',
+		function: {
+			name: 'execute_bash',
+			arguments: '{"command": "echo one"}',
+		},
+	};
+	const result: ToolResult = {
+		tool_call_id: toolCall.id,
+		role: 'tool',
+		name: 'execute_bash',
+		content: 'EXIT_CODE: 0\none',
+	};
+	const bashState = {
+		executionId: 'exec-classic',
+		command: 'echo one',
+		startedAt: Date.now(),
+		isBackground: false,
+		outputPreview: 'one',
+		fullOutput: 'one',
+		stderr: '',
+		isComplete: true,
+		exitCode: 0,
+		error: null,
+	};
+
+	await displayExecutedTool(
+		{toolCall, result, bashState},
+		null,
+		component => {
+			queued.push(component);
+		},
+		conversationStateManager as any,
+		// Classic theme + full display: the expanded BashProgress card.
+		{},
+	);
+
+	t.is(queued.length, 1);
+	const {lastFrame, unmount} = renderWithTheme(
+		queued[0] as React.ReactElement,
+	);
+	t.regex(lastFrame()!, /Status:/);
+	t.regex(lastFrame()!, /Tokens:/);
+	unmount();
 });
