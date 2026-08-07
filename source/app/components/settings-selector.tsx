@@ -25,6 +25,8 @@ import {
 	getSubagentModelPreference,
 	getVisionModel,
 	getVisionModelProvider,
+	getWebSearchModel,
+	getWebSearchModelProvider,
 	loadPreferences,
 	savePreferences,
 	updateCompactDiffMaxLines,
@@ -41,6 +43,8 @@ import {
 	updateSubagentModelPreference,
 	updateVisionModel,
 	updateVisionModelProvider,
+	updateWebSearchModel,
+	updateWebSearchModelProvider,
 } from '@/config/preferences';
 import {getTextboxBackground, getThemeColors, themes} from '@/config/themes';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
@@ -1282,6 +1286,132 @@ export function SettingsVisionModelPanel({
 
 	const title = isNarrow ? 'Vision Model' : 'Vision Fallback Model';
 	const providers = loadAllProviderConfigs();
+
+	return (
+		<TitledBoxWithPreferences
+			title={title}
+			width={isNarrow ? '100%' : boxWidth}
+			borderColor={colors.primary}
+			paddingX={2}
+			paddingY={1}
+			flexDirection="column"
+			marginBottom={1}
+		>
+			<FilterableSelectList
+				items={items}
+				initialSelectedValue={currentValue}
+				onSelect={handleSelect}
+				onCancel={onCancel}
+			/>
+			{!isNarrow && (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>
+						Type to filter · ↑↓ navigate · Enter select · Esc cancel
+					</Text>
+				</Box>
+			)}
+		</TitledBoxWithPreferences>
+	);
+}
+
+// Web Search Model settings panel.
+// Allows selecting a fallback model whose provider performs web searches
+// server-side (e.g. DeepSeek's Responses API web_search tool) when the main
+// model calls web_search but no Brave Search API key is configured.
+export function SettingsWebSearchModelPanel({
+	onBack,
+	onCancel,
+}: {
+	onBack: () => void;
+	onCancel: () => void;
+}) {
+	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	const {colors} = useTheme();
+
+	const currentModel = getWebSearchModel();
+	const currentProvider = getWebSearchModelProvider();
+
+	// Offer all models from all providers
+	const groupedProviders = useMemo(() => loadAllProviderConfigs(), []);
+	const groupedCurrentProvider =
+		currentProvider ?? loadPreferences().lastProvider ?? '';
+
+	if (colors.promptChar) {
+		return (
+			<GroupedModelSelector
+				providers={groupedProviders}
+				currentProvider={groupedCurrentProvider}
+				currentModel={currentModel ?? ''}
+				onModelSelect={(provider, model) => {
+					updateWebSearchModel(model);
+					updateWebSearchModelProvider(provider);
+					onBack();
+				}}
+				onCancel={onCancel}
+				inheritLabel="none"
+				onInherit={() => {
+					updateWebSearchModel(null);
+					updateWebSearchModelProvider(null);
+					onBack();
+				}}
+				showEffort={false}
+			/>
+		);
+	}
+
+	const items = useMemo(() => {
+		const providers = loadAllProviderConfigs();
+		const activeProvider = loadPreferences().lastProvider;
+		const match = activeProvider
+			? providers.find(p => p.name === activeProvider)
+			: undefined;
+
+		const modelItems = match
+			? (match.models ?? []).map(m => ({
+					label: m === currentModel ? `${m} (current)` : m,
+					value: m,
+				}))
+			: providers.flatMap(p =>
+					(p.models ?? []).map(m => ({
+						label:
+							m === currentModel
+								? `${m} (current) (${p.name})`
+								: `${m} (${p.name})`,
+						value: m,
+					})),
+				);
+
+		return [
+			{
+				label: currentModel
+					? 'None (disable web search fallback)'
+					: 'None (enable web search fallback)',
+				value: '__none__',
+			},
+			...modelItems,
+		];
+	}, [currentModel]);
+
+	const currentValue = currentModel ?? '__none__';
+
+	const handleSelect = (value: string) => {
+		if (value === '__none__') {
+			updateWebSearchModel(null);
+			updateWebSearchModelProvider(null);
+			onBack();
+			return;
+		}
+		const provider = loadAllProviderConfigs().find(p =>
+			(p.models ?? []).includes(value),
+		);
+		if (provider) {
+			updateWebSearchModel(value);
+			updateWebSearchModelProvider(provider.name);
+		}
+		onBack();
+	};
+
+	const title = isNarrow ? 'Web Search Model' : 'Web Search Fallback Model';
 
 	return (
 		<TitledBoxWithPreferences

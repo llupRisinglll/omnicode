@@ -18,6 +18,8 @@ import {
 	getSteeringVerbose,
 	getVisionModel,
 	getVisionModelProvider,
+	getWebSearchModel,
+	getWebSearchModelProvider,
 	loadPreferences,
 	updateAlternateScreen,
 	updateSemanticMemoryEnabled,
@@ -61,6 +63,7 @@ import {
 	SettingsThemePanel,
 	SettingsTitleShapePanel,
 	SettingsVisionModelPanel,
+	SettingsWebSearchModelPanel,
 } from './settings-selector';
 import {SettingsSessionsPanel} from './settings-sessions';
 import {SettingsToolApprovalPanel} from './settings-tool-approval';
@@ -308,6 +311,15 @@ function buildRowsForTab(
 						? `${getVisionModel()} (${getVisionModelProvider() || 'current provider'})`
 						: 'not set',
 					panel: 'vision-model',
+				},
+				{
+					kind: 'managed',
+					id: 'web-search-model',
+					label: 'Web Search Model',
+					value: getWebSearchModel()
+						? `${getWebSearchModel()} (${getWebSearchModelProvider() || 'current provider'})`
+						: 'not set',
+					panel: 'web-search-model',
 				},
 			];
 			return agentRows;
@@ -640,6 +652,8 @@ function renderManagedPanel(
 			);
 		case 'vision-model':
 			return <SettingsVisionModelPanel onBack={onBack} onCancel={onBack} />;
+		case 'web-search-model':
+			return <SettingsWebSearchModelPanel onBack={onBack} onCancel={onBack} />;
 		case 'innerdaemon-list':
 			return (
 				<SettingsInnerDaemonListPanel

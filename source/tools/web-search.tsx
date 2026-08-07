@@ -3,6 +3,7 @@ import React from 'react';
 
 import {ToolCallHeader} from '@/components/simple-tool-formatter';
 import {getBraveSearchApiKey} from '@/config/nanocoder-tools-config';
+import {getWebSearchModel} from '@/config/preferences';
 import {
 	DEFAULT_WEB_SEARCH_RESULTS,
 	MAX_WEB_SEARCH_QUERY_LENGTH,
@@ -13,6 +14,7 @@ import {useTheme} from '@/hooks/useTheme';
 import type {NanocoderToolExport} from '@/types/core';
 import {jsonSchema, tool} from '@/types/core';
 import {calculateTokens} from '@/utils/token-calculator';
+import {executeNativeWebSearch} from './web-search-native';
 
 interface SearchArgs {
 	query: string;
@@ -31,14 +33,33 @@ interface BraveSearchResponse {
 	};
 }
 
+/**
+ * True when the Web Search fallback model is the ACTIVE search backend: no
+ * Brave Search API key is configured and a fallback model is set. Mirrors the
+ * vision fallback indicator condition — execution routes through the fallback
+ * model's provider (server-side search) exactly when this is true.
+ */
+export function isWebSearchFallbackActive(): boolean {
+	return !getBraveSearchApiKey() && Boolean(getWebSearchModel());
+}
+
 export const executeWebSearch = async (
 	args: SearchArgs,
 	apiKeyOverride?: string,
 ): Promise<string> => {
 	const apiKey = apiKeyOverride ?? getBraveSearchApiKey();
 	if (!apiKey) {
+		// No Brave key — fall back to the configured Web Search fallback model,
+		// whose provider runs the search server-side (e.g. DeepSeek's Responses
+		// API web_search tool). Mirrors the vision fallback model.
+		if (getWebSearchModel()) {
+			return await executeNativeWebSearch(
+				args.query,
+				args.max_results ?? DEFAULT_WEB_SEARCH_RESULTS,
+			);
+		}
 		throw new Error(
-			'Brave Search API key not configured. Add it to agents.config.json under nanocoderTools.webSearch.apiKey',
+			'Brave Search API key not configured and no Web Search fallback model is set. Add a key under nanocoderTools.webSearch.apiKey, or set a Web Search fallback model in Settings → Capabilities.',
 		);
 	}
 
@@ -160,7 +181,11 @@ function WebSearchFormatterComponent({
 			</Box>
 			<Box>
 				<Text color={colors.secondary}>Engine: </Text>
-				<Text color={colors.text}>Brave Search API</Text>
+				<Text color={colors.text}>
+					{isWebSearchFallbackActive()
+						? `${getWebSearchModel()} (server-side search)`
+						: 'Brave Search API'}
+				</Text>
 			</Box>
 			{result && (
 				<>

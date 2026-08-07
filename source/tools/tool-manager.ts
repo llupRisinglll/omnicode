@@ -1,6 +1,10 @@
 import {getAppConfig} from '@/config/index';
 import {getBraveSearchApiKey} from '@/config/nanocoder-tools-config';
-import {getSteeringEnabled, getVisionModel} from '@/config/preferences';
+import {
+	getSteeringEnabled,
+	getVisionModel,
+	getWebSearchModel,
+} from '@/config/preferences';
 import {buildToolEntry} from '@/custom-tools/build-tool';
 import {CustomToolLoader} from '@/custom-tools/loader';
 // Type-only import — the `MCPClient` runtime value is loaded dynamically
@@ -80,8 +84,10 @@ export class ToolManager {
 	constructor() {
 		this.registry = ToolRegistry.fromToolExports(allToolExports);
 
-		// Remove web_search if no Brave Search API key is configured
-		if (!getBraveSearchApiKey()) {
+		// Remove web_search if no search backend is configured: neither a Brave
+		// Search API key nor a Web Search fallback model (which performs the
+		// search server-side through its own provider, e.g. DeepSeek).
+		if (!getBraveSearchApiKey() && !getWebSearchModel()) {
 			this.registry.unregister('web_search');
 		}
 

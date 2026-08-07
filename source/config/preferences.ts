@@ -444,6 +444,41 @@ export function updateVisionModelProvider(provider: string | null): void {
 }
 
 /**
+ * Get the web search fallback model. null (default) = web search falls back
+ * only to the Brave Search API when a key is configured.
+ */
+export function getWebSearchModel(): string | null {
+	const preferences = loadPreferences();
+	return preferences.webSearchModel ?? null;
+}
+
+/**
+ * Get the provider of the web search fallback model.
+ */
+export function getWebSearchModelProvider(): string | null {
+	const preferences = loadPreferences();
+	return preferences.webSearchModelProvider ?? null;
+}
+
+/**
+ * Set the web search fallback model. Pass null to disable the model fallback.
+ */
+export function updateWebSearchModel(model: string | null): void {
+	const preferences = loadPreferences();
+	preferences.webSearchModel = model;
+	savePreferences(preferences);
+}
+
+/**
+ * Set the provider of the web search fallback model.
+ */
+export function updateWebSearchModelProvider(provider: string | null): void {
+	const preferences = loadPreferences();
+	preferences.webSearchModelProvider = provider;
+	savePreferences(preferences);
+}
+
+/**
  * Set (or clear) the InnerDaemon model and notify subscribers so the steering
  * executor re-binds with the new model resolver. Pass null to restore the
  * default (inherit the main agent model).

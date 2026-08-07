@@ -97,7 +97,8 @@ export function SettingsWebSearchPanel({
 			) : (
 				<Box flexDirection="column">
 					<Text color={colors.secondary}>
-						Web search uses the Brave Search API.
+						Web search uses the Brave Search API, or falls back to the Web
+						Search Model (Settings → Capabilities) when no key is set.
 					</Text>
 					<Box marginTop={1}>
 						<Text color={hasApiKey ? colors.success : colors.text}>

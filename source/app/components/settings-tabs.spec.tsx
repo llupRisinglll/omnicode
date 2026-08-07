@@ -287,6 +287,38 @@ test('each tab lists its expected setting rows', async t => {
 	unmount();
 });
 
+test('Capabilities lists and opens the Web Search Model fallback panel', async t => {
+	const {lastFrame, stdin, unmount} = renderWithTheme(
+		<SettingsSelector onCancel={() => {}} />,
+	);
+	try {
+		await tick();
+		for (let index = 0; index < 3; index++) {
+			stdin.write(RIGHT);
+			await tick();
+		}
+
+		// Enter the list and move to the last row (Web Search Model sits below
+		// the initial fold, after Subagents/InnerDaemon/Vision Model).
+		for (let index = 0; index < 8; index++) {
+			stdin.write(DOWN);
+			await tick();
+		}
+
+		const agentsOutput = lastFrame() ?? '';
+		t.true(agentsOutput.includes('Web Search Model'));
+
+		// Opening the row renders the fallback model picker panel.
+		stdin.write(ENTER);
+		await tick();
+		const panelOutput = lastFrame() ?? '';
+		t.true(panelOutput.includes('Web Search Fallback Model'));
+		t.true(panelOutput.includes('None (enable web search fallback)'));
+	} finally {
+		unmount();
+	}
+});
+
 test('Capabilities opens the loaded InnerDaemons list', async t => {
 	updateSteeringEnabled(true);
 	const {lastFrame, stdin, unmount} = renderWithTheme(

@@ -597,3 +597,8 @@ export function getColors(): Colors {
 	}
 	return cachedColors;
 }
+
+/** Clear the cached theme colors (for tests that switch themes at runtime). */
+export function resetColorsCache(): void {
+	cachedColors = null;
+}

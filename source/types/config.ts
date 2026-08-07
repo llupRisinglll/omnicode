@@ -498,6 +498,19 @@ export interface UserPreferences {
 	 */
 	visionModelProvider?: string | null;
 	/**
+	 * Web search fallback model. When the current model calls web_search but no
+	 * Brave Search API key is configured, this model's provider performs the
+	 * search on its server side (e.g. DeepSeek's Responses API web_search tool)
+	 * and the results are returned to the main model. Mirrors the vision
+	 * fallback model.
+	 */
+	webSearchModel?: string | null;
+	/**
+	 * Provider for the web search fallback model. If not specified, any
+	 * configured provider exposing the model is used.
+	 */
+	webSearchModelProvider?: string | null;
+	/**
 	 * Per-subagent provider/model overrides. Missing agent entries default to the
 	 * subagent definition's own provider/model; built-ins use `model: inherit`,
 	 * so the default behavior is to inherit the main agent provider and model.

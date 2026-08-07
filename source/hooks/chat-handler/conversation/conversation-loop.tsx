@@ -11,6 +11,7 @@ import {
 	CompletionMessage,
 	ErrorMessage,
 	InfoMessage,
+	SuccessMessage,
 } from '@/components/message-box';
 import {getAppConfig} from '@/config/index';
 import {
@@ -19,6 +20,7 @@ import {
 	MAX_MALFORMED_RETRIES,
 	MAX_REPEATED_TOOL_CALLS,
 } from '@/constants';
+import {bashExecutor} from '@/services/bash-executor';
 import {generateKey} from '@/session/key-generator';
 import {classifyIntent} from '@/steering/intent-classifier';
 import type {SteeringEngine} from '@/steering/steering-engine';
@@ -210,11 +212,25 @@ let pendingThoughtCount = 0;
 /** Merged reasoning texts of the pending run, so the summary can expand. */
 let pendingThoughtReasoning: string[] = [];
 
+/**
+ * Web search fallback model awaiting its transcript indicator. Compacted
+ * web_search results land in the tally and flush as a summary later — in a
+ * RECURSED processAssistantResponse scope — so the indicator state must live
+ * at module level (same reason pendingThoughtMs does), or the flush would
+ * read a null local from the child scope.
+ */
+let pendingWebSearchFallbackModel: string | null = null;
+
 /** Reset the pending-thought accumulator (for testing). */
 export const resetPendingThoughtAccumulator = () => {
 	pendingThoughtMs = 0;
 	pendingThoughtCount = 0;
 	pendingThoughtReasoning = [];
+};
+
+/** Reset the pending web-search fallback indicator (for testing). */
+export const resetWebSearchFallbackIndicator = () => {
+	pendingWebSearchFallbackModel = null;
 };
 
 /**
@@ -237,6 +253,12 @@ export const flushPendingActivityToStatic = (
 ): void => {
 	const counts = compactToolCountsRef?.current ?? {};
 	const hasToolCounts = Object.keys(counts).length > 0;
+
+	// The indicator is appended by flushCompactCounts right after the summary
+	// row; resetting here also covers the exceptional-unwind callers
+	// (useChatHandler's interrupt path) so a stale indicator can't leak into a
+	// later turn's first flush.
+	pendingWebSearchFallbackModel = null;
 
 	if (pendingThoughtCount > 0) {
 		addToChatQueue(
@@ -357,12 +379,24 @@ export const processAssistantResponse = async (
 	// pendingThoughtMs, so this branch is dead for them and the classic
 	// CompactCountsSummaryBlock path below is unchanged.
 	const flushCompactCounts = () => {
+		// Capture before the flush (flushPendingActivityToStatic resets the
+		// module-level pending), then append the indicator after the summary.
+		const webSearchFallbackModel = pendingWebSearchFallbackModel;
 		flushPendingActivityToStatic(
 			addToChatQueue,
 			compactToolCountsRef,
 			onSetCompactToolCounts,
 			compactToolDisplayRef,
 		);
+		if (webSearchFallbackModel) {
+			addToChatQueue(
+				<SuccessMessage
+					key={generateKey('websearch-fallback-flush')}
+					message={`  ✦ WebSearch fallback: ${webSearchFallbackModel} searched → ${currentModel} responds`}
+					hideBox={true}
+				/>,
+			);
+		}
 	};
 
 	// Flush both the compact-count summary and any pending live task list.
@@ -1061,6 +1095,7 @@ export const processAssistantResponse = async (
 		// tool renders identically however it was approved.
 		const displayOptions = {
 			compactDisplay: compactToolDisplayRef?.current,
+			currentModel,
 			onCompactToolCount: (
 				toolName: string,
 				detail?: string | string[],
@@ -1118,6 +1153,9 @@ export const processAssistantResponse = async (
 			// The omnicode output preview under detailed tool lines shares
 			// reasoning's ctrl+r toggle: read live per display call.
 			previewExpandedRef: reasoningExpandedRef,
+			onWebSearchFallback: (model: string) => {
+				pendingWebSearchFallbackModel = model;
+			},
 		};
 
 		const turnResults: ToolResult[] = [];
@@ -1254,6 +1292,10 @@ export const processAssistantResponse = async (
 						r.content.startsWith('Error: ') ||
 						r.content.startsWith('✦ Validation failed'),
 				),
+				// The steering engine needs to know a background bash task is in
+				// flight so rules can pause instead of pressuring the model to
+				// "finish or stop" while it is legitimately waiting on it.
+				backgroundTasksRunning: bashExecutor.getActiveBackgroundCount() > 0,
 				errorMessageDigest: turnResults
 					.find(
 						r =>

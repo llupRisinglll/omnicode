@@ -22,6 +22,10 @@ import {
 	updateSemanticMemoryEnabled,
 	getPrivacyPreference,
 	updatePrivacyPreference,
+	getWebSearchModel,
+	getWebSearchModelProvider,
+	updateWebSearchModel,
+	updateWebSearchModelProvider,
 } from './preferences';
 import type {UserPreferences} from '@/types/index';
 
@@ -1609,6 +1613,66 @@ test.serial('updateSemanticMemoryEnabled saves the preference correctly', t => {
 		const parsed = JSON.parse(content) as UserPreferences;
 
 		t.is(parsed.semanticMemoryEnabled, false);
+	} finally {
+		if (existsSync(preferencesPath)) {
+			rmSync(preferencesPath, {force: true});
+		}
+	}
+});
+
+test.serial('web search fallback model defaults to null when unset', t => {
+	const preferencesPath = getTestPreferencesPath();
+	const preferences: UserPreferences = {};
+	writeFileSync(preferencesPath, JSON.stringify(preferences), 'utf-8');
+
+	try {
+		t.is(getWebSearchModel(), null);
+		t.is(getWebSearchModelProvider(), null);
+	} finally {
+		if (existsSync(preferencesPath)) {
+			rmSync(preferencesPath, {force: true});
+		}
+	}
+});
+
+test.serial('updateWebSearchModel saves the fallback model preference', t => {
+	const preferencesPath = getTestPreferencesPath();
+	if (existsSync(preferencesPath)) {
+		rmSync(preferencesPath, {force: true});
+	}
+
+	try {
+		updateWebSearchModel('deepseek-v4-flash');
+		updateWebSearchModelProvider('DeepSeek');
+
+		t.is(getWebSearchModel(), 'deepseek-v4-flash');
+		t.is(getWebSearchModelProvider(), 'DeepSeek');
+
+		const content = readFileSync(preferencesPath, 'utf-8');
+		const parsed = JSON.parse(content) as UserPreferences;
+		t.is(parsed.webSearchModel, 'deepseek-v4-flash');
+		t.is(parsed.webSearchModelProvider, 'DeepSeek');
+	} finally {
+		if (existsSync(preferencesPath)) {
+			rmSync(preferencesPath, {force: true});
+		}
+	}
+});
+
+test.serial('updateWebSearchModel with null disables the fallback', t => {
+	const preferencesPath = getTestPreferencesPath();
+	writeFileSync(
+		preferencesPath,
+		JSON.stringify({webSearchModel: 'deepseek-v4-flash'}),
+		'utf-8',
+	);
+
+	try {
+		updateWebSearchModel(null);
+		updateWebSearchModelProvider(null);
+
+		t.is(getWebSearchModel(), null);
+		t.is(getWebSearchModelProvider(), null);
 	} finally {
 		if (existsSync(preferencesPath)) {
 			rmSync(preferencesPath, {force: true});
