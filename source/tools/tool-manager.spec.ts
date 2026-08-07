@@ -2,10 +2,94 @@ import type {
 	MCPInitResult,
 	MCPServer,
 } from '@/types/index';
+import {existsSync, mkdirSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import test from 'ava';
+import {clearAppConfig} from '@/config/index';
+import {resetPreferencesCache} from '@/config/preferences';
 import {ToolManager} from './tool-manager';
 
 console.log('\ntool-manager.spec.ts');
+
+// ---------------------------------------------------------------------------
+// web_search registration (Brave key OR Web Search fallback model)
+// ---------------------------------------------------------------------------
+
+function withIsolatedConfig(
+	agentConfig: Record<string, unknown>,
+	preferences: Record<string, unknown>,
+	run: () => void,
+): void {
+	const testConfigDir = join(tmpdir(), `nc-tool-manager-${Date.now()}-${Math.random()}`);
+	mkdirSync(testConfigDir, {recursive: true});
+	writeFileSync(
+		join(testConfigDir, 'agents.config.json'),
+		JSON.stringify(agentConfig),
+		'utf-8',
+	);
+	writeFileSync(
+		join(testConfigDir, 'nanocoder-preferences.json'),
+		JSON.stringify(preferences),
+		'utf-8',
+	);
+	const previousConfigDir = process.env.NANOCODER_CONFIG_DIR;
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	clearAppConfig();
+	try {
+		run();
+	} finally {
+		if (previousConfigDir === undefined) {
+			delete process.env.NANOCODER_CONFIG_DIR;
+		} else {
+			process.env.NANOCODER_CONFIG_DIR = previousConfigDir;
+		}
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
+}
+
+test('web_search is unregistered without a Brave key or fallback model', t => {
+	withIsolatedConfig(
+		{nanocoder: {providers: []}},
+		{},
+		() => {
+			const manager = new ToolManager();
+			t.false(manager.hasTool('web_search'));
+		},
+	);
+});
+
+test('web_search is registered when a Web Search fallback model is set', t => {
+	withIsolatedConfig(
+		{nanocoder: {providers: []}},
+		{webSearchModel: 'deepseek-v4-flash', webSearchModelProvider: 'DeepSeek'},
+		() => {
+			const manager = new ToolManager();
+			t.true(manager.hasTool('web_search'));
+		},
+	);
+});
+
+test('web_search is registered when a Brave Search API key is configured', t => {
+	withIsolatedConfig(
+		{
+			nanocoder: {
+				providers: [],
+				nanocoderTools: {webSearch: {apiKey: 'brave-test-key'}},
+			},
+		},
+		{},
+		() => {
+			const manager = new ToolManager();
+			t.true(manager.hasTool('web_search'));
+		},
+	);
+});
 
 // ============================================================================
 // Constructor Tests

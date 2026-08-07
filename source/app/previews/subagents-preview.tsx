@@ -12,6 +12,7 @@ import AssistantReasoning, {
 } from '@/components/assistant-reasoning';
 import InnerDaemonDetails from '@/components/innerdaemon-details';
 import InnerDaemonTrace from '@/components/innerdaemon-trace';
+import {SuccessMessage} from '@/components/message-box';
 import ModelSelector from '@/components/model-selector';
 import StreamingMessage from '@/components/streaming-message';
 import {TextSelection} from '@/components/TextSelection';
@@ -19,16 +20,19 @@ import {TaskListDisplay} from '@/components/task-list-display';
 import ToolConfirmation from '@/components/tool-confirmation';
 import UserInput from '@/components/user-input';
 import UserMessage from '@/components/user-message';
+import {getWebSearchModel} from '@/config/preferences';
 import {defaultTheme, getThemeColors} from '@/config/themes';
 import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
 import {ThemeContext, useTheme} from '@/hooks/useTheme';
 import {getInitialTitleShape, TitleShapeContext} from '@/hooks/useTitleShape';
 import {UIStateProvider} from '@/hooks/useUIState';
 import {setToolManagerGetter} from '@/message-handler';
+import {generateKey} from '@/session/key-generator';
 import type {SteeringDiagnostic} from '@/steering/types';
 import {executeBashTool} from '@/tools/execute-bash';
 import type {Task} from '@/tools/tasks/types';
 import type {ToolManager} from '@/tools/tool-manager';
+import {isWebSearchFallbackActive} from '@/tools/web-search';
 import type {ProviderConfig} from '@/types/config';
 import type {ToolCall, ToolResult} from '@/types/core';
 import {
@@ -935,6 +939,11 @@ const SUBAGENTS = [
 ] as const;
 
 const MOCK_RUN_MS = 15000;
+// How long a mock background task runs before it completes on its own,
+// mirroring live: the `bg:` badge drops and a "Background task completed"
+// line lands in the transcript (slow enough that stacking/clear tests see
+// the tasks still running).
+const MOCK_BG_COMPLETE_MS = 6000;
 
 const MOCK_AGENTS = [
 	{
@@ -1584,6 +1593,17 @@ export function PreviewBody({
 		Array<{name: string; task: string; model: string; startedAt: number}>
 	>([]);
 	const bgFocusIndexRef = React.useRef(-1);
+	// Mock background-task completion queue: each /mock:bg N enqueues its
+	// tasks, and one completes every MOCK_BG_COMPLETE_MS (oldest first), which
+	// drops the badge and queues the same "Background task completed" line the
+	// live app shows on bashExecutor 'complete'.
+	const bgCompletionQueueRef = React.useRef<
+		Array<{key: string; command: string}>
+	>([]);
+	const bgCompletionTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+	// Monotonic key counter for background-task entries — a ref so rapid
+	// /mock:bg commands never collide on keys (closure state would be stale).
+	const bgKeyCounterRef = React.useRef(0);
 	// True during the keypress batch that entered the status line (set by
 	// UserInput's onDownAtBottom). Consumed by this component's own useInput so
 	// the entering ↓ doesn't also advance past the first indicator.
@@ -1639,6 +1659,45 @@ export function PreviewBody({
 			: 0;
 		return Math.max(fromCounts, mockAgentCount);
 	}, [counts, mockAgentCount]);
+
+	const clearBgCompletionQueue = React.useCallback(() => {
+		bgCompletionQueueRef.current = [];
+		if (bgCompletionTimerRef.current) {
+			clearTimeout(bgCompletionTimerRef.current);
+			bgCompletionTimerRef.current = null;
+		}
+	}, []);
+
+	// Complete the oldest background task after MOCK_BG_COMPLETE_MS, then
+	// schedule the next (if any remain) — mirrors live bashExecutor 'complete'.
+	const scheduleBgCompletion = React.useCallback(() => {
+		if (bgCompletionTimerRef.current) return;
+		bgCompletionTimerRef.current = setTimeout(() => {
+			bgCompletionTimerRef.current = null;
+			const job = bgCompletionQueueRef.current.shift();
+			if (!job) return;
+			setMockBackgroundTasks(prev => {
+				const next = {...prev};
+				delete next[job.key];
+				return next;
+			});
+			setMockBackgroundCount(prev => Math.max(0, prev - 1));
+			setTranscript(tr => [
+				...tr,
+				{
+					type: 'react',
+					node: (
+						<SuccessMessage
+							key={generateKey(`mock-bg-complete-${job.key}`)}
+							message={`  ✦ Background task completed: ${job.command} · exit 0`}
+							hideBox={true}
+						/>
+					),
+				},
+			]);
+			scheduleBgCompletion();
+		}, MOCK_BG_COMPLETE_MS);
+	}, []);
 
 	useInput((input, key) => {
 		// The model selector owns its own Esc/arrow handling (collapse →
@@ -1849,6 +1908,31 @@ export function PreviewBody({
 						);
 					}
 				}
+				// Web search fallback indicator — the same line the live tool
+				// executor queues after a web_search executed through the
+				// fallback model (shown once per web_search call when the
+				// fallback is the active backend, mirroring live).
+				const webSearchSpec = MOCK_TOOLS_BY_NAME.get('web_search');
+				const webSearchCallCount = names.includes('web_search')
+					? (webSearchSpec?.calls.length ?? 0)
+					: 0;
+				if (webSearchCallCount > 0 && isWebSearchFallbackActive()) {
+					for (let index = 0; index < webSearchCallCount; index++) {
+						setTranscript(prev => [
+							...prev,
+							{
+								type: 'react',
+								node: (
+									<SuccessMessage
+										key={generateKey(`mock-websearch-fallback-${index}`)}
+										message={`  ✦ WebSearch fallback: ${getWebSearchModel()} searched → preview model responds`}
+										hideBox={true}
+									/>
+								),
+							},
+						]);
+					}
+				}
 			}
 			if (nextScenario === 'thoughtrun') {
 				// The live-region Thought animated while the scenario ran;
@@ -1971,6 +2055,10 @@ export function PreviewBody({
 				clearTimeout(timer);
 			}
 			completionTimersRef.current.clear();
+			if (bgCompletionTimerRef.current) {
+				clearTimeout(bgCompletionTimerRef.current);
+				bgCompletionTimerRef.current = null;
+			}
 		},
 		[],
 	);
@@ -2006,6 +2094,8 @@ export function PreviewBody({
 				setModal(null);
 				setMockBackgroundCount(0);
 				setMockBackgroundTasks({});
+				clearBgCompletionQueue();
+				bgKeyCounterRef.current = 0;
 				setMockAgentCount(0);
 				setMockAgentDetails([]);
 				bgFocusIndexRef.current = -1;
@@ -2037,6 +2127,7 @@ export function PreviewBody({
 				const safeCount = isNaN(count) || count < 0 ? 0 : count;
 				if (safeCount === 0) {
 					// /mock:bg 0 resets the stacked background tasks.
+					clearBgCompletionQueue();
 					setMockBackgroundCount(0);
 					setMockBackgroundTasks({});
 					return;
@@ -2081,9 +2172,10 @@ export function PreviewBody({
 						},
 					];
 					const startedAt = Date.now();
+					const keyOffset = bgKeyCounterRef.current;
+					bgKeyCounterRef.current += safeCount;
 					setMockBackgroundTasks(prev => {
 						const next = {...prev};
-						const offset = Object.keys(prev).length;
 						for (let i = 0; i < safeCount && i < bgCommands.length; i++) {
 							const bg = bgCommands[i];
 							const activity: CompactToolActivity = {
@@ -2096,10 +2188,17 @@ export function PreviewBody({
 							(activity as {startTime?: number}).startTime = startedAt;
 							// Background jobs render as Bash blocks (NOT agents):
 							// unique non-agent keys keep each job its own row.
-							next[`execute_bash:bg-${offset + i}`] = activity;
+							next[`execute_bash:bg-${keyOffset + i}`] = activity;
 						}
 						return next;
 					});
+					for (let i = 0; i < safeCount && i < bgCommands.length; i++) {
+						bgCompletionQueueRef.current.push({
+							key: `execute_bash:bg-${keyOffset + i}`,
+							command: bgCommands[i]?.cmd ?? 'unknown',
+						});
+					}
+					scheduleBgCompletion();
 				}
 				return;
 			}
@@ -2128,7 +2227,7 @@ export function PreviewBody({
 			}
 			void runScenario(nextScenario);
 		},
-		[onExit, runScenario],
+		[onExit, runScenario, clearBgCompletionQueue, scheduleBgCompletion],
 	);
 
 	const terminalRows = useTerminalRows();

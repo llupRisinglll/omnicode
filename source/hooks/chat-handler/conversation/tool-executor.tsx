@@ -2,7 +2,8 @@ import React from 'react';
 import type {ConversationStateManager} from '@/app/utils/conversation-state';
 import AgentProgress, {MultiAgentProgress} from '@/components/agent-progress';
 import BashProgress from '@/components/bash-progress';
-import {ErrorMessage} from '@/components/message-box';
+import {ErrorMessage, SuccessMessage} from '@/components/message-box';
+import {getWebSearchModel} from '@/config/preferences';
 import {type BashExecutionState, bashExecutor} from '@/services/bash-executor';
 import {
 	clearAllSubagentProgress,
@@ -14,6 +15,7 @@ import {MAX_CONCURRENT_AGENTS} from '@/subagents/subagent-executor';
 import type {AgentToolArgs} from '@/tools/agent-tool';
 import {startAgentExecution} from '@/tools/agent-tool';
 import type {ToolManager} from '@/tools/tool-manager';
+import {isWebSearchFallbackActive} from '@/tools/web-search';
 import type {ToolCall, ToolResult} from '@/types/core';
 import {formatError} from '@/utils/error-formatter';
 import {
@@ -115,6 +117,18 @@ export interface ToolDisplayOptions {
 	 * re-renders; ctrl+r changes what subsequent renders show).
 	 */
 	previewExpandedRef?: React.RefObject<boolean>;
+	/**
+	 * Active main model id, for the "→ <model> responds" half of the Web
+	 * Search fallback indicator (mirrors the vision fallback line).
+	 */
+	currentModel?: string;
+	/**
+	 * Called when a compacted web_search result was executed through the Web
+	 * Search fallback model, so the conversation loop can append the fallback
+	 * indicator AFTER the compact summary flushes (preserving transcript
+	 * order). The full-display path queues the indicator immediately instead.
+	 */
+	onWebSearchFallback?: (model: string) => void;
 }
 
 const formatAgentProgressTail = (
@@ -288,6 +302,35 @@ export const displayExecutedTool = async (
 		result.content,
 	);
 
+	// Web search fallback indicator — mirrors the vision fallback line shown
+	// after images are analyzed by the fallback model. In full display the
+	// tool row is queued immediately, so the indicator follows it right away;
+	// in compact mode the row lives in the tally until the next flush, so the
+	// indicator is deferred through onWebSearchFallback instead.
+	const queueWebSearchFallbackIndicator = (immediate: boolean) => {
+		if (
+			result.name !== 'web_search' ||
+			result.content.startsWith('Error: ') ||
+			!isWebSearchFallbackActive()
+		) {
+			return;
+		}
+		const fallbackModel = getWebSearchModel();
+		if (!fallbackModel) return;
+		const message = `  ✦ WebSearch fallback: ${fallbackModel} searched → ${options?.currentModel ?? 'main model'} responds`;
+		if (immediate) {
+			addToChatQueue(
+				<SuccessMessage
+					key={generateKey(`websearch-fallback-${toolCall.id}`)}
+					message={message}
+					hideBox={true}
+				/>,
+			);
+			return;
+		}
+		options?.onWebSearchFallback?.(fallbackModel);
+	};
+
 	if (
 		LIVE_TASK_TOOLS.has(result.name) &&
 		!result.content.startsWith('Error: ')
@@ -393,24 +436,56 @@ export const displayExecutedTool = async (
 				);
 			} else {
 				options.onCompactToolCount?.(result.name, compactToolDetail?.detail);
+				queueWebSearchFallbackIndicator(false);
 			}
 		} else {
-			options.onCompactToolCount?.(result.name, compactToolDetail?.detail);
+			// Detail-less reporting tools (monitor) still carry their result
+			// output into the compact tail — up to 4 lines — so a bare
+			// "Ran monitor ×N" never hides what the calls did (design
+			// principle: every tool call shows a small output/stream preview).
+			const countDetails =
+				compactToolDetail?.detail ??
+				(result.name === 'monitor'
+					? result.content
+							.split(/\r?\n/)
+							.map(line => line.trim())
+							.filter(Boolean)
+							.slice(0, 4)
+					: undefined);
+			options.onCompactToolCount?.(result.name, countDetails);
+			queueWebSearchFallbackIndicator(false);
 		}
 	} else if (result.name === 'execute_bash' && bashState) {
-		// Expanded mode: render the completed BashProgress (command +
-		// status + tokens), matching the confirmation path's completed view.
-		addToChatQueue(
-			<BashProgress
-				key={generateKey(`direct-bash-complete-${toolCall.id}`)}
-				executionId={bashState.executionId}
-				command={bashState.command}
-				completedState={bashState}
-			/>,
-		);
+		// Expanded display mode: omnicode renders bash as the compact detailed
+		// row (✦ Bash(<command>) + output preview) in EVERY display mode —
+		// consistent with the mock and the other tool rows. Classic themes keep
+		// the expanded BashProgress card (command + status + tokens).
+		if (options?.iconTheme) {
+			await displayToolResult(
+				toolCall,
+				result,
+				toolManager,
+				addToChatQueue,
+				true,
+				{
+					iconTheme: true,
+					expanded: options.previewExpandedRef?.current ?? false,
+				},
+			);
+		} else {
+			addToChatQueue(
+				<BashProgress
+					key={generateKey(`direct-bash-complete-${toolCall.id}`)}
+					executionId={bashState.executionId}
+					command={bashState.command}
+					completedState={bashState}
+				/>,
+			);
+		}
 	} else {
 		// Full display mode
 		await displayToolResult(toolCall, result, toolManager, addToChatQueue);
+		queueWebSearchFallbackIndicator(true);
 	}
 };
 
@@ -861,7 +936,7 @@ export const executeToolsDirectly = async (
 						options?.signal,
 						(executionId, command) => {
 							if (
-								!options?.compactDisplay ||
+								(!options?.compactDisplay && !options?.iconTheme) ||
 								!options.onRunningToolCounts ||
 								options.nonInteractiveMode
 							) {
@@ -870,6 +945,12 @@ export const executeToolsDirectly = async (
 							options.onRunningToolCounts({
 								execute_bash: {
 									count: 1,
+									// Both `detail` and `details` — the running
+									// header ("✦ Bash(<command>)") reads the
+									// singular, the tail reads the plural. The
+									// preview mock sets both; without `detail`
+									// the live block rendered a bare "Ran Bash".
+									detail: command,
 									details: [command],
 									liveDetails: () =>
 										formatBashProgressTail(command, executionId),

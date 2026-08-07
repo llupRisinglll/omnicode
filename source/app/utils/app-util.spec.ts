@@ -1,5 +1,6 @@
 import test from 'ava';
 import React from 'react';
+import {renderWithTheme} from '@/test-utils/render-with-theme.js';
 import {
 	createClearMessagesHandler,
 	handleMessageSubmission,
@@ -10,6 +11,8 @@ import {lazyCommands} from '@/commands/lazy-registry';
 import type {MessageSubmissionOptions} from '@/types/index';
 import type {Session} from '@/session/session-manager';
 import {sessionManager} from '@/session/session-manager';
+import {CustomCommandExecutor} from '@/custom-commands/executor';
+import type {CustomCommand} from '@/types/index';
 
 // Test command parsing edge cases
 // These tests document the expected behavior of parsing patterns
@@ -879,4 +882,88 @@ test('createClearMessagesHandler - calls client.clearContext when client exists'
 test('createClearMessagesHandler - does not throw when client is null', async t => {
 	const handler = createClearMessagesHandler(() => {}, null);
 	await t.notThrowsAsync(() => handler());
+});
+
+test.serial('! bash completion queues the compact detailed row under omnicode', async t => {
+	const {existsSync, mkdtempSync, rmSync, writeFileSync} = await import(
+		'node:fs'
+	);
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache} = await import('@/config/preferences');
+	const {resetColorsCache} = await import('@/config/index');
+
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-apputil-bash-'));
+	writeFileSync(
+		join(testConfigDir, 'nanocoder-preferences.json'),
+		JSON.stringify({selectedTheme: 'omnicode'}),
+		'utf-8',
+	);
+	const previousConfigDir = process.env.NANOCODER_CONFIG_DIR;
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	resetColorsCache();
+
+	const queued: unknown[] = [];
+	const options = createResumeTestOptions({
+		onAddToChatQueue: node => {
+			queued.push(node);
+		},
+	});
+	try {
+		await handleMessageSubmission('!echo hi', options);
+
+		t.is(queued.length, 1);
+		const {lastFrame, unmount} = renderWithTheme(
+			queued[0] as React.ReactElement,
+		);
+		const output = lastFrame() ?? '';
+		// The completed direct bash renders as the compact detailed row
+		// (✦ Executed Bash(<command>) + output preview), not the old
+		// BashProgress card.
+		t.regex(output, /Executed Bash\(echo hi\)/);
+		t.notRegex(output, /Status:/);
+		t.notRegex(output, /Tokens:/);
+		unmount();
+	} finally {
+		if (previousConfigDir === undefined) {
+			delete process.env.NANOCODER_CONFIG_DIR;
+		} else {
+			process.env.NANOCODER_CONFIG_DIR = previousConfigDir;
+		}
+		resetPreferencesCache();
+		resetColorsCache();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
+});
+
+test.serial('custom command passes the raw input as displayValue for steering classification', async t => {
+	let received: {message?: string; displayValue?: string} = {};
+	const command: CustomCommand = {
+		name: 'worktree',
+		path: '/x/worktree.md',
+		fullName: 'worktree',
+		metadata: {description: 'create a worktree'},
+		content:
+			'Create a Hilinga worktree. Use staging for normal feature and bug-fix work.\n\nPurpose: {{ args }}',
+	};
+	const options = createResumeTestOptions({});
+	options.customCommandExecutor = new CustomCommandExecutor();
+	options.customCommandCache = new Map([['worktree', command]]);
+	options.onHandleChatMessage = async (message, displayValue) => {
+		received = {message, displayValue};
+	};
+
+	await handleMessageSubmission(
+		'/worktree purpose: adding more tests',
+		options,
+	);
+
+	// The expanded prompt (which the steering must NOT classify) goes to the
+	// model; the raw user input is threaded as the display value so the bubble
+	// and the task classifier see the user's own words.
+	t.truthy(received.message?.includes('bug-fix work'));
+	t.is(received.displayValue, '/worktree purpose: adding more tests');
 });

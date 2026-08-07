@@ -1322,7 +1322,11 @@ export default function UserInput({
 						onSubmit={handleSubmit}
 						onEnter={handleSubmit}
 						placeholder="/ commands, ! bash, ↑/↓ history"
-						focus={effectiveFocus}
+						// While a status-line badge holds focus (submitBlocked),
+						// the input field itself is unfocused too — no cursor and
+						// no typed characters, so the prompt can't silently
+						// swallow input while the badge is selected.
+						focus={effectiveFocus && !submitBlocked}
 						wrapWidth={inputWrapWidth}
 						handleEnter={false}
 						slashCommandColor={colors.info}

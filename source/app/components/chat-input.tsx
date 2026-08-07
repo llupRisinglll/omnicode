@@ -73,6 +73,12 @@ export interface ChatInputProps {
 	agentCount?: number;
 	/** Running background-task tally for the mode line footer (`bg: N`). */
 	backgroundCount?: number;
+	// Status-line indicator focus (↓ at the input bottom enters the badges;
+	// ↑/↓ cycle, Enter opens details, Esc returns). Forwarded to UserInput.
+	onDownAtBottom?: () => void;
+	submitBlocked?: boolean;
+	bgHighlighted?: boolean;
+	agentHighlighted?: boolean;
 
 	// Tool display
 	onToggleCompactDisplay?: () => void;
@@ -138,6 +144,10 @@ export function ChatInput({
 	sessionName,
 	agentCount = 0,
 	backgroundCount = 0,
+	onDownAtBottom,
+	submitBlocked,
+	bgHighlighted,
+	agentHighlighted,
 	onToggleCompactDisplay,
 	compactToolDisplay,
 	liveCompactCounts,
@@ -223,6 +233,10 @@ export function ChatInput({
 						sessionName={sessionName}
 						agentCount={agentCount}
 						backgroundCount={backgroundCount}
+						onDownAtBottom={onDownAtBottom}
+						submitBlocked={submitBlocked}
+						bgHighlighted={bgHighlighted}
+						agentHighlighted={agentHighlighted}
 						tune={tune}
 						currentModel={currentModel}
 						statusInfo={statusInfo}

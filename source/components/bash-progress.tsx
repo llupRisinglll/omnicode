@@ -1,6 +1,6 @@
 import {Box, Text} from 'ink';
 import {useEffect, useState} from 'react';
-
+import {highlightCode} from '@/components/diff-view/syntax';
 import {ToolCallHeader} from '@/components/simple-tool-formatter';
 import ToolMessage from '@/components/tool-message';
 import {TRUNCATION_OUTPUT_LIMIT} from '@/constants';
@@ -100,7 +100,7 @@ export default function BashProgress({
 			<Box flexDirection="column">
 				<Text color={colors.secondary}>Command:</Text>
 				<Text wrap="wrap" color={colors.text}>
-					{command}
+					{highlightCode(command, 'bash')}
 				</Text>
 			</Box>
 			{state.isComplete && (
@@ -113,7 +113,7 @@ export default function BashProgress({
 			{!state.isComplete && state.outputPreview && (
 				<Box flexDirection="column">
 					<Text color={colors.secondary}>Output: </Text>
-					<Text color={colors.text}>{state.outputPreview}</Text>
+					<Text color={colors.secondary}>{state.outputPreview}</Text>
 				</Box>
 			)}
 

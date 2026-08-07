@@ -47,16 +47,36 @@ function capForDisplay(text: string): string {
 
 // Parse a line and return segments with file/image placeholders highlighted
 function parseLineWithPlaceholders(line: string) {
-	const segments: Array<{text: string; isPlaceholder: boolean}> = [];
+	const segments: Array<{
+		text: string;
+		isPlaceholder: boolean;
+		isCommand?: boolean;
+	}> = [];
 	const filePattern = /\[@[^\]]+\]|\[Image #\d+\]/g;
+	let rest = line;
+
+	// A leading slash command (e.g. "/worktree" or "/mock:subagents") renders
+	// in the prompt's primary color so commands in the chat history read like
+	// the highlighted input, not plain text. Only the command token itself is
+	// highlighted — its arguments stay in the normal message color.
+	const commandMatch = line.match(/^(\/\S+)/);
+	if (commandMatch) {
+		segments.push({
+			text: commandMatch[1],
+			isPlaceholder: false,
+			isCommand: true,
+		});
+		rest = line.slice(commandMatch[1].length);
+	}
+
 	let lastIndex = 0;
 	let match;
 
-	while ((match = filePattern.exec(line)) !== null) {
+	while ((match = filePattern.exec(rest)) !== null) {
 		// Add text before the placeholder
 		if (match.index > lastIndex) {
 			segments.push({
-				text: line.slice(lastIndex, match.index),
+				text: rest.slice(lastIndex, match.index),
 				isPlaceholder: false,
 			});
 		}
@@ -71,9 +91,9 @@ function parseLineWithPlaceholders(line: string) {
 	}
 
 	// Add remaining text
-	if (lastIndex < line.length) {
+	if (lastIndex < rest.length) {
 		segments.push({
-			text: line.slice(lastIndex),
+			text: rest.slice(lastIndex),
 			isPlaceholder: false,
 		});
 	}
@@ -145,7 +165,11 @@ export default memo(function UserMessage({
 							{segments.map((segment, segIndex) => (
 								<Text
 									key={segIndex}
-									color={segment.isPlaceholder ? colors.primary : colors.text}
+									color={
+										segment.isPlaceholder || segment.isCommand
+											? colors.primary
+											: colors.text
+									}
 									bold={segment.isPlaceholder}
 								>
 									{segment.text}

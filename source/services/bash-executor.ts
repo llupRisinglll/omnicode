@@ -385,7 +385,13 @@ export class BashExecutor extends EventEmitter {
 	getActiveBackgroundCount(): number {
 		let count = 0;
 		for (const execution of this.executions.values()) {
-			if (execution.state.isBackground) count++;
+			// Exclude completed executions: the 'complete' event is emitted
+			// BEFORE the entry is removed from the map, so a listener that
+			// recomputes the count on that event would otherwise keep counting
+			// the finished task until some later event — leaving `bg: n` stuck.
+			if (execution.state.isBackground && !execution.state.isComplete) {
+				count++;
+			}
 		}
 		return count;
 	}

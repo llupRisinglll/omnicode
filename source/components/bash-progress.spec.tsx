@@ -493,3 +493,22 @@ test('BashProgress renders minimal elements when not complete', t => {
 	t.notRegex(output!, /Tokens:/);
 	unmount();
 });
+
+test('BashProgress renders the running output preview', t => {
+	const {lastFrame, unmount} = renderWithTheme(
+		<BashProgress
+			executionId="test-id"
+			command="npm run build"
+			completedState={{
+				...createCompletedState(),
+				isComplete: false,
+				outputPreview: 'building esm',
+			}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.regex(output, /Output:/);
+	t.regex(output, /building esm/);
+	unmount();
+});

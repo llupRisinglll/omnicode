@@ -15,6 +15,7 @@ let webSearchTool: any;
 let executeWebSearch: any;
 let webSearchValidator: any;
 let webSearchFormatter: any;
+let isWebSearchFallbackActive: any;
 
 test.before(async () => {
 	try {
@@ -23,6 +24,7 @@ test.before(async () => {
 		executeWebSearch = module.executeWebSearch;
 		webSearchValidator = module.webSearchValidator;
 		webSearchFormatter = module.webSearchFormatter;
+		isWebSearchFallbackActive = module.isWebSearchFallbackActive;
 	} catch (error) {
 		console.warn('Failed to load web-search module:', error);
 	}
@@ -213,20 +215,43 @@ test('web search tool has validator function', t => {
 // Formatter Component Tests
 // ============================================================================
 
-test('webSearchFormatter renders with query', t => {
+test('webSearchFormatter renders with query', async t => {
 	if (!webSearchFormatter) {
 		t.pass('Skipping test - web-search module not available');
 		return;
 	}
 
-	const component = webSearchFormatter({query: 'test search'});
-	const {lastFrame} = render(<MockThemeProvider>{component}</MockThemeProvider>);
+	// Isolate from any real preferences file: with no Web Search fallback
+	// model configured the engine line reads "Brave Search API".
+	const {existsSync, mkdtempSync, rmSync} = await import('node:fs');
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache} = await import('@/config/preferences');
+	const {clearAppConfig} = await import('@/config/index');
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-web-search-formatter-'));
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	clearAppConfig();
 
-	const output = lastFrame();
-	t.truthy(output);
-	t.regex(output!, /web_search\(test search\)/);
-	t.regex(output!, /test search/);
-	t.regex(output!, /Brave Search API/);
+	try {
+		const component = webSearchFormatter({query: 'test search'});
+		const {lastFrame} = render(
+			<MockThemeProvider>{component}</MockThemeProvider>,
+		);
+
+		const output = lastFrame();
+		t.truthy(output);
+		t.regex(output!, /web_search\(test search\)/);
+		t.regex(output!, /test search/);
+		t.regex(output!, /Brave Search API/);
+	} finally {
+		delete process.env.NANOCODER_CONFIG_DIR;
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
 });
 
 test('webSearchFormatter shows result count when result provided', t => {
@@ -372,11 +397,32 @@ test('executeWebSearch throws when no API key configured', async t => {
 		return;
 	}
 
+	// Isolate from any real preferences file so a user-configured Web Search
+	// fallback model can't turn this unit test into a live network call.
+	const {existsSync, mkdtempSync, rmSync} = await import('node:fs');
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache} = await import('@/config/preferences');
+	const {clearAppConfig} = await import('@/config/index');
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-web-search-no-key-'));
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	clearAppConfig();
+
 	// Pass empty string as apiKeyOverride to simulate no API key
-	await t.throwsAsync(
-		async () => await executeWebSearch({query: 'test'}, ''),
-		{message: /API key not configured/},
-	);
+	try {
+		await t.throwsAsync(
+			async () => await executeWebSearch({query: 'test'}, ''),
+			{message: /API key not configured/},
+		);
+	} finally {
+		delete process.env.NANOCODER_CONFIG_DIR;
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
 });
 
 test('executeWebSearch throws on invalid API key (401)', async t => {
@@ -758,5 +804,157 @@ test('executeWebSearch handles missing web field in response', async t => {
 		t.regex(result, /No results found/);
 	} finally {
 		globalThis.fetch = originalFetch;
+	}
+});
+
+test('executeWebSearch falls back to the configured Web Search model without a Brave key', async t => {
+	if (!executeWebSearch) {
+		t.pass('Skipping test - web-search module not available');
+		return;
+	}
+
+	const {existsSync, mkdtempSync, rmSync, writeFileSync} = await import(
+		'node:fs'
+	);
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache, updateWebSearchModel} = await import(
+		'@/config/preferences'
+	);
+	const {clearAppConfig} = await import('@/config/index');
+
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-web-search-fallback-'));
+	writeFileSync(
+		join(testConfigDir, 'agents.config.json'),
+		JSON.stringify({
+			nanocoder: {
+				providers: [
+					{
+						name: 'DeepSeek',
+						models: ['deepseek-v4-flash'],
+						baseUrl: 'https://api.deepseek.com/',
+						apiKey: 'test-key',
+					},
+				],
+			},
+		}),
+		'utf-8',
+	);
+	const previousCwd = process.cwd();
+	process.chdir(testConfigDir);
+	process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+	resetPreferencesCache();
+	clearAppConfig();
+	updateWebSearchModel('deepseek-v4-flash');
+
+	const originalFetch = globalThis.fetch;
+	let capturedUrl = '';
+	globalThis.fetch = (async (url: string, init?: RequestInit) => {
+		capturedUrl = url;
+		const body = JSON.parse(String(init?.body)) as {tools?: unknown};
+		return {
+			ok: true,
+			status: 200,
+			json: async () => ({
+				output_text: null,
+				output: [
+					{type: 'web_search_call', id: 'ws_1', status: 'completed'},
+					{
+						type: 'message',
+						content: [
+							{
+								type: 'output_text',
+								text: 'The latest Node.js LTS is 24.18.0.',
+							},
+						],
+					},
+				],
+			}),
+			text: async () => '',
+		} as unknown as Response;
+	}) as typeof fetch;
+
+	try {
+		// No apiKeyOverride — the missing Brave key routes into the model
+		// fallback, whose provider runs the search server-side.
+		const result = await executeWebSearch({
+			query: 'latest node.js lts',
+		});
+
+		t.is(capturedUrl, 'https://api.deepseek.com/v1/responses');
+		t.true(result.includes('# Web Search Results: "latest node.js lts"'));
+		t.true(result.includes('The latest Node.js LTS is 24.18.0.'));
+	} finally {
+		globalThis.fetch = originalFetch;
+		process.chdir(previousCwd);
+		// Clear the temp preference while the config dir env is still set, so
+		// the write lands in the temp dir — never the user's real preferences.
+		updateWebSearchModel(null);
+		delete process.env.NANOCODER_CONFIG_DIR;
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
+	}
+});
+
+// ============================================================================
+// Fallback indicator condition
+// ============================================================================
+
+test('isWebSearchFallbackActive is true only when a fallback model is set and no Brave key exists', async t => {
+	if (!isWebSearchFallbackActive) {
+		t.pass('Skipping test - web-search module not available');
+		return;
+	}
+
+	const {existsSync, mkdtempSync, rmSync, writeFileSync} = await import(
+		'node:fs'
+	);
+	const {tmpdir} = await import('node:os');
+	const {join} = await import('node:path');
+	const {resetPreferencesCache, updateWebSearchModel} = await import(
+		'@/config/preferences'
+	);
+	const {clearAppConfig} = await import('@/config/index');
+
+	const testConfigDir = mkdtempSync(join(tmpdir(), 'nc-web-search-active-'));
+
+	try {
+		// No Brave key and no fallback model → inactive.
+		process.env.NANOCODER_CONFIG_DIR = testConfigDir;
+		resetPreferencesCache();
+		clearAppConfig();
+		t.false(isWebSearchFallbackActive());
+
+		// Fallback model set, still no Brave key → active.
+		updateWebSearchModel('deepseek-v4-flash');
+		t.true(isWebSearchFallbackActive());
+
+		// Brave key configured alongside the fallback → inactive (Brave wins).
+		writeFileSync(
+			join(testConfigDir, 'agents.config.json'),
+			JSON.stringify({
+				nanocoder: {
+					nanocoderTools: {webSearch: {apiKey: 'brave-key'}},
+				},
+			}),
+			'utf-8',
+		);
+		clearAppConfig();
+		t.false(isWebSearchFallbackActive());
+
+		// Brave key present but no fallback model → inactive.
+		updateWebSearchModel(null);
+		t.false(isWebSearchFallbackActive());
+	} finally {
+		updateWebSearchModel(null);
+		delete process.env.NANOCODER_CONFIG_DIR;
+		resetPreferencesCache();
+		clearAppConfig();
+		if (existsSync(testConfigDir)) {
+			rmSync(testConfigDir, {recursive: true, force: true});
+		}
 	}
 });

@@ -4,7 +4,9 @@ import {commandRegistry} from '@/commands';
 import {CodexLogin} from '@/commands/codex-login';
 import {CopilotLogin} from '@/commands/copilot-login';
 import BashProgress from '@/components/bash-progress';
+import {getColors} from '@/config/index';
 import {DELAY_COMMAND_COMPLETE_MS, MAX_SESSION_NAME_LENGTH} from '@/constants';
+import {bashExecutor} from '@/services/bash-executor';
 import {CheckpointManager} from '@/services/checkpoint-manager';
 import {generateKey} from '@/session/key-generator';
 import {executeBashCommand, formatBashResultForLLM} from '@/tools/execute-bash';
@@ -14,6 +16,10 @@ import type {Message, MessageSubmissionOptions} from '@/types/index';
 import {formatError} from '@/utils/error-formatter';
 import {errorMsg, infoMsg, successMsg} from '@/utils/message-factory';
 import {clearReadTracker} from '@/utils/read-tracker';
+import {
+	CompactToolActivityBlock,
+	displayToolResult,
+} from '@/utils/tool-result-display';
 import {handleCompactCommand} from './handlers/compact-handler';
 import {handleContextMaxCommand} from './handlers/context-max-handler';
 import {
@@ -143,33 +149,95 @@ async function handleBashCommand(
 		messages,
 	} = options;
 
+	// Streaming tail for the compact running block: last few output lines from
+	// the executor (mirrors the model-bash running tail).
+	const userBashTail = (executionId: string): string[] => {
+		const state = bashExecutor.getState(executionId);
+		if (!state || state.isComplete) return [bashCommand];
+		const output = state.outputPreview || state.stderr;
+		if (output.trim()) {
+			return output.trimEnd().split(/\r?\n/).slice(-6);
+		}
+		return [bashCommand];
+	};
+
+	const isOmnicode = Boolean(getColors().assistantIcon);
+
 	setIsToolExecuting(true);
 
 	try {
 		const {executionId, promise} = executeBashCommand(bashCommand);
 
-		setLiveComponent(
-			React.createElement(BashProgress, {
-				key: generateKey('bash-progress-live'),
-				executionId,
-				command: bashCommand,
-				isLive: true,
-			}),
-		);
+		if (isOmnicode) {
+			// Omnicode: the running direct bash renders as the compact block —
+			// "✦ Executed Bash(<command>)" with the wrapped command and a └
+			// streaming output tail — exactly like the model-bash live block.
+			setLiveComponent(
+				React.createElement(CompactToolActivityBlock, {
+					entries: [
+						[
+							'execute_bash:user',
+							{
+								count: 1,
+								detail: bashCommand,
+								liveDetails: () => userBashTail(executionId),
+								running: true,
+							},
+						],
+					],
+					running: true,
+					expanded: false,
+				}),
+			);
+		} else {
+			setLiveComponent(
+				React.createElement(BashProgress, {
+					key: generateKey('bash-progress-live'),
+					executionId,
+					command: bashCommand,
+					isLive: true,
+				}),
+			);
+		}
 
 		const result = await promise;
 
 		setLiveComponent(null);
-		onAddToChatQueue(
-			React.createElement(BashProgress, {
-				key: generateKey('bash-progress-complete'),
-				executionId,
-				command: bashCommand,
-				completedState: result,
-			}),
-		);
-
 		const llmContext = formatBashResultForLLM(result);
+		if (isOmnicode) {
+			// Omnicode: the completed bash renders as the compact detailed row
+			// (✦ Executed Bash(<command>) + output preview) — consistent with
+			// the mock and every other tool row. Classic themes keep the
+			// expanded BashProgress card (command + status + tokens).
+			await displayToolResult(
+				{
+					id: 'direct-bash',
+					function: {
+						name: 'execute_bash:user',
+						arguments: {command: bashCommand},
+					},
+				},
+				{
+					tool_call_id: 'direct-bash',
+					role: 'tool',
+					name: 'execute_bash:user',
+					content: llmContext,
+				},
+				null,
+				onAddToChatQueue,
+				true,
+				{iconTheme: true},
+			);
+		} else {
+			onAddToChatQueue(
+				React.createElement(BashProgress, {
+					key: generateKey('bash-progress-complete'),
+					executionId,
+					command: bashCommand,
+					completedState: result,
+				}),
+			);
+		}
 
 		if (llmContext) {
 			const userMessage: Message = {
@@ -219,7 +287,11 @@ async function handleCustomCommand(
 	const processedPrompt = customCommandExecutor?.execute(customCommand, args);
 
 	if (processedPrompt) {
-		await onHandleChatMessage(processedPrompt);
+		// Pass the user's raw command as the display value: the bubble renders
+		// it verbatim, and the steering task classifier reads the USER's actual
+		// words — not the expanded command instructions (whose boilerplate can
+		// contain false bug keywords like "bug-fix work").
+		await onHandleChatMessage(processedPrompt, message);
 	} else {
 		onCommandComplete?.();
 	}

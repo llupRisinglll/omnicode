@@ -76,9 +76,9 @@ export function parseMarkdownTable(
 	const fitsContent = totalContentWidth <= availableWidth;
 	const colWidths = contentWidths.map(width =>
 		fitsContent
-			// cli-table3 reserves padding-left/right inside each column, so a
-			// cell needs colWidth >= content + 2 to render unwrapped.
-			? Math.max(TABLE_COLUMN_MIN_WIDTH, width + 2)
+			? // cli-table3 reserves padding-left/right inside each column, so a
+				// cell needs colWidth >= content + 2 to render unwrapped.
+				Math.max(TABLE_COLUMN_MIN_WIDTH, width + 2)
 			: Math.max(
 					TABLE_COLUMN_MIN_WIDTH,
 					Math.floor((width / totalContentWidth) * availableWidth),

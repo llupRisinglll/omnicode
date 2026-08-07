@@ -1,12 +1,13 @@
 import {userInfo} from 'node:os';
-import {Box, useInput} from 'ink';
-import React, {useMemo} from 'react';
+import {Box, Text, useInput} from 'ink';
+import React, {useMemo, useRef, useState} from 'react';
 import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
 import {PreviewDevPanel} from '@/app/components/preview-dev-panel';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
+import {ErrorMessage, SuccessMessage} from '@/components/message-box';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
 import {StatusLine} from '@/components/StatusLine';
 import {loadPreferences, updateDeveloperMode} from '@/config/preferences';
@@ -16,17 +17,146 @@ import type {useAppState} from '@/hooks/useAppState';
 import {useBackgroundTaskCount} from '@/hooks/useBackgroundTaskCount';
 import type {useModeHandlers} from '@/hooks/useModeHandlers';
 import {useTerminalRows, useTerminalWidth} from '@/hooks/useTerminalWidth';
+import {useTheme} from '@/hooks/useTheme';
 import {UIStateProvider} from '@/hooks/useUIState';
 import type {useUserMessageQueue} from '@/hooks/useUserMessageQueue';
 import type {useVSCodeServer} from '@/hooks/useVSCodeServer';
+import type {BashExecutionState} from '@/services/bash-executor';
+import {bashExecutor} from '@/services/bash-executor';
+import {getAllSubagentProgress} from '@/services/subagent-events';
+import {generateKey} from '@/session/key-generator';
 import {getGitStatusSummarySync} from '@/tools/git/utils';
 import {isSingleToolProfile, resolveToolProfile} from '@/tools/tool-profiles';
 import type {ImageAttachment} from '@/types/core';
 import type {RestoredInputDraft, SubmittedInputDraft} from '@/types/hooks';
 import type {StatusLineData} from '@/types/statusline';
+import {formatElapsedTime} from '@/utils/completion-note';
 import type {PendingToolApproval} from '@/utils/tool-approval-queue';
 import type {PendingToolConfirmation} from '@/utils/tool-confirm-queue';
 import {displayCompactCountsSummary} from '@/utils/tool-result-display';
+
+/**
+ * Details panel opened from a focused status-line badge (Enter on `agents: N`
+ * or `bg: N`). Mirrors the preview mock's panel: agents list their running
+ * status/tool/model, background tasks list command + status + output tail.
+ * Refreshes every second while open.
+ */
+function StatuslineDetailsPanel({
+	mode,
+	onClose,
+}: {
+	mode: 'agents' | 'bg';
+	onClose: () => void;
+}) {
+	const {colors} = useTheme();
+	const [, setTick] = useState(0);
+
+	React.useEffect(() => {
+		const interval = setInterval(() => setTick(tick => tick + 1), 1000);
+		return () => clearInterval(interval);
+	}, []);
+
+	const agents =
+		mode === 'agents'
+			? [...getAllSubagentProgress().entries()].filter(
+					([, progress]) => progress.status !== 'complete',
+				)
+			: [];
+	const tasks =
+		mode === 'bg'
+			? bashExecutor
+					.getStates()
+					// Only ACTIVE background tasks — the same set the `bg: N`
+					// badge counts. Completed tasks disappear from the panel
+					// (and their elapsed timer must not keep ticking), so the
+					// badge and the details stay consistent.
+					.filter(state => state.isBackground && !state.isComplete)
+					.slice(0, 6)
+			: [];
+
+	return (
+		<Box
+			flexDirection="column"
+			borderStyle="round"
+			borderColor={colors.primary}
+			paddingX={1}
+			marginBottom={1}
+		>
+			<Text bold color={colors.primary}>
+				{mode === 'agents' ? 'Agents' : 'Background Task Details'}
+			</Text>
+			{mode === 'agents' ? (
+				<Box flexDirection="column" marginTop={1}>
+					{agents.length > 0 ? (
+						agents.map(([agentId, progress]) => (
+							<Box key={agentId} flexDirection="column" marginBottom={1}>
+								<Text color={colors.text}>
+									<Text color={colors.primary} bold>
+										✦ {progress.subagentName || agentId}
+									</Text>{' '}
+									({progress.status}
+									{progress.currentTool ? ` · ${progress.currentTool}` : ''}
+									{progress.modelUsed ? ` · ${progress.modelUsed}` : ''})
+								</Text>
+								{progress.toolCallCount > 0 && (
+									<Text color={colors.secondary}>
+										{'  '}
+										{progress.toolCallCount} tool call
+										{progress.toolCallCount === 1 ? '' : 's'} · ~
+										{progress.tokenCount.toLocaleString()} tokens
+									</Text>
+								)}
+							</Box>
+						))
+					) : (
+						<Box marginTop={1}>
+							<Text color={colors.secondary}>
+								No agents are currently running.
+							</Text>
+						</Box>
+					)}
+				</Box>
+			) : tasks.length > 0 ? (
+				<Box flexDirection="column" marginTop={1}>
+					{tasks.map(task => (
+						<Box key={task.executionId} flexDirection="column" marginBottom={1}>
+							<Text color={colors.text}>
+								<Text bold>Command: </Text>
+								{task.command}
+							</Text>
+							<Text color={colors.secondary}>
+								{'  '}
+								{task.isComplete
+									? task.error
+										? `failed: ${task.error}`
+										: `exited ${task.exitCode ?? 'unknown'}`
+									: 'running'}{' '}
+								· {formatElapsedTime(task.startedAt)}
+							</Text>
+							{task.outputPreview.trim() && (
+								<Text color={colors.secondary}>
+									{'  '}
+									{task.outputPreview
+										.trim()
+										.split(/\r?\n/)
+										.slice(-3)
+										.join('\n    ')}
+								</Text>
+							)}
+						</Box>
+					))}
+				</Box>
+			) : (
+				<Box marginTop={1}>
+					<Text color={colors.secondary}>No background tasks are running.</Text>
+				</Box>
+			)}
+			<Box marginTop={1}>
+				<Text color={colors.secondary}>Esc to close</Text>
+			</Box>
+		</Box>
+	);
+}
 
 interface InteractiveAppProps {
 	appState: ReturnType<typeof useAppState>;
@@ -106,6 +236,22 @@ export function InteractiveApp({
 		React.useState<SubmittedInputDraft | null>(null);
 	const [restoredDraft, setRestoredDraft] =
 		React.useState<RestoredInputDraft | null>(null);
+
+	// Status-line indicator focus: ↓ at the bottom of the input focuses the
+	// first badge (agents when present, else bg), ↑/↓ cycle between them,
+	// Enter opens a details panel, Esc returns to the input. Mirrors the
+	// preview mock's status-line navigation.
+	const [statusFocusIndex, setStatusFocusIndex] = useState(-1);
+	const statusFocusIndexRef = useRef(-1);
+	const [statusDetails, setStatusDetails] = useState<'agents' | 'bg' | null>(
+		null,
+	);
+	const statusDetailsRef = useRef<'agents' | 'bg' | null>(null);
+	statusDetailsRef.current = statusDetails;
+	// True during the keypress batch that entered the status line (set by
+	// UserInput's onDownAtBottom); the section's own handler must not advance
+	// past the first indicator for that same ↓.
+	const enteredFocusRef = useRef(false);
 
 	const handleToggleCompactDisplay = React.useCallback(() => {
 		const expanding = appState.compactToolDisplay;
@@ -266,6 +412,11 @@ export function InteractiveApp({
 	useInput(
 		(_input, key) => {
 			if (key.escape) {
+				// While a status-line indicator holds focus, Escape belongs to
+				// that navigation (returns to the input) — never a cancel.
+				if (statusFocusIndexRef.current >= 0 || statusDetailsRef.current) {
+					return;
+				}
 				if (recallableSubmittedDraft) {
 					handleRecallSubmittedDraft();
 					return;
@@ -280,6 +431,39 @@ export function InteractiveApp({
 	const terminalRows = useTerminalRows();
 	const terminalWidth = useTerminalWidth();
 	const backgroundTaskCount = useBackgroundTaskCount();
+
+	// Background-task completion indicator: when a backgrounded bash task
+	// finishes, queue a chat line so the user sees it ended (e.g. a worktree
+	// creation script) instead of only the `bg:` badge silently dropping.
+	React.useEffect(() => {
+		const onBashComplete = (state: BashExecutionState) => {
+			if (!state.isBackground) return;
+			const command = state.command.replace(/\s+/g, ' ').trim();
+			const key = generateKey(`bg-complete-${state.executionId}`);
+			if (state.error) {
+				appState.addToChatQueue(
+					<ErrorMessage
+						key={key}
+						message={`  ✦ Background task stopped: ${command} · ${state.error}`}
+						hideBox={true}
+					/>,
+				);
+				return;
+			}
+			appState.addToChatQueue(
+				<SuccessMessage
+					key={key}
+					message={`  ✦ Background task completed: ${command} · exit ${state.exitCode ?? 'unknown'}`}
+					hideBox={true}
+				/>,
+			);
+		};
+		bashExecutor.on('complete', onBashComplete);
+		return () => {
+			bashExecutor.off('complete', onBashComplete);
+		};
+	}, [appState.addToChatQueue]);
+
 	// Running-agent tally for the mode line (agents: N) — mirrors the preview
 	// mock's status count so live and mock footers render identically.
 	const agentCount = React.useMemo(() => {
@@ -287,6 +471,103 @@ export function InteractiveApp({
 		if (!counts) return 0;
 		return Object.keys(counts).filter(key => key.startsWith('agent:')).length;
 	}, [appState.compactToolCounts]);
+	// Status-line badge layout: agents first (index 0) when present, then bg.
+	const hasBgTasks = backgroundTaskCount > 0;
+	const bgBadgeIndex = agentCount > 0 ? 1 : 0;
+	const totalStatusItems = (agentCount > 0 ? 1 : 0) + (hasBgTasks ? 1 : 0);
+
+	const clearStatusFocus = React.useCallback(() => {
+		statusFocusIndexRef.current = -1;
+		setStatusFocusIndex(-1);
+		setStatusDetails(null);
+	}, []);
+
+	const handleDownAtBottom = React.useCallback(() => {
+		if (totalStatusItems === 0) return;
+		statusFocusIndexRef.current = 0;
+		setStatusFocusIndex(0);
+		// Mark this keypress so the section's own useInput (which also runs
+		// for the same ↓) doesn't advance past item 0.
+		enteredFocusRef.current = true;
+		setTimeout(() => {
+			enteredFocusRef.current = false;
+		}, 0);
+	}, [totalStatusItems]);
+
+	// Status-line badge navigation. Active only while a badge holds focus;
+	// UserInput blocks its own handler via submitBlocked during that time.
+	useInput(
+		(_input, key) => {
+			if (statusFocusIndexRef.current < 0) return;
+			// While a details panel is open it owns the input: ESC closes it,
+			// and arrows must not move badge focus underneath (which would
+			// orphan the panel — focus cleared but panel still open, so a later
+			// ESC could never close it).
+			if (statusDetailsRef.current) return;
+			if (key.escape) {
+				clearStatusFocus();
+				return;
+			}
+			if (key.downArrow) {
+				if (enteredFocusRef.current) return;
+				const next = Math.min(
+					statusFocusIndexRef.current + 1,
+					totalStatusItems - 1,
+				);
+				statusFocusIndexRef.current = next;
+				setStatusFocusIndex(next);
+				return;
+			}
+			if (key.upArrow) {
+				const next =
+					statusFocusIndexRef.current > 0
+						? statusFocusIndexRef.current - 1
+						: -1;
+				statusFocusIndexRef.current = next;
+				setStatusFocusIndex(next);
+				return;
+			}
+			if (key.return) {
+				const current = statusFocusIndexRef.current;
+				if (current === 0 && agentCount > 0) {
+					setStatusDetails('agents');
+				} else if (current === bgBadgeIndex && hasBgTasks) {
+					setStatusDetails('bg');
+				}
+			}
+		},
+		{isActive: statusFocusIndex >= 0},
+	);
+
+	// Details-panel input owner. Mounted whenever the bg/agents details panel
+	// is open, so ESC always closes it — even if badge focus was lost — and the
+	// prompt's own ESC/arrow handlers can't reach it (the panel replaces the
+	// input, mirroring the preview mock).
+	useInput(
+		(_input, key) => {
+			if (key.escape) {
+				// Close the panel AND release badge focus in one press, so the
+				// input is immediately usable again — leaving the badge focused
+				// kept submitBlocked on, which made Enter appear dead.
+				clearStatusFocus();
+			}
+		},
+		{isActive: statusDetails !== null},
+	);
+
+	// Safety net: if every badge disappears while one holds focus (e.g. the
+	// last background task completed), release the focus so the input never
+	// gets stuck in the submit-blocked state.
+	React.useEffect(() => {
+		if (
+			totalStatusItems === 0 &&
+			statusFocusIndexRef.current >= 0 &&
+			!statusDetailsRef.current
+		) {
+			clearStatusFocus();
+		}
+	}, [totalStatusItems, clearStatusFocus]);
+
 	const statusLineConfig = loadPreferences().statusLine;
 	const statusInfo = useMemo(() => {
 		let git:
@@ -405,7 +686,11 @@ export function InteractiveApp({
 				scrollActive={
 					!showModalSelectors &&
 					!appState.isExplorerMode &&
-					!appState.isIdeSelectionMode
+					!appState.isIdeSelectionMode &&
+					// The status-line details panel is a modal too: while it is
+					// open, PageUp/PageDown/wheel must not scroll the chat
+					// underneath it.
+					!statusDetails
 				}
 			/>
 
@@ -527,54 +812,71 @@ export function InteractiveApp({
 					!appState.isSettingsMode &&
 					!appState.planReviewState?.show && (
 						<UIStateProvider>
-							<ChatInput
-								agentCount={agentCount}
-								backgroundCount={backgroundTaskCount}
-								isCancelling={appState.isCancelling}
-								isToolExecuting={appState.isToolExecuting}
-								isQuestionMode={appState.isQuestionMode}
-								pendingToolCalls={appState.pendingToolCalls}
-								currentToolIndex={appState.currentToolIndex}
-								pendingQuestion={appState.pendingQuestion}
-								onQuestionAnswer={handleQuestionAnswer}
-								mcpInitialized={appState.mcpInitialized}
-								client={appState.client}
-								customCommands={Array.from(
-									appState.customCommandCache.entries(),
-								).map(([name, command]) => ({
-									name,
-									description: command.metadata.description,
-								}))}
-								inputDisabled={false}
-								onSubmittedDraft={handleSubmittedDraft}
-								restoreSubmittedDraft={restoredDraft}
-								queuedMessages={userMessageQueue.queuedMessages}
-								onQueueMessage={userMessageQueue.enqueueMessage}
-								onRemoveQueuedMessage={userMessageQueue.removeMessage}
-								isBusy={cancellable}
-								developmentMode={appState.developmentMode}
-								contextPercentUsed={appState.contextPercentUsed}
-								contextSource={appState.contextSource}
-								sessionName={appState.sessionName || undefined}
-								compactToolDisplay={appState.compactToolDisplay}
-								liveCompactCounts={liveCompactCounts}
-								liveCompactStatus={liveCompactStatus}
-								liveTaskList={appState.liveTaskList}
-								onToggleCompactDisplay={handleToggleCompactDisplay}
-								pendingSubagentApproval={pendingSubagentApproval}
-								onSubagentToolApproval={handleSubagentToolApproval}
-								pendingToolConfirmation={pendingToolConfirmation}
-								onToolConfirmation={handleToolConfirmation}
-								onSubmit={handleUserSubmit}
-								activeEditor={vscodeServer.activeEditor}
-								onDismissActiveEditor={vscodeServer.dismissActiveEditor}
-								onToggleMode={appHandlers.handleToggleDevelopmentMode}
-								onToggleReasoningExpanded={handleToggleReasoningExpanded}
-								tune={appState.tune}
-								currentModel={appState.currentModel}
-								statusInfo={statusInfo}
-								statusLineSlot={statusLineSlot}
-							/>
+							{statusDetails && (
+								<StatuslineDetailsPanel
+									mode={statusDetails}
+									onClose={() => setStatusDetails(null)}
+								/>
+							)}
+							{/* The details panel replaces the input (its ESC/arrow
+							    handlers would otherwise reach the prompt behind
+							    the modal — same pattern as the preview mock). */}
+							{!statusDetails && (
+								<ChatInput
+									agentCount={agentCount}
+									backgroundCount={backgroundTaskCount}
+									onDownAtBottom={handleDownAtBottom}
+									submitBlocked={statusFocusIndex >= 0}
+									bgHighlighted={
+										statusFocusIndex === bgBadgeIndex && hasBgTasks
+									}
+									agentHighlighted={statusFocusIndex === 0 && agentCount > 0}
+									isCancelling={appState.isCancelling}
+									isToolExecuting={appState.isToolExecuting}
+									isQuestionMode={appState.isQuestionMode}
+									pendingToolCalls={appState.pendingToolCalls}
+									currentToolIndex={appState.currentToolIndex}
+									pendingQuestion={appState.pendingQuestion}
+									onQuestionAnswer={handleQuestionAnswer}
+									mcpInitialized={appState.mcpInitialized}
+									client={appState.client}
+									customCommands={Array.from(
+										appState.customCommandCache.entries(),
+									).map(([name, command]) => ({
+										name,
+										description: command.metadata.description,
+									}))}
+									inputDisabled={false}
+									onSubmittedDraft={handleSubmittedDraft}
+									restoreSubmittedDraft={restoredDraft}
+									queuedMessages={userMessageQueue.queuedMessages}
+									onQueueMessage={userMessageQueue.enqueueMessage}
+									onRemoveQueuedMessage={userMessageQueue.removeMessage}
+									isBusy={cancellable}
+									developmentMode={appState.developmentMode}
+									contextPercentUsed={appState.contextPercentUsed}
+									contextSource={appState.contextSource}
+									sessionName={appState.sessionName || undefined}
+									compactToolDisplay={appState.compactToolDisplay}
+									liveCompactCounts={liveCompactCounts}
+									liveCompactStatus={liveCompactStatus}
+									liveTaskList={appState.liveTaskList}
+									onToggleCompactDisplay={handleToggleCompactDisplay}
+									pendingSubagentApproval={pendingSubagentApproval}
+									onSubagentToolApproval={handleSubagentToolApproval}
+									pendingToolConfirmation={pendingToolConfirmation}
+									onToolConfirmation={handleToolConfirmation}
+									onSubmit={handleUserSubmit}
+									activeEditor={vscodeServer.activeEditor}
+									onDismissActiveEditor={vscodeServer.dismissActiveEditor}
+									onToggleMode={appHandlers.handleToggleDevelopmentMode}
+									onToggleReasoningExpanded={handleToggleReasoningExpanded}
+									tune={appState.tune}
+									currentModel={appState.currentModel}
+									statusInfo={statusInfo}
+									statusLineSlot={statusLineSlot}
+								/>
+							)}
 						</UIStateProvider>
 					)}
 			</Box>

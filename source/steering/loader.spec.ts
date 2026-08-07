@@ -53,6 +53,23 @@ test('injectSkill: inlines the sibling command body (frontmatter stripped)', t =
 	t.is(rule?.body, 'Do the skill thing.', 'body comes from the skill, not the rule file');
 });
 
+test('parseCondition: backgroundTasksRunning is parsed from frontmatter', t => {
+	const rulePath = scaffold({
+		ruleFrontmatter: [
+			'id: x',
+			'mode: announce',
+			'maxFires: 1',
+			'condition:',
+			'  intentClass: frontend-edit',
+			'  backgroundTasksRunning: false',
+		].join('\n'),
+	});
+	const rule = parseSteeringRule(rulePath);
+	rmSync(join(rulePath, '..', '..', '..'), {recursive: true, force: true});
+	t.truthy(rule);
+	t.is(rule?.condition?.backgroundTasksRunning, false);
+});
+
 test('injectSkill: missing command file → rule skipped', t => {
 	const rulePath = scaffold({
 		ruleFrontmatter: [
