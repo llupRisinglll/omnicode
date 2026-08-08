@@ -23,6 +23,11 @@ export interface UseChatHandlerProps {
 	setIsCancelling: (cancelling: boolean) => void;
 
 	addToChatQueue: (component: React.ReactNode) => void;
+	/** Replace a previously queued chat component by key (steering-trace compaction). */
+	replaceChatComponentByKey?: (
+		key: React.Key,
+		component: React.ReactNode,
+	) => void;
 	addTransientNotice?: (component: React.ReactNode) => void;
 	abortController: AbortController | null;
 	setAbortController: (controller: AbortController | null) => void;

@@ -121,6 +121,79 @@ test('evaluate: git log constraint → instant block, no InnerDaemon call', asyn
 	t.false(innerdaemonCalled, 'InnerDaemon must not be called for a constraint block');
 });
 
+test('evaluate: alsoBlock constraint is dormant once the success criterion is met', async t => {
+	// A rule whose criterion is already satisfied must not fire its alsoBlock
+	// on a LATER probe — otherwise the turn-boundary pass blocks a call that
+	// already executed and injects a duplicate tool result for the same
+	// tool_call_id (the sim regression: port listener existed, yet the
+	// post-turn evaluate() still blocked the `| head -` probe).
+	const rule: SteeringRule = {
+		id: 'runtime-budget',
+		mode: 'innerdaemon',
+		watch: {
+			successCriterion: 'portListenerExists',
+			alsoBlock: [
+				{
+					tool: 'execute_bash',
+					argMatches: ['| head -'],
+					message: 'do not truncate logs',
+				},
+			],
+		},
+		body: 'Write full logs.',
+	};
+	const engine = engineWith([rule], {action: 'noop', reason: ''}, alwaysMet);
+	const facts = [
+		makeFact({
+			turnIndex: 0,
+			toolCalls: [
+				toolCall('a', 'execute_bash', {
+					command: 'ps aux | grep dev | head -3',
+				}),
+			],
+		}),
+	];
+
+	t.is(
+		await engine.evaluate(facts),
+		null,
+		'a met success criterion keeps the rule dormant — no block',
+	);
+});
+
+test('evaluate: alsoBlock constraint still fires while the criterion is unmet', async t => {
+	const rule: SteeringRule = {
+		id: 'runtime-budget',
+		mode: 'innerdaemon',
+		watch: {
+			successCriterion: 'portListenerExists',
+			alsoBlock: [
+				{
+					tool: 'execute_bash',
+					argMatches: ['| head -'],
+					message: 'do not truncate logs',
+				},
+			],
+		},
+		body: 'Write full logs.',
+	};
+	const engine = engineWith([rule], {action: 'noop', reason: ''}, neverMet);
+	const facts = [
+		makeFact({
+			turnIndex: 0,
+			toolCalls: [
+				toolCall('a', 'execute_bash', {
+					command: 'ps aux | grep dev | head -3',
+				}),
+			],
+		}),
+	];
+
+	const action = await engine.evaluate(facts);
+	t.is(action?.type, 'block');
+	t.deepEqual(action?.toolCallIds, ['a']);
+});
+
 test('evaluateConstraints blocks a forbidden call before tool results exist', t => {
 	const rule: SteeringRule = {
 		id: 'reproduce-first',

@@ -1,5 +1,8 @@
 import test from 'ava';
-import {formatSteeringTrace} from '@/components/innerdaemon-trace';
+import {
+	formatSteeringTrace,
+	formatSteeringTraceRun,
+} from '@/components/innerdaemon-trace';
 import {SteeringEngine, type InnerDaemonInvoker} from './steering-engine';
 import type {
 	InnerDaemonResponse,
@@ -188,5 +191,39 @@ test('formatSteeringTrace: no rule in scope line', t => {
 			decision: 'noop',
 		}),
 		'InnerDaemon · intent=runtime-setup · no rule in scope · noop',
+	);
+});
+
+test('formatSteeringTraceRun: count 1 renders the plain single-turn line', t => {
+	t.is(
+		formatSteeringTraceRun(
+			{
+				intentClass: 'unknown',
+				inScopeRuleId: 'bc_progress-budget',
+				budgetUsed: 22,
+				budgetMax: 8,
+				decision: 'noop',
+				innerDaemonModel: 'mimo-v2.5',
+			},
+			1,
+		),
+		'InnerDaemon · intent=unknown · rule=bc_progress-budget · budget 22/8 · model=mimo-v2.5 · noop',
+	);
+});
+
+test('formatSteeringTraceRun: consecutive noops collapse into a ×N line', t => {
+	t.is(
+		formatSteeringTraceRun(
+			{
+				intentClass: 'unknown',
+				inScopeRuleId: 'bc_progress-budget',
+				budgetUsed: 22,
+				budgetMax: 8,
+				decision: 'noop',
+				innerDaemonModel: 'mimo-v2.5',
+			},
+			12,
+		),
+		'InnerDaemon · intent=unknown · rule=bc_progress-budget · budget 22/8 · model=mimo-v2.5 · noop ×12',
 	);
 });
