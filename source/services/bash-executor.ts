@@ -12,6 +12,7 @@ import {
 	INTERVAL_BASH_PROGRESS_MS,
 	TIMEOUT_BASH_DEFAULT_MS,
 } from '@/constants';
+import {summarizeBashCommand} from '@/utils/bash-summary';
 import {getSafeSessionCwd, setSessionCwd} from './session-cwd.js';
 
 const isWindows = platform === 'win32';
@@ -19,6 +20,8 @@ const isWindows = platform === 'win32';
 export interface BashExecutionState {
 	executionId: string;
 	command: string;
+	/** Short human label for the command (see summarizeBashCommand). */
+	label: string;
 	startedAt: number;
 	isBackground: boolean;
 	outputPreview: string; // Last 150 chars for display
@@ -60,6 +63,7 @@ export class BashExecutor extends EventEmitter {
 		const state: BashExecutionState = {
 			executionId,
 			command,
+			label: summarizeBashCommand(command),
 			startedAt: Date.now(),
 			isBackground: options?.background ?? false,
 			outputPreview: '',

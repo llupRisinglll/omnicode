@@ -101,6 +101,23 @@ test('execute - stores command in result state', async t => {
 	t.is(result.command, command);
 });
 
+test('execute - sets a short human label for the command', async t => {
+	const executor = createExecutor();
+	const { promise } = executor.execute(
+		'for i in $(seq 1 80); do kserp_deploy=$(gh run list --repo KahitSan/kserp --workflow deploy.yml) if [ "$kserp_deploy" = "completed/success" ]; then break fi sleep 30 done',
+	);
+	const result = await promise;
+
+	t.true(
+		result.label.startsWith('poll: '),
+		`expected poll label, got "${result.label}"`,
+	);
+	t.true(
+		result.label.length < result.command.length,
+		'label must be shorter than the full command',
+	);
+});
+
 test('execute - creates output preview from last 150 chars', async t => {
 	const executor = createExecutor();
 	// Generate output longer than 150 chars using a portable command
