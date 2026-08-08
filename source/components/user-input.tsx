@@ -1,6 +1,7 @@
 import {Box, Text, useFocus, useInput} from 'ink';
 import Spinner from 'ink-spinner';
 import {
+	memo,
 	type ReactNode,
 	useCallback,
 	useEffect,
@@ -106,7 +107,7 @@ interface ChatProps {
 	agentHighlighted?: boolean;
 }
 
-export default function UserInput({
+const UserInput = memo(function UserInput({
 	onSubmit,
 	onQueueMessage,
 	queuedMessages = [],
@@ -1472,4 +1473,6 @@ export default function UserInput({
 			)}
 		</>
 	);
-}
+});
+
+export default UserInput;

@@ -77,9 +77,84 @@ export const ChatHistory = React.memo(function ChatHistory({
 	const {colors} = useTheme();
 	const terminalRows = useTerminalRows();
 	const viewportRef = React.useRef<DOMElement>(null);
-	const contentRef = React.useRef<DOMElement>(null);
+	// Static transcript wrapper (banner + queued history). Measured separately
+	// from the live region so the per-flush O(1) live measurement does not
+	// double-count with the membership-driven static measurement.
+	const staticRef = React.useRef<DOMElement>(null);
+	// The live region's own box (measured cheaply per flush so the scroll
+	// clamp stays accurate while a reply streams — see scrollBy below).
+	const liveRef = React.useRef<DOMElement>(null);
 	const [scrollOffset, setScrollOffset] = React.useState(0);
 	const scrollOffsetRef = React.useRef(0);
+	// Cached layout extents. `measureNaturalHeight` recursively walks EVERY
+	// node of the transcript, so calling it per wheel tick is O(transcript) —
+	// the source of the "scrolling feels heavy" complaint. Instead, measure
+	// the static transcript only when its membership changes (rare) and the
+	// live region with a single O(1) measureElement per flush.
+	const staticHeightRef = React.useRef(0);
+	const liveHeightRef = React.useRef(0);
+	const viewportHeightRef = React.useRef(0);
+
+	// Static transcript height: recompute only when content membership,
+	// terminal size, or fullscreen state changes. The live region is excluded
+	// here (it is measured separately at O(1) per flush).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refs are written intentionally when membership/resize changes.
+	React.useEffect(() => {
+		staticHeightRef.current = staticRef.current
+			? measureNaturalHeight(staticRef.current)
+			: 0;
+	}, [
+		startChat,
+		fullscreen,
+		queuedComponents.length,
+		staticComponents.length,
+		terminalRows,
+	]);
+
+	// Viewport height: recompute on the same membership/resize triggers.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refs are written intentionally when membership/resize changes.
+	React.useEffect(() => {
+		viewportHeightRef.current = viewportRef.current
+			? measureElement(viewportRef.current).height
+			: 0;
+	}, [
+		startChat,
+		fullscreen,
+		queuedComponents.length,
+		staticComponents.length,
+		terminalRows,
+	]);
+
+	// Live region height: O(1) per flush so the scroll clamp tracks a growing
+	// streaming reply without walking the whole transcript.
+	React.useEffect(() => {
+		liveHeightRef.current = liveRef.current
+			? measureElement(liveRef.current).height
+			: 0;
+	});
+
+	// Queued components can grow IN PLACE while tools/agents stream (a live
+	// tool tail, agent progress, etc.) without any membership change, which
+	// would leave the cached static height stale. While the live region is
+	// mounted, refresh the static measurement on a slow cadence (once per
+	// second) so the scroll clamp stays honest without reintroducing the
+	// per-wheel-tick O(transcript) walk.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deps key on live-region PRESENCE (boolean), not the element identity — the element changes every streaming flush, which would restart this interval (and re-walk the transcript) on every token.
+	React.useEffect(() => {
+		if (!liveComponent) return;
+		const refresh = () => {
+			staticHeightRef.current = staticRef.current
+				? measureNaturalHeight(staticRef.current)
+				: 0;
+		};
+		refresh();
+		const timer = setInterval(refresh, 1000);
+		return () => clearInterval(timer);
+	}, [
+		Boolean(liveComponent),
+		queuedComponents.length,
+		staticComponents.length,
+	]);
 
 	// New content or a vertical resize snaps the view back to the bottom
 	// (sticky scroll) — matching every chat TUI's behavior.
@@ -120,13 +195,8 @@ export const ChatHistory = React.memo(function ChatHistory({
 	// wheel. `halfPage: true` scales the step to half the viewport height.
 	const scrollBy = React.useCallback(
 		(delta: number, halfPage = false) => {
-			const viewport = viewportRef.current
-				? measureElement(viewportRef.current)
-				: undefined;
-			const viewportHeight = viewport?.height ?? 0;
-			const contentHeight = contentRef.current
-				? measureNaturalHeight(contentRef.current)
-				: 0;
+			const viewportHeight = viewportHeightRef.current;
+			const contentHeight = staticHeightRef.current + liveHeightRef.current;
 			// Once scrolled, the indicator consumes one viewport row. Include it in
 			// the initial clamp so the oldest transcript row remains reachable.
 			const maxOffset = Math.max(
@@ -216,11 +286,14 @@ export const ChatHistory = React.memo(function ChatHistory({
 
 	const content = (
 		<>
-			{startChat && banner && (
-				<RenderErrorBoundary label="banner">{banner}</RenderErrorBoundary>
+			{startChat && (
+				<Box ref={staticRef} flexDirection="column">
+					{banner && (
+						<RenderErrorBoundary label="banner">{banner}</RenderErrorBoundary>
+					)}
+					<ChatQueue {...chatQueueProps} />
+				</Box>
 			)}
-
-			{startChat && <ChatQueue {...chatQueueProps} />}
 
 			{liveComponent && (
 				// Inline: the live component sits below the absolutely-positioned
@@ -228,7 +301,11 @@ export const ChatHistory = React.memo(function ChatHistory({
 				// it renders inside the overflow="hidden" scroll viewport, so it must
 				// stay at the padded column — a negative margin would push it left of
 				// the clip window and Ink would cut off its first character.
-				<Box marginLeft={fullscreen ? 0 : -1} flexDirection="column">
+				<Box
+					ref={liveRef}
+					marginLeft={fullscreen ? 0 : -1}
+					flexDirection="column"
+				>
 					<RenderErrorBoundary label="live">
 						{liveComponent}
 					</RenderErrorBoundary>
@@ -268,12 +345,7 @@ export const ChatHistory = React.memo(function ChatHistory({
 				overflow="hidden"
 				justifyContent="flex-end"
 			>
-				<Box
-					ref={contentRef}
-					flexDirection="column"
-					flexShrink={0}
-					marginBottom={-scrollOffset}
-				>
+				<Box flexDirection="column" flexShrink={0} marginBottom={-scrollOffset}>
 					{content}
 				</Box>
 			</Box>

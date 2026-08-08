@@ -59,6 +59,10 @@ let hover: {row: number; startCol: number; endCol: number} | null = null;
 export function setTerminalSize(cols: number, rows: number): void {
 	terminalCols = cols;
 	terminalRows = rows;
+	// A resize changes the visible grid, so any cached string snapshot built
+	// at the old dimensions is stale — hover/click hit-testing reads rows that
+	// no longer match what is on screen. Drop it.
+	invalidateScreenSnapshot();
 }
 
 /** Restrict selection painting/extraction to rows ≤ maxRow (chat bottom). */
@@ -93,6 +97,15 @@ interface ScreenCell {
 }
 
 const screen: ScreenCell[][] = [];
+// Cached string snapshot of `screen`, rebuilt only when a cell changes. Hover
+// hit-testing calls getScreenSnapshot() on EVERY pointer event for EVERY
+// hoverable component — rebuilding the full 2D grid per call turned one mouse
+// move into N×O(rows×cols) string work and made hover/click laggy and flaky.
+let screenSnapshotCache: string[] | null = null;
+
+function invalidateScreenSnapshot(): void {
+	screenSnapshotCache = null;
+}
 
 function blankRow(): ScreenCell[] {
 	return Array.from({length: terminalCols}, () => ({
@@ -118,6 +131,7 @@ function ensureRows(row: number): void {
 export function clearScreen(): void {
 	screen.length = 0;
 	ensureRows(0);
+	invalidateScreenSnapshot();
 }
 
 /** Apply the terminal's full-screen scroll-up behavior. */
@@ -126,6 +140,7 @@ export function scrollScreenUp(count = 1): void {
 		screen.shift();
 		screen.push(blankRow());
 	}
+	invalidateScreenSnapshot();
 }
 
 /**
@@ -141,6 +156,7 @@ export function writeCell(
 	if (row < 0 || row >= terminalRows || col < 0 || col >= terminalCols) return;
 	ensureRows(row);
 	screen[row][col] = {char, style, continuation: false};
+	invalidateScreenSnapshot();
 }
 
 /** Mark an extra terminal cell occupied by the preceding wide character. */
@@ -152,6 +168,7 @@ export function writeContinuationCell(
 	if (row < 0 || row >= terminalRows || col < 0 || col >= terminalCols) return;
 	ensureRows(row);
 	screen[row][col] = {char: '', style, continuation: true};
+	invalidateScreenSnapshot();
 }
 
 /**
@@ -183,6 +200,7 @@ export function writeString(row: number, col: number, text: string): void {
  * Returns an array of strings, one per row.
  */
 export function getScreenSnapshot(): string[] {
+	if (screenSnapshotCache) return screenSnapshotCache;
 	const snapshot: string[] = [];
 	for (let r = 0; r < screen.length && r < terminalRows; r++) {
 		const row = screen[r] ?? [];
@@ -193,6 +211,7 @@ export function getScreenSnapshot(): string[] {
 				.join(''),
 		);
 	}
+	screenSnapshotCache = snapshot;
 	return snapshot;
 }
 

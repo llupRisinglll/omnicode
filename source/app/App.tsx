@@ -343,6 +343,7 @@ export default function App({
 		currentModel: appState.currentModel,
 		setIsCancelling: appState.setIsCancelling,
 		addToChatQueue: appState.addToChatQueue,
+		replaceChatComponentByKey: appState.replaceChatComponentByKey,
 		addTransientNotice,
 		abortController: appState.abortController,
 		setAbortController: appState.setAbortController,
@@ -464,7 +465,6 @@ export default function App({
 		setCustomCommandsCount: appState.setCustomCommandsCount,
 		setSubagentsReady: appState.setSubagentsReady,
 		addToChatQueue: appState.addToChatQueue,
-		customCommandCache: appState.customCommandCache,
 		setActiveMode: appState.setActiveMode,
 		cliProvider,
 		cliModel,
@@ -789,19 +789,30 @@ export default function App({
 	const showAssistantReasoning =
 		chatHandler.streamingReasoning && chatHandler.streamingContent;
 
-	const liveCompactCounts =
-		appState.compactToolCounts &&
-		Object.keys(appState.compactToolCounts).length > 0 ? (
-			<LiveCompactCounts
-				counts={appState.compactToolCounts}
-				expanded={!appState.compactToolDisplay}
-			/>
-		) : null;
-	const liveCompactStatus = appState.compactToolCounts ? (
-		getCompactToolRunningSummary(appState.compactToolCounts) ? (
-			<LiveCompactRunningSummary counts={appState.compactToolCounts} />
-		) : null
-	) : null;
+	// These elements only change when the tool tally changes — NOT on every
+	// streaming flush. Memoize by the tally so their identity stays stable
+	// while a reply streams; otherwise the ChatInput/UserInput subtree (and its
+	// keystroke handling) re-renders on every token flush.
+	const liveCompactCounts = React.useMemo(
+		() =>
+			appState.compactToolCounts &&
+			Object.keys(appState.compactToolCounts).length > 0 ? (
+				<LiveCompactCounts
+					counts={appState.compactToolCounts}
+					expanded={!appState.compactToolDisplay}
+				/>
+			) : null,
+		[appState.compactToolCounts, appState.compactToolDisplay],
+	);
+	const liveCompactStatus = React.useMemo(
+		() =>
+			appState.compactToolCounts ? (
+				getCompactToolRunningSummary(appState.compactToolCounts) ? (
+					<LiveCompactRunningSummary counts={appState.compactToolCounts} />
+				) : null
+			) : null,
+		[appState.compactToolCounts],
+	);
 
 	const streamingLiveComponent =
 		chatHandler.isGenerating &&

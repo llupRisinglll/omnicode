@@ -68,7 +68,6 @@ interface UseAppInitializationProps {
 	setCustomCommandsCount: (count: number) => void;
 	setSubagentsReady: (ready: boolean) => void;
 	addToChatQueue: (component: React.ReactNode) => void;
-	customCommandCache: Map<string, CustomCommand>;
 	setActiveMode: (mode: import('@/hooks/useAppState').ActiveMode) => void;
 	cliProvider?: string;
 	cliModel?: string;
@@ -95,7 +94,7 @@ export function useAppInitialization({
 	setToolManager,
 	setCustomCommandLoader,
 	setCustomCommandExecutor,
-	setCustomCommandCache: _setCustomCommandCache,
+	setCustomCommandCache,
 	setStartChat,
 	setMcpInitialized,
 	setUpdateInfo,
@@ -105,7 +104,6 @@ export function useAppInitialization({
 	setCustomCommandsCount,
 	setSubagentsReady,
 	addToChatQueue,
-	customCommandCache,
 	setActiveMode,
 	cliProvider,
 	cliModel,
@@ -177,15 +175,20 @@ export function useAppInitialization({
 	// helper just reads the result back out for the picker UI.
 	const refreshCustomCommandCache = (loader: CustomCommandLoader) => {
 		const customCommands = loader.getAllCommands() || [];
-		customCommandCache.clear();
+		const nextCache = new Map<string, CustomCommand>();
 		for (const command of customCommands) {
-			customCommandCache.set(command.name, command);
+			nextCache.set(command.name, command);
 			if (command.metadata?.aliases) {
 				for (const alias of command.metadata.aliases) {
-					customCommandCache.set(alias, command);
+					nextCache.set(alias, command);
 				}
 			}
 		}
+		// Replace the Map IMMUTABLY so React state changes and consumers that
+		// memoize on `customCommandCache` identity (the / autocomplete list)
+		// recompute — mutating in place left skills/commands loaded after the
+		// initial boot invisible to the picker.
+		setCustomCommandCache(nextCache);
 		setCustomCommandsCount(customCommands.length);
 	};
 

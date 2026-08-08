@@ -733,16 +733,20 @@ test('a completed background task queues a completion indicator in the transcrip
 			/>,
 		);
 		// The transcript frame in this harness doesn't re-render async-queued
-		// chat components, so assert the queue received the real SuccessMessage
-		// with the live wording (ChatHistory rendering is covered elsewhere).
+		// chat components, so assert the queue received the real
+		// BackgroundTaskCompleted with the live wording (ChatHistory rendering
+		// is covered elsewhere). The completion line shows the short
+		// summarizeBashCommand label first and keeps the full script behind
+		// the expandable "+N more lines" row.
 		await waitForCondition(() => components.length === 1, 5000);
 		t.is(components.length, 1);
 		const {lastFrame: indicatorFrame, unmount: indicatorUnmount} =
 			renderWithTheme(components[0] as React.ReactElement);
 		t.regex(
 			indicatorFrame()!,
-			/Background task completed: sleep 0\.3; printf done · exit 0/,
+			/Background task completed: sleep 0\.3 · exit 0/,
 		);
+		t.regex(indicatorFrame()!, /└\s+sleep 0\.3; printf done/);
 		indicatorUnmount();
 		unmount();
 	} finally {
