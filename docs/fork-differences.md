@@ -15,6 +15,14 @@ This lives outside README.md so routine branch churn doesn't touch the README.
 | Responsive terminal width — content grows with the terminal (Codex-style) by default; optional `terminalMaxWidth` preference caps the layout | Fork-exclusive: `fork/omnicode-theme` |
 | Markdown tables fit content width instead of stretching to the full terminal width (long cells still wrap on narrow screens) | Fork-exclusive: `fork/table-fit-content` |
 | Preview mock harness for `nanocoder preview tui` (all scenarios, compacted tool groups expand to individual calls, streaming thinking, `/mock:confirm` tool-confirmation preview) | Fork-exclusive: `fork/preview-mock-polish` |
+| Web Search fallback model — `web_search` works without a Brave key by delegating to a configured model whose provider runs server-side search (e.g. DeepSeek's Responses API `web_search`), mirroring the vision fallback | Fork-exclusive: `fork/websearch-fallback-and-chat-polish` |
+| Status-line badge focus — `↓` enters the `agents:`/`bg:` badges, Enter opens a live background-task/agents details panel, Esc closes it without touching the chat | Fork-exclusive: `fork/websearch-fallback-and-chat-polish` |
+| Bash tool display — wrapped command headers with syntax highlighting, "Executed Bash" for user-invoked `!` commands, muted output tails, monitor output previews, background-completion indicator | Fork-exclusive: `fork/websearch-fallback-and-chat-polish` |
+| Steering aware of running background tasks (`backgroundTasksRunning` condition) and classifies the user's raw request instead of expanded command boilerplate | Fork-exclusive: `fork/websearch-fallback-and-chat-polish` |
+| Prompt-cache stability for OpenAI-compatible providers — byte-stable tool head across turns, session-id cache affinity shared with subagents and resumed sessions, opt-in `prompt_cache_key` | Fork-exclusive: `fork/prompt-cache-and-chat-polish` |
+| Chat performance — token-base context-percentage cache, throttled streaming markdown parses and publishes, snapshot cache for hover hit-testing, memoized transcript/agent rows | Fork-exclusive: `fork/prompt-cache-and-chat-polish` |
+| Background bash completion labels with expandable full-script rows; rate-limit retry with backoff; orphaned/duplicate tool-result repair | Fork-exclusive: `fork/prompt-cache-and-chat-polish` |
+| Steering trace compaction — consecutive identical noop evaluations collapse into one `×N` line | Fork-exclusive: `fork/prompt-cache-and-chat-polish` |
 | Statusline position control (`/statusline position top\|bottom`) | Incubating on `rc/statusline` |
 | Animated working/thinking indicators (`⚙ Working... (12s)`, `⚙ Thought (5s)`) | Incubating on `rc/indicators` |
 | Compact file diff display with inline word highlighting | Incubating on `rc/compact-diff` |
