@@ -10,6 +10,7 @@ import AssistantReasoning, {
 	renderMutedReasoning,
 	ThoughtRunSummary,
 } from '@/components/assistant-reasoning';
+import BackgroundTaskCompleted from '@/components/background-task-completed';
 import InnerDaemonDetails from '@/components/innerdaemon-details';
 import InnerDaemonTrace from '@/components/innerdaemon-trace';
 import {SuccessMessage} from '@/components/message-box';
@@ -35,6 +36,7 @@ import type {ToolManager} from '@/tools/tool-manager';
 import {isWebSearchFallbackActive} from '@/tools/web-search';
 import type {ProviderConfig} from '@/types/config';
 import type {ToolCall, ToolResult} from '@/types/core';
+import {summarizeBashCommand} from '@/utils/bash-summary';
 import {
 	isScreenTextAt,
 	isScreenTextBlockAt,
@@ -72,6 +74,7 @@ type PreviewScenario =
 	| 'mixed'
 	| 'tasks'
 	| 'innerdaemon'
+	| 'steering'
 	| 'skill'
 	| 'tools'
 	| 'thoughtrun'
@@ -91,6 +94,7 @@ type TranscriptEntry =
 	| {type: 'compact'; counts: CompactToolActivityMap}
 	| {type: 'tasks'; tasks: Task[]}
 	| {type: 'innerdaemon'; message: string}
+	| {type: 'steeringTrace'; diagnostic: SteeringDiagnostic; count?: number}
 	| {
 			type: 'tool_result';
 			toolName: 'write_file' | 'string_replace';
@@ -855,6 +859,7 @@ const PREVIEW_COMMANDS = new Set([
 	'mixed',
 	'tasks',
 	'innerdaemon',
+	'steering',
 	'skill',
 	'tools',
 	'thoughtrun',
@@ -876,6 +881,8 @@ const SCENARIO_PROMPTS: Record<PreviewScenario, string> = {
 	tasks: 'Break this UI debugging pass into visible tasks and update progress.',
 	innerdaemon:
 		'Continue the turn after steering evaluates whether the current workflow is stuck.',
+	steering:
+		'Watch the steering trace collapse consecutive noop evaluations into one ×N line.',
 	skill: 'Invoke a skill: the model loads and reads the skill markdown file.',
 	tools:
 		'Run a batch of heterogeneous tool calls and render their compact rows.',
@@ -1273,6 +1280,19 @@ function makeSubagentCounts(tick: number, runId = 0): CompactToolActivityMap {
 		counts[`agent:r${runId}-${agent.key.replace('agent:', '')}`] = {
 			count: 1,
 			details: [`${agent.name}: ${agent.task}`],
+			// Expanding the running compact block reveals the agent's individual
+			// tool calls with their streamed output tail — same shape as the
+			// bash/WebSearch compact families.
+			liveCalls: () => [
+				{
+					toolName: agent.tool,
+					detail:
+						agent.tool === 'execute_bash'
+							? 'npm run build'
+							: 'src/server/main.ts',
+					output: stream.slice(0, streamedCount).join('\n'),
+				},
+			],
 			liveDetails: () => [
 				...stream.slice(0, streamedCount),
 				`stats:running ${agent.tool} · ${toolCount} tool call${toolCount === 1 ? '' : 's'} · preview-model · ~${tokens.toLocaleString()} tokens`,
@@ -1300,6 +1320,29 @@ function makeCompletedSubagentCounts(): CompactToolActivityMap {
 				`stats:2 tool calls · ${1.8 + index * 0.7}s · preview-model · ~${(
 					agent.tokenBase + 420
 				).toLocaleString()} tokens`,
+			],
+			calls: [
+				{
+					toolName: agent.tool,
+					detail:
+						agent.tool === 'execute_bash'
+							? 'npm run build'
+							: 'src/server/main.ts',
+					output: (agent.tool === 'execute_bash'
+						? [
+								'starting background shell',
+								'waiting for stdout',
+								'packages checked',
+								'final summary received',
+							]
+						: [
+								'opening target files',
+								'reading current symbols',
+								'following imported helpers',
+								'final summary received',
+							]
+					).join('\n'),
+				},
 			],
 		};
 	}
@@ -1490,6 +1533,9 @@ function completionForScenario(scenario: PreviewScenario): string {
 	if (scenario === 'innerdaemon') {
 		return 'Mock steering pass completed after rendering the verbose trace and InnerDaemon nudge.';
 	}
+	if (scenario === 'steering') {
+		return 'Mock steering pass completed: 12 consecutive noop evaluations collapsed into a single `×12` trace line (one per run, not one per turn).';
+	}
 	if (scenario === 'skill') {
 		return 'Mock skill invocation completed: the skill tool ran and the markdown file was read into context.';
 	}
@@ -1518,6 +1564,25 @@ function detailForScenario(scenario: PreviewScenario): TranscriptEntry[] {
 	}
 	if (scenario === 'innerdaemon') {
 		return [{type: 'innerdaemon', message: MOCK_INNERDAEMON_SKILL_BODY}];
+	}
+	if (scenario === 'steering') {
+		// A noop run: same rule, same intent, budget climbing each turn — the
+		// live loop collapses these into ONE `×N` line. Shown through the real
+		// InnerDaemonTrace component (with the count prop the loop now passes).
+		return [
+			{
+				type: 'steeringTrace' as const,
+				diagnostic: {
+					intentClass: 'unknown',
+					inScopeRuleId: 'bc_progress-budget',
+					budgetUsed: 22,
+					budgetMax: 8,
+					decision: 'noop',
+					innerDaemonModel: 'mimo-v2.5',
+				},
+				count: 12,
+			},
+		];
 	}
 	if (scenario === 'skill') {
 		// Rows are appended asynchronously via displayToolResult on completion.
@@ -1598,7 +1663,7 @@ export function PreviewBody({
 	// drops the badge and queues the same "Background task completed" line the
 	// live app shows on bashExecutor 'complete'.
 	const bgCompletionQueueRef = React.useRef<
-		Array<{key: string; command: string}>
+		Array<{key: string; command: string; label: string; output: string[]}>
 	>([]);
 	const bgCompletionTimerRef = React.useRef<NodeJS.Timeout | null>(null);
 	// Monotonic key counter for background-task entries — a ref so rapid
@@ -1687,10 +1752,21 @@ export function PreviewBody({
 				{
 					type: 'react',
 					node: (
-						<SuccessMessage
+						<BackgroundTaskCompleted
 							key={generateKey(`mock-bg-complete-${job.key}`)}
-							message={`  ✦ Background task completed: ${job.command} · exit 0`}
-							hideBox={true}
+							state={{
+								executionId: job.key,
+								command: job.command,
+								label: job.label,
+								startedAt: Date.now(),
+								isBackground: true,
+								outputPreview: '',
+								fullOutput: job.output.join('\n'),
+								stderr: '',
+								isComplete: true,
+								exitCode: 0,
+								error: null,
+							}}
 						/>
 					),
 				},
@@ -2196,6 +2272,8 @@ export function PreviewBody({
 						bgCompletionQueueRef.current.push({
 							key: `execute_bash:bg-${keyOffset + i}`,
 							command: bgCommands[i]?.cmd ?? 'unknown',
+							label: summarizeBashCommand(bgCommands[i]?.cmd ?? ''),
+							output: bgCommands[i]?.output ?? [],
 						});
 					}
 					scheduleBgCompletion();
@@ -2283,6 +2361,15 @@ export function PreviewBody({
 								expanded={reasoningExpanded}
 							/>
 						</Box>
+					);
+				}
+				if (entry.type === 'steeringTrace') {
+					return (
+						<InnerDaemonTrace
+							key={index}
+							diagnostic={entry.diagnostic}
+							count={entry.count}
+						/>
 					);
 				}
 				if (entry.type === 'tool_result') {
@@ -2660,6 +2747,10 @@ export function PreviewBody({
 								{
 									name: 'mock:innerdaemon',
 									description: 'Mock InnerDaemon scenario',
+								},
+								{
+									name: 'mock:steering',
+									description: 'Mock compacted steering trace (noop ×N)',
 								},
 								{
 									name: 'mock:skill',

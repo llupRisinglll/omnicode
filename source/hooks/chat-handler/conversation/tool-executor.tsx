@@ -89,6 +89,8 @@ export interface ToolDisplayOptions {
 		toolName: string,
 		detail?: string | string[],
 		failed?: boolean,
+		/** Individual per-call entries revealed when the compact block expands. */
+		calls?: Array<{toolName?: string; detail: string; output: string}>,
 	) => void;
 	onLiveTaskUpdate?: () => void;
 	onRunningToolCounts?: (counts: CompactToolActivityMap | null) => void;
@@ -167,11 +169,19 @@ const formatAgentProgressTail = (
 			),
 		);
 	} else {
-		// Recent tool history streams while running too, so the compact agent
+		// Recent tool calls stream while running too, so the compact agent
 		// entry carries a live tail (and an expandable +N more lines footer)
-		// exactly like the bash path — never just a one-line stats row.
-		for (const toolName of progress.toolHistory.slice(-3)) {
-			details.push(toolName);
+		// exactly like the bash path — showing WHAT each tool is doing
+		// ("read_file: src/main.ts"), never just a one-line stats row.
+		const recentCalls = progress.toolCalls?.slice(-3) ?? [];
+		if (recentCalls.length > 0) {
+			for (const call of recentCalls) {
+				details.push(call.detail ? `${call.name}: ${call.detail}` : call.name);
+			}
+		} else {
+			for (const toolName of progress.toolHistory.slice(-3)) {
+				details.push(toolName);
+			}
 		}
 	}
 
@@ -182,6 +192,40 @@ const formatAgentProgressTail = (
 	}
 
 	return details;
+};
+
+/**
+ * Individual per-call entries behind a compacted agent block — what EXPANDING
+ * reveals (one `✦ <tool>(<detail>)` row per recent tool, with the current bash
+ * command + live output tail), consistent with the bash/WebSearch compact
+ * families. Evaluated live while the agent runs.
+ */
+const formatAgentLiveCalls = (
+	progress: ReturnType<typeof getSubagentProgress>,
+): Array<{toolName?: string; detail: string; output: string}> => {
+	const calls: Array<{toolName?: string; detail: string; output: string}> = [];
+	const seen = new Set<string>();
+	if (progress.currentBashExecutionId && progress.currentBashCommand) {
+		calls.push({
+			toolName: 'execute_bash',
+			detail: progress.currentBashCommand,
+			output: formatBashProgressTail(
+				progress.currentBashCommand,
+				progress.currentBashExecutionId,
+			).join('\n'),
+		});
+		seen.add(`execute_bash:${progress.currentBashCommand}`);
+	}
+	// The full recent per-call log — every tool the agent invoked with what it
+	// was operating on — so expanding reveals "all the details on what it's
+	// doing", not just names.
+	for (const call of progress.toolCalls?.slice(-8) ?? []) {
+		const key = `${call.name}:${call.detail}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		calls.push({toolName: call.name, detail: call.detail, output: ''});
+	}
+	return calls;
 };
 
 const formatDuration = (ms: number): string => {
@@ -559,6 +603,7 @@ const executeAgentBatch = async (
 		toolName: string,
 		detail?: string | string[],
 		failed?: boolean,
+		calls?: Array<{toolName?: string; detail: string; output: string}>,
 	) => void,
 	onRunningToolCounts?: (counts: CompactToolActivityMap | null) => void,
 	nonInteractiveMode?: boolean,
@@ -622,6 +667,7 @@ const executeAgentBatch = async (
 					...(currentActivity?.details ?? []),
 					`${e.agentName}: ${e.agentDesc}`,
 				],
+				liveCalls: () => formatAgentLiveCalls(getSubagentProgress(e.agentId)),
 				liveDetails: () =>
 					formatAgentProgressTail(
 						e.agentName,
@@ -740,6 +786,7 @@ const executeAgentBatch = async (
 							agentResult,
 						),
 						true,
+						formatAgentLiveCalls(progress),
 					);
 				}
 			} else if (nonInteractiveMode) {
@@ -759,6 +806,8 @@ const executeAgentBatch = async (
 						progress,
 						agentResult,
 					),
+					undefined,
+					formatAgentLiveCalls(progress),
 				);
 			}
 		} else {
@@ -815,6 +864,7 @@ export const executeToolsDirectly = async (
 			toolName: string,
 			detail?: string | string[],
 			failed?: boolean,
+			calls?: Array<{toolName?: string; detail: string; output: string}>,
 		) => void;
 		onLiveTaskUpdate?: () => void;
 		onRunningToolCounts?: (counts: CompactToolActivityMap | null) => void;

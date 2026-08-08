@@ -18,7 +18,6 @@ import type {ToolManager} from '@/tools/tool-manager';
 import type {ToolCall, ToolResult} from '@/types/index';
 import {
 	isScreenTextAt,
-	isScreenTextBlockAt,
 	isScreenTextBlockFromEndOccurrenceAt,
 	isScreenTextOccurrenceFromEndAt,
 } from '@/utils/selection';
@@ -30,6 +29,15 @@ import {
 } from '@/utils/terminal-mouse';
 import {wrapWithTrimmedContinuations} from '@/utils/text-wrapping';
 import {parseToolArguments} from '@/utils/tool-args-parser';
+
+/**
+ * How often live compact blocks (running tool tallies, agent summaries)
+ * re-read their dynamic `liveDetails`/`liveRunning` closures. 250ms keeps the
+ * streamed tail feeling live while leaving the main thread room for input and
+ * the Working animation (100ms re-rendered the whole live region 10x/sec and
+ * starved both).
+ */
+export const LIVE_COMPACT_POLL_INTERVAL_MS = 250;
 
 /**
  * Tools that should always show expanded (full formatter) output,
@@ -80,6 +88,12 @@ export interface CompactToolActivity {
 	detail?: string;
 	details?: string[];
 	liveDetails?: () => string[];
+	/**
+	 * Streaming variant of {@link calls}: re-evaluated on every render, so a
+	 * running agent's individual tool calls can grow live inside the expanded
+	 * compact block (same shape the static `calls` array uses).
+	 */
+	liveCalls?: () => Array<{toolName?: string; detail: string; output: string}>;
 	liveRunning?: () => boolean;
 	failed?: boolean;
 	running?: boolean;
@@ -89,7 +103,7 @@ export interface CompactToolActivity {
 	 * own `✦ Tool(detail)` rows with output tails — streaming while running —
 	 * consistently for every compact family.
 	 */
-	calls?: Array<{detail: string; output: string}>;
+	calls?: Array<{toolName?: string; detail: string; output: string}>;
 }
 
 export type CompactToolActivityMap = Record<
@@ -667,7 +681,9 @@ export function CompactToolActivityBlock({
 	// as their own `✦ Tool(detail)` rows — consistently for every compact
 	// family — instead of the combined detail lines.
 	const callEntries = entries.flatMap(([toolName, activity]) =>
-		(activity.calls ?? []).map(call => ({toolName, ...call})),
+		[...(activity.calls ?? []), ...(activity.liveCalls?.() ?? [])].map(
+			call => ({toolName: call.toolName ?? toolName, ...call}),
+		),
 	);
 	const failedAlreadyInTitle = entries.some(([, activity]) => activity.failed);
 	const headerText = getCompactToolCountsHeaderText(entries);
@@ -979,7 +995,7 @@ export interface CompactFileResultProps {
  * Shows file path, line count changes, and a git-style inline diff with line numbers.
  * Wraps in ToolMessage to match the design system.
  */
-export function CompactFileResult({
+export const CompactFileResult = React.memo(function CompactFileResult({
 	toolName,
 	path,
 	oldStr,
@@ -1139,7 +1155,7 @@ export function CompactFileResult({
 	);
 
 	return <ToolMessage message={message} hideBox={true} />;
-}
+});
 
 /** Flatten a multi-line value into a single displayable line. */
 function flattenToOneLine(value: string): string {
@@ -1267,8 +1283,14 @@ const COMMAND_MAX_LINES = 3;
 // Module-level instance registry so multiple compact detail rows (even with
 // identical commands/footers) each hit-test only their own block — same
 // occurrence-from-end mechanism AssistantReasoning uses for Thought rows.
+// Records the FOOTER text (the collapsed click target) and the header text
+// (the expanded click span), keyed independently so stacked rows with
+// different `+N more lines` counts still hit-test correctly.
 let nextCompactDetailInstanceId = 0;
-const compactDetailInstances = new Map<number, string>();
+const compactDetailInstances = new Map<
+	number,
+	{footer: string; header: string}
+>();
 // Per-instance registry for compact tool blocks, so stacked blocks with
 // IDENTICAL headers/footers (e.g. repeated mock agent runs) each respond only
 // to their own rows — expanding one must not expand the others.
@@ -1289,7 +1311,7 @@ const compactBlockInstances = new Map<
  * highlighted entry collapses it again. The header glyph follows the other
  * compact tool rows: green when the tool is done, grey/blinking while running.
  */
-export function CompactDetailResult({
+export const CompactDetailResult = React.memo(function CompactDetailResult({
 	toolName,
 	detail,
 	output,
@@ -1372,21 +1394,21 @@ export function CompactDetailResult({
 			? `… +${hiddenCount} line${hiddenCount === 1 ? '' : 's'} (ctrl + t to view transcript)`
 			: '';
 
-	// Hit-target identity: the header row's distinctive start (glyph + tool
-	// name + the first wrapped command fragment), registered so duplicate
-	// footers in one transcript each respond only to their own rows.
+	// Hit-target identity: the footer text (collapsed click target) and the
+	// header row's distinctive start (expanded collapse target). Registered so
+	// duplicate footers in one transcript each respond only to their own rows.
 	const identityText = `✦ ${displayName}(`;
+	const footerIdentity = footerText || identityText;
 	const [instanceId] = React.useState(() => nextCompactDetailInstanceId++);
-	compactDetailInstances.set(instanceId, identityText);
+	compactDetailInstances.set(instanceId, {
+		footer: footerIdentity,
+		header: identityText,
+	});
 	React.useEffect(() => {
 		return () => {
 			compactDetailInstances.delete(instanceId);
 		};
 	}, [instanceId]);
-	const occurrenceFromEnd = [...compactDetailInstances]
-		.filter(([, text]) => text === identityText)
-		.reverse()
-		.findIndex(([id]) => id === instanceId);
 	// When expanded, the collapse target spans the header through the last
 	// output row. The last line is rendered with truncate-end, so anchor the
 	// block end on the line's HEAD (always visible). The START anchor includes
@@ -1400,12 +1422,36 @@ export function CompactDetailResult({
 
 	const isMouseTarget = React.useCallback(
 		(x: number, y: number) => {
+			// Occurrences are computed HERE (event time), not during render:
+			// sibling blocks mount during the same commit, so a render-time
+			// index would see only the blocks registered so far and mis-map
+			// identical stacked blocks (the grouped-block registry below uses
+			// the same pattern).
+			const footerOccurrenceFromEnd = [...compactDetailInstances]
+				.filter(([, record]) => record.footer === footerIdentity)
+				.reverse()
+				.findIndex(([id]) => id === instanceId);
+			const headerOccurrenceFromEnd = [...compactDetailInstances]
+				.filter(([, record]) => record.header === headerStartText)
+				.reverse()
+				.findIndex(([id]) => id === instanceId);
 			if (effectiveExpanded) {
-				return isScreenTextBlockAt(x, y, headerStartText, expandedEndText);
+				return isScreenTextBlockFromEndOccurrenceAt(
+					x,
+					y,
+					headerStartText,
+					headerOccurrenceFromEnd,
+					expandedEndText,
+				);
 			}
 			if (
 				footerText &&
-				isScreenTextOccurrenceFromEndAt(x, y, footerText, occurrenceFromEnd)
+				isScreenTextOccurrenceFromEndAt(
+					x,
+					y,
+					footerText,
+					footerOccurrenceFromEnd,
+				)
 			) {
 				return true;
 			}
@@ -1417,8 +1463,9 @@ export function CompactDetailResult({
 			effectiveExpanded,
 			expandedEndText,
 			footerText,
+			footerIdentity,
 			headerStartText,
-			occurrenceFromEnd,
+			instanceId,
 		],
 	);
 
@@ -1525,7 +1572,7 @@ export function CompactDetailResult({
 			)}
 		</Box>
 	);
-}
+});
 
 /**
  * Generate a compact grouped description for N calls of the same tool.
@@ -1574,7 +1621,7 @@ export function LiveCompactRunningSummary({
 		if (!hasRunning || !hasLiveRunning) return;
 		const interval = setInterval(() => {
 			forceRender();
-		}, 100);
+		}, LIVE_COMPACT_POLL_INTERVAL_MS);
 		return () => clearInterval(interval);
 	}, [hasRunning, hasLiveRunning]);
 
@@ -1586,7 +1633,7 @@ export function LiveCompactRunningSummary({
  * Shows accumulated counts during execution (e.g. "✦ read_file ×7").
  * Rendered in the live area (not Static) so it updates in-place.
  */
-export function LiveCompactCounts({
+export const LiveCompactCounts = React.memo(function LiveCompactCounts({
 	counts,
 	expanded = false,
 }: {
@@ -1608,7 +1655,7 @@ export function LiveCompactCounts({
 		if (!hasRunning || !hasLiveDetails) return;
 		const interval = setInterval(() => {
 			forceRender();
-		}, 100);
+		}, LIVE_COMPACT_POLL_INTERVAL_MS);
 		return () => clearInterval(interval);
 	}, [hasRunning, hasLiveDetails]);
 
@@ -1636,7 +1683,7 @@ export function LiveCompactCounts({
 			))}
 		</Box>
 	);
-}
+});
 
 /**
  * Flush accumulated compact counts to the static chat queue.
@@ -1668,54 +1715,56 @@ export function displayCompactCountsSummary(
 // Rendered as a component so it can read the theme: icon-style themes
 // (assistantIcon set) keep tool tallies flush left instead of grouping them
 // under a Thought header with an indent.
-export function CompactToolCountsSummaryBlock({
-	expanded,
-	entries,
-	indent,
-	running,
-}: {
-	expanded: boolean;
-	entries: Array<[string, number | CompactToolActivity]>;
-	indent: boolean;
-	/** Live-region only: keep the tally glyph grey/blinking while active. */
-	running?: boolean;
-}) {
-	const {colors} = useTheme();
-	const normalizedEntries = entries.map(([toolName, value]) => [
-		toolName,
-		typeof value === 'number' ? {count: value} : value,
-	]) as Array<[string, CompactToolActivity]>;
-	const {regularEntries, agentEntries} =
-		partitionCompactEntries(normalizedEntries);
-	return (
-		<Box
-			flexDirection="column"
-			marginLeft={indent && !colors.assistantIcon ? 2 : 0}
-			marginBottom={1}
-		>
-			{regularEntries.length > 0 && (
-				<CompactToolActivityBlock
-					entries={regularEntries}
-					expanded={expanded}
-					running={running}
-				/>
-			)}
-			{regularEntries.length > 0 && agentEntries.length > 0 && (
-				<Box height={1} />
-			)}
-			{agentEntries.map(([toolName, activity], idx) => (
-				<React.Fragment key={toolName}>
+export const CompactToolCountsSummaryBlock = React.memo(
+	function CompactToolCountsSummaryBlock({
+		expanded,
+		entries,
+		indent,
+		running,
+	}: {
+		expanded: boolean;
+		entries: Array<[string, number | CompactToolActivity]>;
+		indent: boolean;
+		/** Live-region only: keep the tally glyph grey/blinking while active. */
+		running?: boolean;
+	}) {
+		const {colors} = useTheme();
+		const normalizedEntries = entries.map(([toolName, value]) => [
+			toolName,
+			typeof value === 'number' ? {count: value} : value,
+		]) as Array<[string, CompactToolActivity]>;
+		const {regularEntries, agentEntries} =
+			partitionCompactEntries(normalizedEntries);
+		return (
+			<Box
+				flexDirection="column"
+				marginLeft={indent && !colors.assistantIcon ? 2 : 0}
+				marginBottom={1}
+			>
+				{regularEntries.length > 0 && (
 					<CompactToolActivityBlock
-						entries={[[toolName, activity]]}
+						entries={regularEntries}
 						expanded={expanded}
 						running={running}
 					/>
-					{idx < agentEntries.length - 1 && <Box height={1} />}
-				</React.Fragment>
-			))}
-		</Box>
-	);
-}
+				)}
+				{regularEntries.length > 0 && agentEntries.length > 0 && (
+					<Box height={1} />
+				)}
+				{agentEntries.map(([toolName, activity], idx) => (
+					<React.Fragment key={toolName}>
+						<CompactToolActivityBlock
+							entries={[[toolName, activity]]}
+							expanded={expanded}
+							running={running}
+						/>
+						{idx < agentEntries.length - 1 && <Box height={1} />}
+					</React.Fragment>
+				))}
+			</Box>
+		);
+	},
+);
 
 /**
  * Display tool result with proper formatting

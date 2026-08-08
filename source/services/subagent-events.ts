@@ -20,6 +20,12 @@ export interface SubagentEvent {
 	tokenCount: number;
 	/** Chronological list of tool names invoked by the subagent. */
 	toolHistory: string[];
+	/**
+	 * Chronological per-call log with each tool's primary argument detail
+	 * (command/path/query/URL when one exists) — what the agent is actually
+	 * DOING, shown when its compact entry expands.
+	 */
+	toolCalls?: Array<{name: string; detail: string}>;
 }
 
 /** Map of agent instance ID → progress state for concurrent agents */
@@ -96,14 +102,19 @@ export function updateSubagentProgress(event: SubagentEventInput): void {
 export function appendSubagentTool(
 	agentId: string | undefined,
 	toolName: string,
+	detail = '',
 ): void {
 	if (agentId) {
 		const existing = subagentProgressMap.get(agentId);
 		if (existing) {
 			existing.toolHistory.push(toolName);
+			existing.toolCalls ??= [];
+			existing.toolCalls.push({name: toolName, detail});
 		}
 	} else {
 		subagentProgress.toolHistory.push(toolName);
+		subagentProgress.toolCalls ??= [];
+		subagentProgress.toolCalls.push({name: toolName, detail});
 	}
 }
 
@@ -116,6 +127,7 @@ export function resetSubagentProgressById(agentId: string): void {
 		turnCount: 0,
 		tokenCount: 0,
 		toolHistory: [],
+		toolCalls: [],
 	});
 }
 
