@@ -17,14 +17,19 @@ export type ProviderOptions = Record<string, Record<string, unknown>>;
 /**
  * Build the `providerOptions` value for a streamText/generateText call.
  *
- * Currently handles two providers:
+ * Currently handles three provider families:
  *   - chatgpt-codex: requires `instructions`, `store: false`, and reasoning
- *     controls under the `openai` provider key (Responses API).
+ *     controls plus `promptCacheKey` (session affinity) under the `openai`
+ *     provider key (Responses API).
  *   - openrouter: forwards `provider`, `reasoning`, `plugins`, `models`,
  *     `service_tier`, `route`, and `user` into the request body via the
  *     `openrouter` provider key. The top-level `reasoningEffort` (from
  *     ModelParameters / `/tune`) is mapped to `reasoning.effort` when the
  *     user has not provided a more specific `openrouter.reasoning` block.
+ *   - generic openai-compatible: when the provider config opts in via
+ *     `promptCacheKey: true`, the stable per-session id is forwarded as
+ *     `prompt_cache_key` under the provider-name key so OpenAI-contract
+ *     endpoints/routers keep the request on the same cache region.
  *
  * OpenRouter options come from `providerConfig.openrouter` (always-on, set
  * in agents.config.json) — not from tune, so they aren't dropped when the
@@ -87,6 +92,21 @@ export function buildProviderOptions(
 			return undefined;
 		}
 		return {openrouter: payload};
+	}
+
+	// Opt-in cache affinity for generic OpenAI-compatible providers (chat
+	// completions / Responses via a router). Default off because endpoints
+	// like DeepSeek reject unknown body fields — the user enables it only
+	// for OpenAI-contract providers that honor `prompt_cache_key`.
+	if (providerConfig.promptCacheKey && sessionAffinityId) {
+		return {
+			// The AI SDK's openai-compatible provider reads providerOptions
+			// under `config.provider.split('.')[0]` (its providerOptionsName),
+			// so the key must match that derivation exactly.
+			[providerConfig.name.split('.')[0]]: {
+				prompt_cache_key: sessionAffinityId,
+			},
+		};
 	}
 
 	return undefined;

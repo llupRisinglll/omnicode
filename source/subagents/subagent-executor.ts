@@ -5,6 +5,12 @@
  * Supports concurrent execution via unique agentId for progress isolation.
  */
 
+import {
+	isRateLimitError,
+	MAX_RATE_LIMIT_RETRIES,
+	rateLimitRetryDelayMs,
+	sleep,
+} from '@/ai-sdk-client/error-handling/rate-limit';
 import {createLLMClient} from '@/client-factory';
 import {getAppConfig} from '@/config/index';
 import {
@@ -30,8 +36,10 @@ import type {ToolManager} from '@/tools/tool-manager';
 import type {
 	AISDKCoreTool,
 	DevelopmentMode,
+	LLMChatResponse,
 	LLMClient,
 	Message,
+	StreamCallbacks,
 	ToolCall,
 } from '@/types/core';
 import {formatError} from '@/utils/error-formatter';
@@ -54,6 +62,31 @@ const MAX_SUBAGENT_DEPTH = 2;
 
 /** Maximum number of concurrent subagents */
 export const MAX_CONCURRENT_AGENTS = 5;
+
+/**
+ * Run a subagent model call with rate-limit retry. Parallel subagent spawns
+ * can trip the provider's 429 on a shared key — without backoff every agent
+ * fails at once and the parent model has to improvise around N error results.
+ */
+export async function chatWithRateLimitRetry(
+	client: LLMClient,
+	messages: Message[],
+	tools: Record<string, AISDKCoreTool>,
+	callbacks: StreamCallbacks,
+	signal?: AbortSignal,
+): Promise<LLMChatResponse> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await client.chat(messages, tools, callbacks, signal);
+		} catch (error) {
+			if (isRateLimitError(error) && attempt < MAX_RATE_LIMIT_RETRIES) {
+				await sleep(rateLimitRetryDelayMs(error, attempt));
+				continue;
+			}
+			throw error;
+		}
+	}
+}
 
 /**
  * SubagentExecutor manages the execution of delegated tasks to subagents.
@@ -355,6 +388,12 @@ export class SubagentExecutor {
 				? config.contextWindow
 				: undefined;
 		const parentProviderConfig = this.parentClient.getProviderConfig();
+		// Share the parent conversation's cache-affinity id so every request in
+		// the session (root + all subagent threads) routes to the same
+		// prompt-cache region — codex parity (`prompt_cache_key` = session id
+		// for root AND descendants). Falls back to a fresh id for clients that
+		// don't expose one.
+		const sessionAffinityId = this.parentClient.getSessionAffinityId?.();
 		const preference = getSubagentModelPreference(config.name);
 		const legacyInnerDaemonModel =
 			config.name === 'innerdaemon' ? getInnerDaemonModel() : null;
@@ -378,9 +417,12 @@ export class SubagentExecutor {
 					: undefined;
 
 		if (requestedContextWindow) {
-			const {client} = await createLLMClient(targetProvider, targetModel, {
-				contextWindow: requestedContextWindow,
-			});
+			const {client} = await createLLMClient(
+				targetProvider,
+				targetModel,
+				{contextWindow: requestedContextWindow},
+				sessionAffinityId,
+			);
 			return {client, restoreParent: () => {}};
 		}
 
@@ -391,7 +433,12 @@ export class SubagentExecutor {
 					? effectiveModel
 					: undefined;
 
-			const {client} = await createLLMClient(targetProvider, model);
+			const {client} = await createLLMClient(
+				targetProvider,
+				model,
+				undefined,
+				sessionAffinityId,
+			);
 			return {client, restoreParent: () => {}};
 		}
 
@@ -403,6 +450,8 @@ export class SubagentExecutor {
 				const {client} = await createLLMClient(
 					parentProviderConfig.name,
 					effectiveModel,
+					undefined,
+					sessionAffinityId,
 				);
 				return {client, restoreParent: () => {}};
 			}
@@ -455,6 +504,50 @@ export class SubagentExecutor {
 		// Rough token estimate: ~4 chars per token
 		const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 
+		// Primary argument detail for a tool call (command/path/query/URL) so
+		// the agent's compact entry can show WHAT it is doing, not just which
+		// tool it invoked.
+		const toolCallDetail = (toolName: string, rawArgs: unknown): string => {
+			let args: Record<string, unknown> = {};
+			try {
+				args = (
+					typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs
+				) as Record<string, unknown>;
+			} catch {
+				return '';
+			}
+			const str = (v: unknown): string =>
+				typeof v === 'string' && v.trim() ? v : '';
+			switch (toolName) {
+				case 'execute_bash':
+					return str(args.command);
+				case 'read_file':
+				case 'write_file':
+				case 'string_replace':
+				case 'diff_edit':
+					return str(args.path) || str(args.file_path);
+				case 'web_search':
+					return str(args.query);
+				case 'fetch_url':
+					return str(args.url);
+				case 'find_files':
+				case 'search_file_contents':
+					return str(args.pattern) || str(args.path) || str(args.query);
+				case 'list_directory':
+					return str(args.path);
+				case 'lsp_get_diagnostics':
+					return str(args.path) || str(args.file_path);
+				case 'git_status':
+					return 'git status';
+				case 'git_diff':
+					return 'git diff';
+				case 'git_log':
+					return 'git log';
+				default:
+					return '';
+			}
+		};
+
 		const emitProgress = (
 			status: 'running' | 'tool_call' | 'complete' | 'error',
 			currentTool?: string,
@@ -498,7 +591,8 @@ export class SubagentExecutor {
 			emitProgress('running');
 			await new Promise(resolve => setTimeout(resolve, 50));
 
-			const response = await client.chat(
+			const response = await chatWithRateLimitRetry(
+				client,
 				messages,
 				tools,
 				{
@@ -590,7 +684,11 @@ export class SubagentExecutor {
 
 				const toolName = toolCall.function.name;
 				totalToolCalls++;
-				appendSubagentTool(agentId, toolName);
+				appendSubagentTool(
+					agentId,
+					toolName,
+					toolCallDetail(toolName, toolCall.function.arguments),
+				);
 				emitProgress('tool_call', toolName);
 				await new Promise(resolve => setTimeout(resolve, 50));
 

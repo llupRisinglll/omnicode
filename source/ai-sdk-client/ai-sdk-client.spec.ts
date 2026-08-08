@@ -37,6 +37,74 @@ test('AISDKClient.create returns a Promise', async t => {
 	t.true(client instanceof AISDKClient);
 });
 
+test('AISDKClient generates a fresh session affinity id by default', t => {
+	const config: AIProviderConfig = {
+		name: 'TestProvider',
+		type: 'openai',
+		models: ['test-model'],
+		config: {
+			baseURL: 'https://api.test.com',
+			apiKey: 'test-key',
+		},
+	};
+
+	const client = new AISDKClient(config);
+	const id = client.getSessionAffinityId();
+	t.true(typeof id === 'string' && id.length > 0);
+	t.not(id, new AISDKClient(config).getSessionAffinityId());
+});
+
+test('AISDKClient honours an inherited session affinity id (subagent parity)', t => {
+	const config: AIProviderConfig = {
+		name: 'TestProvider',
+		type: 'openai',
+		models: ['test-model'],
+		config: {
+			baseURL: 'https://api.test.com',
+			apiKey: 'test-key',
+		},
+	};
+
+	const parent = new AISDKClient(config);
+	const child = new AISDKClient(config, parent.getSessionAffinityId());
+	t.is(child.getSessionAffinityId(), parent.getSessionAffinityId());
+});
+
+test('AISDKClient.create accepts an inherited session affinity id', async t => {
+	const config: AIProviderConfig = {
+		name: 'TestProvider',
+		type: 'openai',
+		models: ['test-model'],
+		config: {
+			baseURL: 'https://api.test.com',
+			apiKey: 'test-key',
+		},
+	};
+
+	const parent = new AISDKClient(config);
+	const child = await AISDKClient.create(
+		config,
+		parent.getSessionAffinityId(),
+	);
+	t.is(child.getSessionAffinityId(), parent.getSessionAffinityId());
+});
+
+test('AISDKClient.setSessionAffinityId rebases the id (resume parity)', t => {
+	const config: AIProviderConfig = {
+		name: 'TestProvider',
+		type: 'openai',
+		models: ['test-model'],
+		config: {
+			baseURL: 'https://api.test.com',
+			apiKey: 'test-key',
+		},
+	};
+
+	const client = new AISDKClient(config);
+	client.setSessionAffinityId('resumed-session-uuid');
+	t.is(client.getSessionAffinityId(), 'resumed-session-uuid');
+});
+
 test('AISDKClient setModel updates current model', t => {
 	const config: AIProviderConfig = {
 		name: 'TestProvider',

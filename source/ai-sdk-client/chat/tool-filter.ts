@@ -1,6 +1,15 @@
 import type {AISDKCoreTool, Message} from '@/types/index';
 
-const TOOL_FILTER_THRESHOLD = 24;
+/**
+ * Filtering only kicks in above this many tools. Set high enough that the
+ * built-in harness (27 tools in a git repo with gh) is NEVER adaptively
+ * filtered: the baseline coding surface stays complete AND byte-stable
+ * across turns, which is what DeepSeek-style automatic prefix caches need
+ * (tools are the cache head — see AGENTS.md / tool-filter cache notes).
+ * Adaptive filtering remains for genuinely large (typically MCP-heavy)
+ * inventories above the threshold.
+ */
+const TOOL_FILTER_THRESHOLD = 32;
 const ALWAYS_ACTIVE_TOOLS = new Set([
 	'read_file',
 	'write_file',
@@ -16,6 +25,52 @@ const ALWAYS_ACTIVE_TOOLS = new Set([
 	'write_tasks',
 	'skill',
 ]);
+
+/**
+ * Session-stable cache of adaptive filter results, keyed by a signature of
+ * the tool inventory (sorted names + definitions).
+ *
+ * Why: `filterActiveToolsForTurn` used to be recomputed every turn from the
+ * recent message history, so a busy conversation (recently-used tools vary
+ * per turn) produced a DIFFERENT tool set each request. Providers with
+ * automatic prefix caching (DeepSeek, and OpenAI's implicit prefix cache)
+ * treat the tool definitions as part of the cache head — any per-turn change
+ * busts the ENTIRE cache, not just the tail. Codex's own test suite enforces
+ * the same invariant (`prompt_tools_are_consistent_across_requests`).
+ *
+ * The adaptive filter still shapes the set on first use (recently-used and
+ * explicitly-mentioned tools from that turn's context); afterwards the result
+ * is frozen for as long as the tool inventory is unchanged. The inventory
+ * changes when mode/tune/steering/MCP connectivity change the available
+ * names, which is exactly when the request head legitimately changes anyway.
+ */
+const filteredToolCache = new Map<string, Record<string, AISDKCoreTool>>();
+
+/**
+ * Bounded cache: distinct inventories are rare (MCP reconnects, mode/tune
+ * switches), but each entry holds full tool definitions, so cap growth and
+ * drop everything when exceeded rather than leaking per-inventory snapshots
+ * for a long-lived process.
+ */
+const TOOL_FILTER_CACHE_MAX_ENTRIES = 32;
+
+/**
+ * Compute a signature that captures everything that affects the serialized
+ * tool definitions: sorted names plus each tool's schema/description. Two
+ * inventories with identical names but different schemas must not share a
+ * frozen filter.
+ */
+function toolInventorySignature(tools: Record<string, AISDKCoreTool>): string {
+	const entries = Object.entries(tools)
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+		.map(([name, tool]) => `${name}:${JSON.stringify(tool)}`);
+	return entries.join('\u0000');
+}
+
+/** Clear the frozen-filter cache (tests, config reloads). */
+export function resetActiveToolFilterCache(): void {
+	filteredToolCache.clear();
+}
 
 function recentlyUsedToolNames(messages: Message[], limit = 12): Set<string> {
 	const names = new Set<string>();
@@ -67,6 +122,13 @@ export function filterActiveToolsForTurn(
 	const names = Object.keys(tools);
 	if (names.length <= TOOL_FILTER_THRESHOLD) return tools;
 
+	// Same inventory ⇒ same filtered set, regardless of message history.
+	// Reuse the first computed result so the request's tool head stays
+	// byte-identical across turns (prompt-cache requirement).
+	const signature = toolInventorySignature(tools);
+	const cached = filteredToolCache.get(signature);
+	if (cached) return cached;
+
 	const keep = new Set<string>();
 	for (const name of names) {
 		if (ALWAYS_ACTIVE_TOOLS.has(name)) keep.add(name);
@@ -87,5 +149,10 @@ export function filterActiveToolsForTurn(
 	for (const name of names) {
 		if (keep.has(name)) filtered[name] = tools[name];
 	}
-	return Object.keys(filtered).length > 0 ? filtered : tools;
+	const result = Object.keys(filtered).length > 0 ? filtered : tools;
+	filteredToolCache.set(signature, result);
+	if (filteredToolCache.size > TOOL_FILTER_CACHE_MAX_ENTRIES) {
+		filteredToolCache.clear();
+	}
+	return result;
 }

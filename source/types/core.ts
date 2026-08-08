@@ -246,6 +246,19 @@ export interface LLMClient {
 	 * return `'openai-compatible'` as the safe default.
 	 */
 	getProviderKind?(): ProviderKind;
+	/**
+	 * Stable per-session cache-affinity id. Subagents should reuse the parent
+	 * conversation's id so all requests in a session share one prompt-cache
+	 * region (codex parity: `prompt_cache_key` = session id for root AND
+	 * descendant threads). Optional so minimal clients can omit it.
+	 */
+	getSessionAffinityId?(): string;
+	/**
+	 * Rebase the cache-affinity id to the persisted conversation id (used
+	 * when a session is resumed or a new session id is assigned). Optional so
+	 * minimal clients can omit it.
+	 */
+	setSessionAffinityId?(id: string): void;
 	chat(
 		messages: Message[],
 		tools: Record<string, AISDKCoreTool>,

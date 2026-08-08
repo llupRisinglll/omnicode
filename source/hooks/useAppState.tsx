@@ -246,6 +246,24 @@ export function useAppState(
 		setChatComponents(prevComponents => [...prevComponents, componentWithKey]);
 	}, []);
 
+	// Replace a previously queued component by its key (same-position, same-key
+	// swap so React reconciles in place). Used by the steering trace to collapse
+	// consecutive identical noop lines into one `×N` line instead of spamming
+	// the transcript with a line per turn.
+	const replaceChatComponentByKey = useCallback(
+		(key: React.Key, component: React.ReactNode) => {
+			setChatComponents(prevComponents =>
+				prevComponents.map(existing => {
+					const existingKey = React.isValidElement(existing)
+						? existing.key
+						: undefined;
+					return existingKey === key ? component : existing;
+				}),
+			);
+		},
+		[],
+	);
+
 	// Create tokenizer based on current provider and model
 	const tokenizer = useMemo<Tokenizer>(() => {
 		if (currentProvider && currentModel) {
@@ -264,6 +282,20 @@ export function useAppState(
 			}
 		};
 	}, [tokenizer]);
+
+	// Keep the client's prompt-cache affinity id in sync with the persisted
+	// conversation id. On resume, `applySession` restores `currentSessionId`
+	// from sessions.json; on a new conversation, autosave assigns a fresh id.
+	// Rebasing means `prompt_cache_key` (for providers that honor it) matches
+	// the stored session id — codex parity, where the same session id is the
+	// cache key across resumes. A null id (conversation cleared) keeps the
+	// last value: the key is only a routing-stickiness hint, and staying on
+	// the same cache region is harmless.
+	useEffect(() => {
+		if (currentSessionId && client?.setSessionAffinityId) {
+			client.setSessionAffinityId(currentSessionId);
+		}
+	}, [currentSessionId, client]);
 
 	// Token calculation with an object-keyed WeakMap cache (see the ref above).
 	// Stable identity: depends only on tokenizer + model, so it no longer churns
@@ -449,6 +481,7 @@ export function useAppState(
 
 		// Utilities
 		addToChatQueue,
+		replaceChatComponentByKey,
 		getMessageTokens,
 		updateMessages,
 	};
