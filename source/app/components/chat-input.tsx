@@ -164,6 +164,15 @@ export function ChatInput({
 	onDismissActiveEditor,
 }: ChatInputProps): React.ReactElement {
 	const {colors} = useTheme();
+	// Stable identity: UserInput is memoized so streaming flushes must not
+	// hand it a fresh onSubmit closure every render (that would defeat the
+	// memo and re-render the input on every token flush).
+	const handleUserInputSubmit = React.useCallback(
+		(msg: string, display: string, images?: ImageAttachment[]) => {
+			void onSubmit(msg, display, images);
+		},
+		[onSubmit],
+	);
 	const activeToolCall = pendingToolCalls[currentToolIndex];
 	const showToolExecutionIndicator =
 		isToolExecuting &&
@@ -213,9 +222,7 @@ export function ChatInput({
 				<>
 					<UserInput
 						customCommands={customCommands}
-						onSubmit={(msg, display, images) =>
-							void onSubmit(msg, display, images)
-						}
+						onSubmit={handleUserInputSubmit}
 						onSubmittedDraft={onSubmittedDraft}
 						restoreSubmittedDraft={restoreSubmittedDraft}
 						onQueueMessage={onQueueMessage}

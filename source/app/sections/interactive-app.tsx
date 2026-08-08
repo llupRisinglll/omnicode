@@ -5,9 +5,9 @@ import {ChatHistory} from '@/app/components/chat-history';
 import {ChatInput} from '@/app/components/chat-input';
 import {ModalSelectors} from '@/app/components/modal-selectors';
 import {PreviewDevPanel} from '@/app/components/preview-dev-panel';
+import BackgroundTaskCompleted from '@/components/background-task-completed';
 import {FileExplorer} from '@/components/file-explorer';
 import {IdeSelector} from '@/components/ide-selector';
-import {ErrorMessage, SuccessMessage} from '@/components/message-box';
 import PlanReviewPrompt from '@/components/plan-review-prompt';
 import {StatusLine} from '@/components/StatusLine';
 import {loadPreferences, updateDeveloperMode} from '@/config/preferences';
@@ -431,6 +431,19 @@ export function InteractiveApp({
 	const terminalRows = useTerminalRows();
 	const terminalWidth = useTerminalWidth();
 	const backgroundTaskCount = useBackgroundTaskCount();
+	// Stable identity for the memoized UserInput: `customCommands` must not be
+	// recreated on every App render (streaming flushes) or the input memo is
+	// defeated. Rebuild only when the command cache actually changes.
+	const customCommands = React.useMemo(
+		() =>
+			Array.from(appState.customCommandCache.entries()).map(
+				([name, command]) => ({
+					name,
+					description: command.metadata.description,
+				}),
+			),
+		[appState.customCommandCache],
+	);
 
 	// Background-task completion indicator: when a backgrounded bash task
 	// finishes, queue a chat line so the user sees it ended (e.g. a worktree
@@ -438,24 +451,9 @@ export function InteractiveApp({
 	React.useEffect(() => {
 		const onBashComplete = (state: BashExecutionState) => {
 			if (!state.isBackground) return;
-			const command = state.command.replace(/\s+/g, ' ').trim();
 			const key = generateKey(`bg-complete-${state.executionId}`);
-			if (state.error) {
-				appState.addToChatQueue(
-					<ErrorMessage
-						key={key}
-						message={`  ✦ Background task stopped: ${command} · ${state.error}`}
-						hideBox={true}
-					/>,
-				);
-				return;
-			}
 			appState.addToChatQueue(
-				<SuccessMessage
-					key={key}
-					message={`  ✦ Background task completed: ${command} · exit ${state.exitCode ?? 'unknown'}`}
-					hideBox={true}
-				/>,
+				<BackgroundTaskCompleted key={key} state={state} />,
 			);
 		};
 		bashExecutor.on('complete', onBashComplete);
@@ -645,15 +643,23 @@ export function InteractiveApp({
 		appState.tune,
 		backgroundTaskCount,
 	]);
-	const statusLineSlot =
-		statusLineConfig?.enabled && statusLineConfig.command && statusLineData ? (
-			<StatusLine
-				command={statusLineConfig.command}
-				data={statusLineData}
-				terminalWidth={terminalWidth}
-				padding={statusLineConfig.padding ?? 0}
-			/>
-		) : null;
+	// Stable identity for the memoized UserInput: a new StatusLine element per
+	// render would re-render the whole input on every streaming flush. It only
+	// needs to change when its data/width actually change.
+	const statusLineSlot = React.useMemo(
+		() =>
+			statusLineConfig?.enabled &&
+			statusLineConfig.command &&
+			statusLineData ? (
+				<StatusLine
+					command={statusLineConfig.command}
+					data={statusLineData}
+					terminalWidth={terminalWidth}
+					padding={statusLineConfig.padding ?? 0}
+				/>
+			) : null,
+		[statusLineConfig, statusLineData, terminalWidth],
+	);
 
 	// Fullscreen layout if and only if cli.tsx put us on the alternate
 	// screen. Inline mode (--no-alt-screen / alternateScreen:false pref),
@@ -840,12 +846,7 @@ export function InteractiveApp({
 									onQuestionAnswer={handleQuestionAnswer}
 									mcpInitialized={appState.mcpInitialized}
 									client={appState.client}
-									customCommands={Array.from(
-										appState.customCommandCache.entries(),
-									).map(([name, command]) => ({
-										name,
-										description: command.metadata.description,
-									}))}
+									customCommands={customCommands}
 									inputDisabled={false}
 									onSubmittedDraft={handleSubmittedDraft}
 									restoreSubmittedDraft={restoredDraft}

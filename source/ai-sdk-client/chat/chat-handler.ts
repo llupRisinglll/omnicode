@@ -39,6 +39,12 @@ import {convertToModelMessages} from '../converters/message-converter.js';
 import {convertAISDKToolCalls} from '../converters/tool-converter.js';
 import {extractRootError} from '../error-handling/error-extractor.js';
 import {parseAPIError} from '../error-handling/error-parser.js';
+import {
+	isRateLimitError,
+	MAX_RATE_LIMIT_RETRIES,
+	rateLimitRetryDelayMs,
+	sleep,
+} from '../error-handling/rate-limit.js';
 import {StreamRunawayError} from '../error-handling/stream-runaway-error.js';
 import {isStreamStallError} from '../error-handling/stream-stall-detector.js';
 import {isToolSupportError} from '../error-handling/tool-error-detector.js';
@@ -116,6 +122,8 @@ export interface ChatHandlerParams {
 	skipTools?: boolean;
 	/** How many times this turn has already been retried after a mid-stream stall. */
 	stallRetryAttempt?: number;
+	/** How many times this turn has already been retried after a rate limit. */
+	rateLimitRetryAttempt?: number;
 	modeOverrides?: ModeOverrides;
 	privacySessionMapRef?: React.MutableRefObject<Record<string, string>>;
 	privacyEnabled?: boolean;
@@ -456,8 +464,15 @@ export async function handleChat(
 			});
 
 			// Stream tokens to the UI in batched chunks to avoid excessive
-			// React/Ink re-renders that cause terminal flickering.
-			const FLUSH_INTERVAL_MS = 150;
+			// React/Ink re-renders that cause terminal flickering AND starve
+			// stdin: every flush re-renders the whole App tree (transcript +
+			// input), re-parses the growing markdown message and recomputes the
+			// context-percentage. At 150ms the main thread stays saturated
+			// while a long reply streams, so keystrokes queue behind renders
+			// and typing feels laggy. 250ms (~4 updates/sec) is still smooth
+			// for streaming text but leaves the event loop room to process
+			// input. See AGENTS.md "Ink.js gotchas" for the render model.
+			const FLUSH_INTERVAL_MS = 250;
 			let tokenBuffer = '';
 			let flushTimer: ReturnType<typeof setTimeout> | null = null;
 			let isReasoning = false;
@@ -756,6 +771,33 @@ export async function handleChat(
 				throw new Error(
 					`Model output exceeded the runaway limit (${error.detail}) and was stopped. Try a different model, or raise/disable the streamGuard for this provider.`,
 				);
+			}
+
+			// Retry rate-limited turns with backoff — the provider said "slow
+			// down", not "this request is broken". Without this, a 429 (e.g.
+			// several parallel subagent calls hitting the same key) surfaces as
+			// a hard error and the model is forced to improvise around it.
+			// The SDK may surface only a generic NoOutputGeneratedError with
+			// the real 429 captured via `onError` (same shape as stalls), so
+			// consult both like the stall retry below does.
+			const rateLimitAttempt = params.rateLimitRetryAttempt ?? 0;
+			const isRateLimited =
+				isRateLimitError(error) || streamingErrors.some(isRateLimitError);
+			if (isRateLimited && rateLimitAttempt < MAX_RATE_LIMIT_RETRIES) {
+				const delayMs = rateLimitRetryDelayMs(error, rateLimitAttempt);
+				logger.warn('Rate limited; retrying turn with backoff', {
+					attempt: rateLimitAttempt + 1,
+					max: MAX_RATE_LIMIT_RETRIES,
+					delayMs,
+					model: currentModel,
+					correlationId,
+					provider: providerConfig.name,
+				});
+				await sleep(delayMs);
+				return await handleChat({
+					...params,
+					rateLimitRetryAttempt: rateLimitAttempt + 1,
+				});
 			}
 
 			// Check if error indicates tool support issue and we haven't retried

@@ -35,13 +35,25 @@ export async function createLLMClient(
 	overrides?: Partial<
 		Pick<AIProviderConfig, 'contextWindow' | 'contextWindows'>
 	>,
+	/**
+	 * Stable per-session cache-affinity id to inherit (subagents pass the
+	 * parent conversation's id so the whole session shares one prompt-cache
+	 * region — codex parity). Omit for a fresh id (new standalone session).
+	 */
+	sessionAffinityId?: string,
 ): Promise<{client: LLMClient; actualProvider: string}> {
 	// Check if agents.config.json exists
 	const agentsJsonPath = getClosestConfigFile('agents.config.json');
 	const hasConfigFile = existsSync(agentsJsonPath);
 
 	// Use AI SDK - it handles both tool-calling and non-tool-calling models
-	return createAISDKClient(provider, model, hasConfigFile, overrides);
+	return createAISDKClient(
+		provider,
+		model,
+		hasConfigFile,
+		overrides,
+		sessionAffinityId,
+	);
 }
 
 async function createAISDKClient(
@@ -51,6 +63,7 @@ async function createAISDKClient(
 	overrides?: Partial<
 		Pick<AIProviderConfig, 'contextWindow' | 'contextWindows'>
 	>,
+	sessionAffinityId?: string,
 ): Promise<{client: LLMClient; actualProvider: string}> {
 	// Load provider configs
 	const providers = loadProviderConfigs();
@@ -163,7 +176,10 @@ async function createAISDKClient(
 			// Validate credentials (sync, no network calls)
 			validateProviderCredentials(effectiveProviderConfig);
 
-			const client = await AISDKClient.create(effectiveProviderConfig);
+			const client = await AISDKClient.create(
+				effectiveProviderConfig,
+				sessionAffinityId,
+			);
 
 			// Set model if specified
 			if (requestedModel) {

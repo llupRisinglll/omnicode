@@ -364,6 +364,33 @@ test('dropOrphanedToolResults drops a tool result lacking a tool_call_id', t => 
 	t.is(result[0].role, 'user');
 });
 
+test('dropOrphanedToolResults keeps the first tool result and drops a duplicate for the same tool_call_id', t => {
+	// Regression: a turn-boundary steering block used to append a cancellation
+	// result for a call that already executed, producing two role:'tool'
+	// messages with the same tool_call_id. OpenAI-compatible providers reject
+	// that shape ("Messages with role 'tool' must be a response to a preceding
+	// message with 'tool_calls'").
+	const messages: Message[] = [
+		{
+			role: 'assistant',
+			content: '',
+			tool_calls: [{id: 'call_1', function: {name: 'bash', arguments: {}}}],
+		},
+		{role: 'tool', content: 'EXIT_CODE: 0', tool_call_id: 'call_1', name: 'bash'},
+		{
+			role: 'tool',
+			content: 'Tool execution was cancelled by the user.',
+			tool_call_id: 'call_1',
+			name: 'bash',
+		},
+	];
+
+	const result = dropOrphanedToolResults(messages);
+	const toolMessages = result.filter(m => m.role === 'tool');
+	t.is(toolMessages.length, 1, 'duplicate tool result is dropped');
+	t.is(toolMessages[0].content, 'EXIT_CODE: 0', 'the real result survives');
+});
+
 // --- repairDanglingToolCalls: user-interrupt resume ---------------------------
 
 test('repairDanglingToolCalls closes a dangling tool_call so the turn can resume', t => {

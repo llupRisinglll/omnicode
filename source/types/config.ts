@@ -45,6 +45,16 @@ export interface AIProviderConfig {
 	disableToolModels?: string[]; // List of model names to disable tools for
 	// SDK provider package to use (default: 'openai-compatible')
 	sdkProvider?: SdkProvider;
+	/**
+	 * Opt-in prompt-cache affinity for OpenAI-compatible providers. When
+	 * true, each request body carries `prompt_cache_key` set to the stable
+	 * per-session id (the same value codex uses for its Responses requests),
+	 * so OpenAI-contract endpoints / routers that honor the field keep
+	 * repeated turns on the same cache region. Defaults to false: many
+	 * OpenAI-compatible endpoints (DeepSeek and friends) reject unknown
+	 * body fields, and their caching is automatic prefix-based anyway.
+	 */
+	promptCacheKey?: boolean;
 	// Model mode defaults for this provider
 	tune?: Partial<TuneConfig>;
 	// OpenRouter-specific request body fields (provider routing, plugins,
@@ -85,6 +95,8 @@ export interface ProviderConfig {
 	headers?: Record<string, string>;
 	// SDK provider package to use (default: 'openai-compatible')
 	sdkProvider?: SdkProvider;
+	// Opt-in prompt-cache affinity (see AIProviderConfig.promptCacheKey).
+	promptCacheKey?: boolean;
 	// OpenRouter-specific request body fields. Only applied when the provider
 	// is OpenRouter (name match, case-insensitive).
 	openrouter?: OpenRouterParameters;

@@ -317,9 +317,15 @@ export class SteeringEngine {
 		}
 
 		// 1. Instant hard-constraint violations (detector-only, no budget).
+		// Only rules whose success criterion is NOT yet met can fire their
+		// alsoBlock constraints — the same dormancy gate evaluateConstraints()
+		// applies before dispatch. Without this, a rule that already succeeded
+		// (e.g. the port listener exists) would block a follow-up probe POST-
+		// execution, targeting a tool call that already ran and producing a
+		// duplicate tool result for the same tool_call_id.
 		const violation = detectConstraintViolations(
 			facts,
-			this.rules,
+			this.activeConstraintRules(facts),
 			this.modelId,
 			this.state.lastActionRuleId,
 		);
@@ -378,16 +384,7 @@ export class SteeringEngine {
 	 * calls have not executed yet.
 	 */
 	evaluateConstraints(facts: TurnFact[]): SteeringAction | null {
-		const latest = facts[facts.length - 1];
-		const activeRules = this.rules.filter(rule => {
-			const criterion = rule.watch?.successCriterion;
-			return (
-				!latest ||
-				!criterion ||
-				criterion === 'none' ||
-				!this.checker(criterion, latest, facts)
-			);
-		});
+		const activeRules = this.activeConstraintRules(facts);
 		const violation = detectConstraintViolations(
 			facts,
 			activeRules,
@@ -405,6 +402,26 @@ export class SteeringEngine {
 			ruleId: violation.rule.id,
 			model: this.innerDaemonModelId(),
 		};
+	}
+
+	/**
+	 * Rules whose `alsoBlock` hard constraints are still live for the given
+	 * facts. A rule whose success criterion is already met is dormant — its
+	 * alsoBlock must not fire. Mirrored by the preflight gate so the
+	 * turn-boundary pass cannot block a call that already executed (which
+	 * would inject a duplicate tool result for the same tool_call_id).
+	 */
+	private activeConstraintRules(facts: TurnFact[]): SteeringRule[] {
+		const latest = facts[facts.length - 1];
+		return this.rules.filter(rule => {
+			const criterion = rule.watch?.successCriterion;
+			return (
+				!latest ||
+				!criterion ||
+				criterion === 'none' ||
+				!this.checker(criterion, latest, facts)
+			);
+		});
 	}
 
 	private rotateEqualPriorityCandidates(

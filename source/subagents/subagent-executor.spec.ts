@@ -3,7 +3,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {resetPreferencesCache} from '@/config/preferences';
-import {SubagentExecutor} from './subagent-executor.js';
+import {SubagentExecutor, chatWithRateLimitRetry} from './subagent-executor.js';
 import {getModelContextLimit} from '@/models';
 import {SubagentLoader, getSubagentLoader} from './subagent-loader.js';
 import type {ToolManager} from '@/tools/tool-manager';
@@ -11,6 +11,44 @@ import type {LLMClient, LLMChatResponse} from '@/types/core';
 import {setGlobalToolApprovalHandler} from '@/utils/tool-approval-queue';
 
 console.log('\nsubagent-executor.spec.ts');
+
+test('chatWithRateLimitRetry retries 429s with backoff before succeeding', async t => {
+	let calls = 0;
+	const client = {
+		chat: async (): Promise<LLMChatResponse> => {
+			calls++;
+			if (calls <= 2) {
+				const error = new Error(
+					'Rate limit exceeded: Too many requests. Please wait and try again',
+				) as Error & {statusCode?: number};
+				error.statusCode = 429;
+				throw error;
+			}
+			return {
+				choices: [{message: {content: 'ok', tool_calls: []}}],
+				toolsDisabled: false,
+			} as unknown as LLMChatResponse;
+		},
+	} as unknown as LLMClient;
+
+	const result = await chatWithRateLimitRetry(client, [], {}, {});
+
+	t.is(calls, 3);
+	t.is(result.choices?.[0]?.message?.content, 'ok');
+});
+
+test('chatWithRateLimitRetry surfaces non-rate-limit errors immediately', async t => {
+	const client = {
+		chat: async (): Promise<LLMChatResponse> => {
+			throw new Error('Bad request: model not supported');
+		},
+	} as unknown as LLMClient;
+
+	await t.throwsAsync(
+		async () => chatWithRateLimitRetry(client, [], {}, {}),
+		{message: /Bad request/},
+	);
+});
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 

@@ -33,6 +33,49 @@ test('returns undefined when no provider-specific options apply', t => {
 	t.is(result, undefined);
 });
 
+test('openai-compatible provider sends prompt_cache_key only when opted in', t => {
+	const provider = makeProvider({
+		name: 'DeepSeek',
+		type: 'openai-compatible',
+		promptCacheKey: true,
+	});
+	const result = buildProviderOptions(provider, 'system', undefined, 'session-1');
+	t.deepEqual(result, {DeepSeek: {prompt_cache_key: 'session-1'}});
+});
+
+test('openai-compatible provider without opt-in sends no cache params', t => {
+	const result = buildProviderOptions(
+		makeProvider({name: 'DeepSeek', type: 'openai-compatible'}),
+		'system',
+		undefined,
+		'session-1',
+	);
+	t.is(result, undefined);
+});
+
+test('opted-in openai-compatible provider without a session id sends no cache params', t => {
+	const result = buildProviderOptions(
+		makeProvider({
+			name: 'DeepSeek',
+			type: 'openai-compatible',
+			promptCacheKey: true,
+		}),
+		'system',
+		undefined,
+	);
+	t.is(result, undefined);
+});
+
+test('provider-name key splits on dots to match the AI SDK providerOptionsName', t => {
+	const provider = makeProvider({
+		name: 'custom.openai.com',
+		type: 'openai-compatible',
+		promptCacheKey: true,
+	});
+	const result = buildProviderOptions(provider, 'system', undefined, 'session-2');
+	t.deepEqual(result, {custom: {prompt_cache_key: 'session-2'}});
+});
+
 test('returns undefined for OpenRouter with no openrouter config and no reasoning shortcut', t => {
 	const result = buildProviderOptions(makeProvider(), 'system prompt', {
 		temperature: 0.7,

@@ -1,5 +1,5 @@
 import {Box, Text} from 'ink';
-import {useEffect, useReducer} from 'react';
+import {memo, useEffect, useReducer} from 'react';
 
 import {ToolCallHeader} from '@/components/simple-tool-formatter';
 import ToolMessage from '@/components/tool-message';
@@ -41,7 +41,7 @@ function groupConsecutive(
 	return groups;
 }
 
-export default function AgentProgress({
+const AgentProgress = memo(function AgentProgress({
 	subagentName,
 	description,
 	isLive = false,
@@ -53,13 +53,15 @@ export default function AgentProgress({
 
 	const [, forceRender] = useReducer((x: number) => x + 1, 0);
 
-	// Poll the mutable progress state every 100ms
+	// Poll the mutable progress state every 500ms — fast enough for live
+	// elapsed/tool history while keeping per-frame render cost low during
+	// streaming (100ms was 10 full re-renders per second per agent).
 	useEffect(() => {
 		if (!isLive || isComplete) return;
 
 		const interval = setInterval(() => {
 			forceRender();
-		}, 100);
+		}, 500);
 
 		return () => clearInterval(interval);
 	}, [isLive, isComplete]);
@@ -164,7 +166,9 @@ export default function AgentProgress({
 	);
 
 	return <ToolMessage message={messageContent} hideBox={true} />;
-}
+});
+
+export default AgentProgress;
 
 /**
  * Renders multiple agent progress indicators for parallel execution.

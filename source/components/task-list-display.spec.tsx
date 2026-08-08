@@ -25,7 +25,7 @@ test('TaskListDisplay renders task titles', t => {
 
 	const output = lastFrame();
 	t.truthy(output);
-	t.regex(output!, /tasks/);
+	t.regex(output!, /Tasks/);
 	t.regex(output!, /Fix the bug/);
 	t.regex(output!, /Write tests/);
 	unmount();

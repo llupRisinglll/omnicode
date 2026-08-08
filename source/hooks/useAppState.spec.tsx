@@ -60,6 +60,24 @@ test('returns initial state with sensible defaults', t => {
 	t.deepEqual(hook.pendingToolCalls, []);
 });
 
+test('assigning a session id rebases the client cache-affinity id (resume parity)', t => {
+	const {hook, instance} = setup();
+	const setSessionAffinityIdCalls: string[] = [];
+	const client = {
+		setSessionAffinityId(id: string) {
+			setSessionAffinityIdCalls.push(id);
+		},
+	};
+
+	hook.setClient(client as never);
+	hook.setCurrentSessionId('abcdef12-3456-4789-9abc-def123456789');
+	instance.rerender(<Probe />);
+
+	t.deepEqual(setSessionAffinityIdCalls, [
+		'abcdef12-3456-4789-9abc-def123456789',
+	]);
+});
+
 test('respects initialDevelopmentMode argument', t => {
 	const {hook} = setup('plan');
 	t.is(hook.developmentMode, 'plan');

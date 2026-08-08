@@ -36,14 +36,19 @@ export class AISDKClient implements LLMClient {
 	private maxRetries: number;
 	private sessionAffinityId: string;
 
-	constructor(providerConfig: AIProviderConfig) {
+	constructor(providerConfig: AIProviderConfig, sessionAffinityId?: string) {
 		const logger = getLogger();
 
 		this.providerConfig = providerConfig;
 		this.availableModels = providerConfig.models;
 		this.currentModel = providerConfig.models[0] || '';
 		this.cachedContextSize = 0;
-		this.sessionAffinityId = randomUUID();
+		// Subagents pass the parent's id so the whole session (root thread +
+		// descendants) shares one prompt-cache affinity key, mirroring codex
+		// (`prompt_cache_key` = session id for root AND subagent requests).
+		// A fresh id is generated when no override is given (standalone /
+		// provider-switched clients).
+		this.sessionAffinityId = sessionAffinityId ?? randomUUID();
 		// Default to 2 retries (same as AI SDK default), or use configured value
 		this.maxRetries = providerConfig.maxRetries ?? 2;
 
@@ -103,8 +108,11 @@ export class AISDKClient implements LLMClient {
 		}
 	}
 
-	static async create(providerConfig: AIProviderConfig): Promise<AISDKClient> {
-		const client = new AISDKClient(providerConfig);
+	static async create(
+		providerConfig: AIProviderConfig,
+		sessionAffinityId?: string,
+	): Promise<AISDKClient> {
+		const client = new AISDKClient(providerConfig, sessionAffinityId);
 		// Async provider creation — lazily loads only the SDK package the
 		// configured `sdkProvider` actually needs.
 		client.provider = await createProvider(
@@ -112,6 +120,26 @@ export class AISDKClient implements LLMClient {
 			client.undiciAgent,
 		);
 		return client;
+	}
+
+	/**
+	 * Stable per-session cache-affinity id, shared by the root conversation
+	 * and every subagent spawned from it. Sent as `prompt_cache_key` (where
+	 * the provider honors it) and as `x-session-affinity` / `X-Session-Id`
+	 * request headers.
+	 */
+	getSessionAffinityId(): string {
+		return this.sessionAffinityId;
+	}
+
+	/**
+	 * Rebase the cache-affinity id to the persisted conversation id. Called
+	 * when a session is resumed (or a new session id is assigned), so
+	 * `prompt_cache_key` matches the id stored in sessions.json — codex
+	 * parity, where `prompt_cache_key` = the session id across resumes.
+	 */
+	setSessionAffinityId(id: string): void {
+		this.sessionAffinityId = id;
 	}
 
 	setModel(model: string): void {

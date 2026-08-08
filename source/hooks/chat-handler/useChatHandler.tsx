@@ -53,6 +53,7 @@ import {
 import {
 	flushPendingActivityToStatic,
 	processAssistantResponse,
+	type SteeringTraceRun,
 } from './conversation/conversation-loop';
 import {createResetStreamingState} from './state/streaming-state';
 import type {ChatHandlerReturn, UseChatHandlerProps} from './types';
@@ -188,6 +189,7 @@ export function useChatHandler({
 	currentModel,
 	setIsCancelling,
 	addToChatQueue,
+	replaceChatComponentByKey,
 	addTransientNotice,
 	abortController,
 	setAbortController,
@@ -502,6 +504,12 @@ export function useChatHandler({
 			// interrupt handling (e.g. an immediate pre-stream failure).
 			streamedContentRef.current = '';
 			streamedReasoningRef.current = '';
+			// Fresh trace-run accumulator per user message: consecutive
+			// identical noop steering evaluations within this conversation
+			// collapse into one `×N` line (see conversation-loop).
+			const steeringTraceRunRef: {current: SteeringTraceRun | null} = {
+				current: null,
+			};
 
 			try {
 				await processAssistantResponse({
@@ -517,6 +525,7 @@ export function useChatHandler({
 					setTokenCount,
 					setMessages,
 					addToChatQueue,
+					replaceChatComponentByKey,
 					currentProvider,
 					currentModel,
 					developmentMode,
@@ -551,6 +560,7 @@ export function useChatHandler({
 					// inside processAssistantResponse as turns recur.
 					steeringEngine: nonInteractiveMode ? null : steeringEngine,
 					steeringVerbose: steeringVerbosePref,
+					steeringTraceRunRef,
 					turnFacts: [],
 					userTriggeredSkill: userTriggeredSkillRef.current,
 					userTaskKind: userTaskKindRef.current,
@@ -603,6 +613,7 @@ export function useChatHandler({
 			setAbortController,
 			setMessages,
 			addToChatQueue,
+			replaceChatComponentByKey,
 			currentProvider,
 			currentModel,
 			developmentMode,

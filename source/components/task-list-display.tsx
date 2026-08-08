@@ -1,5 +1,6 @@
 import {Box, Text} from 'ink';
 import Spinner from 'ink-spinner';
+import {memo} from 'react';
 import {useTheme} from '@/hooks/useTheme';
 import type {Task} from '@/tools/tasks/types';
 
@@ -26,7 +27,7 @@ function statsSuffix(tasks: Task[]): string {
 	return ` (${done} done, ${inProgress} in progress, ${open} open)`;
 }
 
-export function TaskListDisplay({
+export const TaskListDisplay = memo(function TaskListDisplay({
 	tasks,
 	title = 'Tasks',
 }: TaskListDisplayProps) {
@@ -67,7 +68,10 @@ export function TaskListDisplay({
 							<Text color={colors.secondary}>{suffix}</Text>
 						</>
 					) : (
-						<>tasks{suffix}</>
+						<>
+							{title}
+							{suffix}
+						</>
 					)}
 				</Text>
 			</Box>
@@ -96,4 +100,4 @@ export function TaskListDisplay({
 			))}
 		</Box>
 	);
-}
+});

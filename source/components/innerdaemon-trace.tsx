@@ -23,6 +23,21 @@ export function formatSteeringTrace(d: SteeringDiagnostic): string {
 }
 
 /**
+ * Format a compacted steering-trace run. When the same rule noops for several
+ * consecutive turns, the loop emits ONE line for the whole run instead of one
+ * line per turn, e.g. `InnerDaemon · rule=bc_progress-budget · budget 22/8 ·
+ * noop ×12` (count 1 renders the plain single line).
+ */
+export function formatSteeringTraceRun(
+	d: SteeringDiagnostic,
+	count: number,
+): string {
+	const base = formatSteeringTrace(d);
+	if (count <= 1) return base;
+	return `${base} ×${count}`;
+}
+
+/**
  * Verbose "proof-of-life" trace for InnerDaemon. One dim `colors.secondary`
  * line surfaced every turn when verbose mode is on — even on a noop — so the
  * steering layer is visibly alive. Deliberately NOT the `◆ InnerDaemon`
@@ -33,14 +48,17 @@ export function formatSteeringTrace(d: SteeringDiagnostic): string {
  */
 export default function InnerDaemonTrace({
 	diagnostic,
+	count = 1,
 }: {
 	diagnostic: SteeringDiagnostic;
+	/** Consecutive identical runs collapsed into this line (1 = single turn). */
+	count?: number;
 }) {
 	const {colors} = useTheme();
 	return (
 		<Box marginTop={1} marginBottom={1}>
 			<Text color={colors.secondary} dimColor>
-				{formatSteeringTrace(diagnostic)}
+				{formatSteeringTraceRun(diagnostic, count)}
 			</Text>
 		</Box>
 	);

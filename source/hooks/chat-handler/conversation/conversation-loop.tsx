@@ -155,6 +155,24 @@ interface ProcessAssistantResponseParams {
 	 */
 	steeringVerbose?: boolean;
 	/**
+	 * Per-conversation accumulator for the verbose steering trace. The loop
+	 * collapses consecutive identical noop evaluations into ONE line with a
+	 * `×N` run count (updated in place via replaceChatComponentByKey) instead
+	 * of spamming the transcript with a line per turn. Created fresh by the
+	 * caller for each user message; threaded through recursion like turnFacts.
+	 */
+	steeringTraceRunRef?: {current: SteeringTraceRun | null};
+	/**
+	 * Replace a previously queued chat component by its React key (same-key
+	 * swap so React reconciles in place). Used to update the running trace
+	 * count without appending a new line. Optional — without it the trace
+	 * falls back to emitting one line per evaluation.
+	 */
+	replaceChatComponentByKey?: (
+		key: React.Key,
+		component: React.ReactNode,
+	) => void;
+	/**
 	 * Accumulated per-turn facts for the steering detector. Threaded forward
 	 * through recursion (the current turn's fact is appended before recurse).
 	 * Reset by the caller at the start of each new user message.
@@ -168,6 +186,28 @@ interface ProcessAssistantResponseParams {
 	userTriggeredSkill?: string;
 	/** Stable classification of the original user request. */
 	userTaskKind?: UserTaskKind;
+}
+
+/**
+ * State for collapsing consecutive identical noop steering traces into one
+ * `×N` line. `signature` identifies the run (rule + intent + decision + model);
+ * the latest diagnostic is kept so the compacted line shows the newest budget.
+ */
+export interface SteeringTraceRun {
+	signature: string;
+	count: number;
+	key: string;
+	diagnostic: SteeringDiagnostic;
+}
+
+/** Signature that groups consecutive steering evaluations into one run. */
+function steeringTraceSignature(d: SteeringDiagnostic): string {
+	return [
+		d.intentClass,
+		d.inScopeRuleId ?? '',
+		d.decision,
+		d.innerDaemonModel ?? '',
+	].join('|');
 }
 
 // Module-level flag: show XML fallback notice only once per process lifetime.
@@ -340,6 +380,8 @@ export const processAssistantResponse = async (
 		onPrivacyEvent,
 		steeringEngine = null,
 		steeringVerbose = false,
+		steeringTraceRunRef,
+		replaceChatComponentByKey,
 		turnFacts = [],
 		userTriggeredSkill,
 		userTaskKind,
@@ -1100,6 +1142,7 @@ export const processAssistantResponse = async (
 				toolName: string,
 				detail?: string | string[],
 				failed?: boolean,
+				calls?: Array<{toolName?: string; detail: string; output: string}>,
 			) => {
 				if (compactToolCountsRef) {
 					const counts = compactToolCountsRef.current;
@@ -1119,6 +1162,7 @@ export const processAssistantResponse = async (
 							nextDetails.length > 0
 								? [...(currentActivity.details ?? []), ...nextDetails]
 								: currentActivity.details,
+						calls: [...(currentActivity.calls ?? []), ...(calls ?? [])],
 						failed: failed ?? currentActivity.failed,
 					};
 					onSetCompactToolCounts?.({...counts});
@@ -1319,25 +1363,64 @@ export const processAssistantResponse = async (
 				// extra work when onDiagnostic is supplied). Emit the dim trace
 				// AFTER the action is applied below so it reads bottom-to-top with
 				// any nudge/block it explains.
-				let steeringDiagnostic: SteeringDiagnostic | null = null;
 				// Verbose "proof-of-life": collect the per-turn diagnostic ONLY when
 				// verbose is on (the engine skips the extra work otherwise). Without
 				// verbose, the `◆ InnerDaemon` inject block below IS the trigger
 				// indicator — no noise-y diagnostic line.
+				const steeringDiagnostics: SteeringDiagnostic[] = [];
 				const action = await steeringEngine.evaluate(
 					nextTurnFacts,
 					controller.signal,
 					steeringVerbose
-						? {onDiagnostic: d => (steeringDiagnostic = d)}
+						? {
+								onDiagnostic: d => {
+									steeringDiagnostics.push(d);
+								},
+							}
 						: undefined,
 				);
+				const steeringDiagnostic = steeringDiagnostics[0] ?? null;
 				if (steeringDiagnostic) {
-					addToChatQueue(
-						<InnerDaemonTrace
-							key={generateKey('steering-trace')}
-							diagnostic={steeringDiagnostic}
-						/>,
-					);
+					const diagnostic = steeringDiagnostic;
+					// Collapse consecutive identical noop evaluations into ONE
+					// line with a `×N` run count, updated in place via a stable
+					// per-run key. Long quiet stretches (e.g. a budget rule
+					// nooping every turn) previously produced a trace line per
+					// turn; now they render as e.g. `… rule=X · budget 22/8 ·
+					// noop ×12`. Only noop runs compact — real nudges/blocks
+					// each keep their own line (they are rare and meaningful).
+					const signature = steeringTraceSignature(diagnostic);
+					const run = steeringTraceRunRef?.current ?? null;
+					if (
+						run &&
+						run.signature === signature &&
+						diagnostic.decision === 'noop' &&
+						replaceChatComponentByKey
+					) {
+						run.count += 1;
+						run.diagnostic = diagnostic;
+						replaceChatComponentByKey(
+							run.key,
+							<InnerDaemonTrace
+								key={run.key}
+								diagnostic={run.diagnostic}
+								count={run.count}
+							/>,
+						);
+					} else {
+						const key = generateKey('steering-trace');
+						addToChatQueue(
+							<InnerDaemonTrace key={key} diagnostic={diagnostic} />,
+						);
+						if (steeringTraceRunRef) {
+							steeringTraceRunRef.current = {
+								signature,
+								count: 1,
+								key,
+								diagnostic,
+							};
+						}
+					}
 				}
 				if (action) {
 					if (action.type === 'stop') {
@@ -1393,9 +1476,22 @@ export const processAssistantResponse = async (
 			builder.addToolResults(turnResults);
 			if (steeringBlockResult && steeringBlockResult.ids.length > 0) {
 				// Append cancellation results for the blocked tool calls so the
-				// SDK's tool-call/result pairing stays intact.
+				// SDK's tool-call/result pairing stays intact — but ONLY for
+				// calls that did NOT already produce a real result this turn.
+				// A turn-boundary block can name a call that already executed;
+				// appending a second tool result for the same tool_call_id
+				// makes OpenAI-compatible providers reject the whole request
+				// ("Messages with role 'tool' must be a response to a
+				// preceding message with 'tool_calls'").
 				const blockedIds = steeringBlockResult.ids;
-				const blocked = validToolCalls.filter(tc => blockedIds.includes(tc.id));
+				const answeredIds = new Set(
+					turnResults
+						.map(result => result.tool_call_id)
+						.filter((id): id is string => Boolean(id)),
+				);
+				const blocked = validToolCalls.filter(
+					tc => blockedIds.includes(tc.id) && !answeredIds.has(tc.id),
+				);
 				if (blocked.length > 0) {
 					builder.addToolResults(createCancellationResults(blocked));
 				}

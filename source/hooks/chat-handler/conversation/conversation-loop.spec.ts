@@ -1,4 +1,5 @@
 import test from 'ava';
+import React from 'react';
 import {clearAppConfig, getAppConfig} from '@/config/index.js';
 import {resetShutdownManager} from '@/utils/shutdown/shutdown-manager.js';
 import {processAssistantResponse, resetFallbackNotice, resetLastTurnHadReasoning, resetPendingThoughtAccumulator} from './conversation-loop.js';
@@ -2080,6 +2081,321 @@ test.serial('processAssistantResponse - tool execution result appends to compact
 			'Tool result messages should be appended to compacted history, not original verbose history',
 		);
 	}
+});
+
+test.serial('processAssistantResponse - turn-boundary steering block does not duplicate an already-executed tool result', async t => {
+	// Regression: the sim wedged with DeepSeek's "Messages with role 'tool'
+	// must be a response to a preceding message with 'tool_calls'". A
+	// turn-boundary steering block named a bash call that had ALREADY
+	// executed; the loop appended a second cancellation result for the same
+	// tool_call_id. The loop must skip cancellation results for calls that
+	// already produced a real result this turn.
+	const allSetMessagesCalls: Message[][] = [];
+	let callCount = 0;
+
+	const mockClient = createMockClient({content: ''});
+	mockClient.chat = async () => {
+		callCount++;
+		if (callCount === 1) {
+			return {
+				choices: [{
+					message: {
+						role: 'assistant',
+						content: '',
+						tool_calls: [{
+							id: 'call_1',
+							function: {name: 'read_file', arguments: '{}'},
+						}],
+					},
+				}],
+				toolsDisabled: false,
+			};
+		}
+		// Terminal response with no tools → recursion stops.
+		return {
+			choices: [{message: {role: 'assistant', content: 'Done.'}}],
+			toolsDisabled: false,
+		};
+	};
+
+	const mockToolManager = createMockToolManager({
+		tools: ['read_file'],
+		needsApproval: false,
+	});
+
+	// Fake steering engine: preflight allows the call, but the post-turn
+	// evaluate() blocks it (the exact shape of the sim failure).
+	const fakeSteeringEngine = {
+		getWithinTurnWatchdog: () => null,
+		evaluateConstraints: () => null,
+		evaluate: async () => ({
+			type: 'block' as const,
+			toolCallIds: ['call_1'],
+			message: 'do not truncate logs',
+			urgency: 'light' as const,
+			ruleId: 'runtime-budget',
+			model: 'mimo-v2.5',
+		}),
+	};
+
+	const params = createDefaultParams({
+		client: mockClient as any,
+		messages: [{role: 'user', content: 'scan the env'}],
+		toolManager: mockToolManager as any,
+		steeringEngine: fakeSteeringEngine as any,
+		currentProvider: 'openai',
+		currentModel: 'gpt-4',
+		setMessages: (msgs: Message[]) => {
+			allSetMessagesCalls.push(msgs);
+		},
+		addToChatQueue: () => {},
+		onConversationComplete: () => {},
+	});
+
+	await processAssistantResponse(params);
+
+	const lastCall = allSetMessagesCalls[allSetMessagesCalls.length - 1];
+	t.truthy(lastCall, 'should have a final setMessages call');
+	const toolResultsForCall1 = lastCall.filter(
+		m => m.role === 'tool' && m.tool_call_id === 'call_1',
+	);
+	t.is(
+		toolResultsForCall1.length,
+		1,
+		'exactly one tool result per tool_call_id survives a post-turn block',
+	);
+	t.is(
+		toolResultsForCall1[0].content,
+		'Error: Tool registry not initialized',
+		'the real result survives; no duplicate cancellation is appended',
+	);
+});
+
+test.serial('processAssistantResponse - consecutive identical steering noops collapse into one ×N trace line', async t => {
+	// Regression: verbose steering emitted one InnerDaemon trace per turn, so
+	// a long quiet stretch (e.g. a budget rule nooping every turn) spammed the
+	// transcript with identical lines. Consecutive same-rule noops must fold
+	// into ONE line updated in place with a `×N` count via
+	// replaceChatComponentByKey; a real action starts a fresh line.
+	const queued: Array<{key?: React.Key; text: string}> = [];
+	const replaced: Array<{key: React.Key; text: string}> = [];
+	let callCount = 0;
+
+	const mockClient = createMockClient({content: ''});
+	mockClient.chat = async () => {
+		callCount++;
+		if (callCount <= 2) {
+			// Two tool turns → two steering evaluations.
+			return {
+				choices: [{
+					message: {
+						role: 'assistant',
+						content: '',
+						tool_calls: [{
+							id: `call_${callCount}`,
+							function: {name: 'read_file', arguments: '{}'},
+						}],
+					},
+				}],
+				toolsDisabled: false,
+			};
+		}
+		return {
+			choices: [{message: {role: 'assistant', content: 'Done.'}}],
+			toolsDisabled: false,
+		};
+	};
+
+	const mockToolManager = createMockToolManager({
+		tools: ['read_file'],
+		needsApproval: false,
+	});
+
+	const noopDiagnostic = {
+		intentClass: 'unknown' as const,
+		inScopeRuleId: 'bc_progress-budget',
+		budgetUsed: 22,
+		budgetMax: 8,
+		decision: 'noop' as const,
+		innerDaemonModel: 'mimo-v2.5',
+	};
+
+	// Fake steering engine: noop every evaluation, emitting a diagnostic via
+	// the verbose callback so the loop renders (and compacts) traces.
+	const fakeSteeringEngine = {
+		getWithinTurnWatchdog: () => null,
+		evaluateConstraints: () => null,
+		evaluate: async (
+			_facts: unknown,
+			_signal: unknown,
+			opts?: {onDiagnostic?: (d: unknown) => void},
+		) => {
+			opts?.onDiagnostic?.(noopDiagnostic);
+			return null;
+		},
+	};
+
+	const traceKeyRef: {current: React.Key | null} = {current: null};
+
+	const params = createDefaultParams({
+		client: mockClient as any,
+		messages: [{role: 'user', content: 'keep working'}],
+		toolManager: mockToolManager as any,
+		steeringEngine: fakeSteeringEngine as any,
+		steeringVerbose: true,
+		steeringTraceRunRef: {current: null} as any,
+		replaceChatComponentByKey: (key: React.Key, component: React.ReactNode) => {
+			const text =
+				typeof component === 'object' && component !== null &&
+				'props' in component
+					? String(
+							(component as any).props?.diagnostic?.decision ?? '',
+						)
+					: '';
+			replaced.push({key, text});
+		},
+		currentProvider: 'openai',
+		currentModel: 'gpt-4',
+		setMessages: () => {},
+		addToChatQueue: (component: React.ReactNode) => {
+			const key =
+				typeof component === 'object' && component !== null &&
+				'key' in component
+					? (component as any).key
+					: undefined;
+			const isTrace =
+				React.isValidElement(component) &&
+				typeof component.type === 'function' &&
+				((component.type as {displayName?: string}).displayName ??
+					(component.type as {name?: string}).name) === 'InnerDaemonTrace';
+			if (isTrace && key) traceKeyRef.current = key;
+			queued.push({
+				key,
+				text: isTrace ? 'trace' : String(component),
+			});
+		},
+		onConversationComplete: () => {},
+	});
+
+	await processAssistantResponse(params);
+
+	// Two identical noop evaluations → ONE trace line in the transcript, and
+	// the second turn REPLACED it in place (count ×2).
+	const traceLines = queued.filter(q => q.text === 'trace');
+	t.is(traceLines.length, 1, 'consecutive noops render a single trace line');
+	t.truthy(traceKeyRef.current, 'trace line carries a stable key');
+	t.is(
+		replaced.length,
+		1,
+		'the second noop updates the first line in place instead of appending',
+	);
+	t.is(
+		replaced[0]?.key,
+		traceKeyRef.current,
+		'replacement uses the same stable key so React reconciles in place',
+	);
+});
+
+test.serial('processAssistantResponse - a real steering action breaks the noop run into a fresh trace line', async t => {
+	const queued: string[] = [];
+	const replaced: string[] = [];
+	let callCount = 0;
+
+	const mockClient = createMockClient({content: ''});
+	mockClient.chat = async () => {
+		callCount++;
+		if (callCount <= 2) {
+			return {
+				choices: [{
+					message: {
+						role: 'assistant',
+						content: '',
+						tool_calls: [{
+							id: `call_${callCount}`,
+							function: {name: 'read_file', arguments: '{}'},
+						}],
+					},
+				}],
+				toolsDisabled: false,
+			};
+		}
+		return {
+			choices: [{message: {role: 'assistant', content: 'Done.'}}],
+			toolsDisabled: false,
+		};
+	};
+
+	const mockToolManager = createMockToolManager({
+		tools: ['read_file'],
+		needsApproval: false,
+	});
+
+	// First evaluation noops, second nudges — the run must break.
+	const fakeSteeringEngine = {
+		getWithinTurnWatchdog: () => null,
+		evaluateConstraints: () => null,
+		evaluate: async (
+			_facts: unknown,
+			_signal: unknown,
+			opts?: {onDiagnostic?: (d: unknown) => void},
+		) => {
+			const isFirst = callCount <= 1;
+			opts?.onDiagnostic?.(
+				isFirst
+					? {
+							intentClass: 'unknown',
+							inScopeRuleId: 'bc_progress-budget',
+							budgetUsed: 2,
+							budgetMax: 8,
+							decision: 'noop',
+							innerDaemonModel: 'mimo-v2.5',
+						}
+					: {
+							intentClass: 'unknown',
+							inScopeRuleId: 'bc_progress-budget',
+							budgetUsed: 8,
+							budgetMax: 8,
+							decision: 'nudge',
+							innerDaemonModel: 'mimo-v2.5',
+						},
+			);
+			return null;
+		},
+	};
+
+	const params = createDefaultParams({
+		client: mockClient as any,
+		messages: [{role: 'user', content: 'keep working'}],
+		toolManager: mockToolManager as any,
+		steeringEngine: fakeSteeringEngine as any,
+		steeringVerbose: true,
+		steeringTraceRunRef: {current: null} as any,
+		replaceChatComponentByKey: () => {
+			replaced.push('replace');
+		},
+		currentProvider: 'openai',
+		currentModel: 'gpt-4',
+		setMessages: () => {},
+		addToChatQueue: (component: React.ReactNode) => {
+			queued.push(
+				typeof component === 'object' && component !== null
+					? String((component as any).props?.diagnostic?.decision ?? '')
+					: String(component),
+			);
+		},
+		onConversationComplete: () => {},
+	});
+
+	await processAssistantResponse(params);
+
+	// noop → nudge: two SEPARATE trace lines (the nudge must not compact into
+	// the noop run).
+	t.deepEqual(
+		queued.filter(q => q === 'noop' || q === 'nudge'),
+		['noop', 'nudge'],
+		'a real action starts a fresh trace line',
+	);
+	t.is(replaced.length, 0, 'different decisions never collapse');
 });
 
 test.serial('processAssistantResponse - auto-nudge builds on compacted messages when compression triggered', async t => {

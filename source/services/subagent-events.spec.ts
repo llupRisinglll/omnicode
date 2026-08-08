@@ -260,3 +260,21 @@ test.serial(
 		t.notThrows(() => appendSubagentTool('does-not-exist', 'noop'));
 	},
 );
+
+test.serial('appendSubagentTool records the per-call detail alongside the name', t => {
+	clearAllSubagentProgress();
+	resetSubagentProgressById('agent-1');
+
+	appendSubagentTool('agent-1', 'read_file', 'src/main.ts');
+	appendSubagentTool('agent-1', 'execute_bash', 'npm run build');
+	appendSubagentTool('agent-1', 'web_search', '');
+
+	const progress = getSubagentProgress('agent-1');
+	t.deepEqual(progress.toolHistory, ['read_file', 'execute_bash', 'web_search']);
+	t.deepEqual(progress.toolCalls, [
+		{name: 'read_file', detail: 'src/main.ts'},
+		{name: 'execute_bash', detail: 'npm run build'},
+		{name: 'web_search', detail: ''},
+	]);
+	clearAllSubagentProgress();
+});

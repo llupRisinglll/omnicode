@@ -128,16 +128,23 @@ test('loadCustomCommands populates cache from loader and updates count', t => {
 
 	handlers.loadCustomCommands(loader);
 
-	t.true(cache.has('hello'));
-	t.true(cache.has('hi'));
-	t.true(cache.has('greet'));
-	t.is(cache.get('hello'), fakeCommand);
+	// The hook REPLACES the cache immutably (a fresh Map) so React state
+	// changes and consumers memoizing on `customCommandCache` identity (the
+	// / autocomplete list) recompute — mutating in place left skills loaded
+	// after boot invisible to the picker.
+	const published = props.setCustomCommandCache.calls[0]?.[0];
+	t.truthy(published, 'setCustomCommandCache is called with the new Map');
+	t.not(published, cache, 'a NEW Map is published, not the old reference');
+	t.true(published!.has('hello'));
+	t.true(published!.has('hi'));
+	t.true(published!.has('greet'));
+	t.is(published!.get('hello'), fakeCommand);
 	t.deepEqual(props.setCustomCommandsCount.calls, [[1]]);
 });
 
 test('loadCustomCommands handles loaders without aliases', t => {
 	const cache = new Map<string, CustomCommand>();
-	const {handlers} = setup({customCommandCache: cache});
+	const {handlers, props} = setup({customCommandCache: cache});
 
 	const cmd = {name: 'no-alias'} as CustomCommand;
 	const loader = {
@@ -147,15 +154,16 @@ test('loadCustomCommands handles loaders without aliases', t => {
 
 	handlers.loadCustomCommands(loader);
 
-	t.is(cache.size, 1);
-	t.is(cache.get('no-alias'), cmd);
+	const published = props.setCustomCommandCache.calls[0]?.[0];
+	t.is(published?.size, 1);
+	t.is(published?.get('no-alias'), cmd);
 });
 
 test('loadCustomCommands clears prior cache before reloading', t => {
 	const cache = new Map<string, CustomCommand>();
 	cache.set('stale', {name: 'stale'} as CustomCommand);
 
-	const {handlers} = setup({customCommandCache: cache});
+	const {handlers, props} = setup({customCommandCache: cache});
 
 	const loader = {
 		loadCommands: () => {},
@@ -164,8 +172,9 @@ test('loadCustomCommands clears prior cache before reloading', t => {
 
 	handlers.loadCustomCommands(loader);
 
-	t.false(cache.has('stale'));
-	t.true(cache.has('fresh'));
+	const published = props.setCustomCommandCache.calls[0]?.[0];
+	t.false(published?.has('stale'), 'reload drops the previous entries');
+	t.true(published?.has('fresh'));
 });
 
 test('loadCustomCommands handles loaders that return undefined', t => {
@@ -179,6 +188,7 @@ test('loadCustomCommands handles loaders that return undefined', t => {
 
 	handlers.loadCustomCommands(loader);
 
-	t.is(cache.size, 0);
+	const published = props.setCustomCommandCache.calls[0]?.[0];
+	t.is(published?.size, 0);
 	t.deepEqual(props.setCustomCommandsCount.calls, [[0]]);
 });

@@ -10,6 +10,7 @@ import {
 	CompactFileResult,
 	CompactToolActivityBlock,
 	CompactToolCountsLine,
+	LIVE_COMPACT_POLL_INTERVAL_MS,
 	LiveCompactCounts,
 	LiveCompactRunningSummary,
 	displayCompactCountsSummary,
@@ -261,6 +262,38 @@ test('displayToolResult - compact mode condenses a validation failure too', asyn
 	unmount();
 });
 
+test('CompactToolActivityBlock expands liveCalls into the individual entries', async t => {
+	setTerminalSize(80, 24);
+	const activity: CompactToolActivity = {
+		count: 1,
+		details: ['explore: map the layout'],
+		liveCalls: () => [
+			{toolName: 'execute_bash', detail: 'git status', output: 'packages checked'},
+			{toolName: 'read_file', detail: '', output: ''},
+		],
+	};
+	const {lastFrame, unmount} = renderWithTheme(
+		<CompactToolActivityBlock
+			entries={[['agent:run-1-explore', activity]]}
+			expanded={false}
+		/>,
+	);
+	await new Promise(resolve => setTimeout(resolve, 50));
+
+	// Collapsed: no individual call rows yet.
+	const collapsed = lastFrame()!;
+	t.notRegex(collapsed, /✦ Bash\(git status\)/);
+
+	// ctrl+o expands → the streaming per-call entries render inside the block.
+	compactToggleEvents.emit('toggle');
+	await new Promise(resolve => setTimeout(resolve, 50));
+	const expanded = lastFrame()!;
+	t.regex(expanded, /✦ Bash\(git status\)/);
+	t.regex(expanded, /packages checked/);
+	t.regex(expanded, /✦ Read\(\)/);
+	unmount();
+});
+
 test('LiveCompactCounts renders running state and groups failed tools', t => {
 	const {lastFrame, unmount} = renderWithTheme(
 		<LiveCompactCounts
@@ -399,7 +432,9 @@ test('LiveCompactRunningSummary refreshes dynamic subagent completion counts', a
 
 	t.regex(lastFrame() ?? '', /0\/2 agents completed/);
 	firstRunning = false;
-	await new Promise(resolve => setTimeout(resolve, 150));
+	await new Promise(resolve =>
+		setTimeout(resolve, LIVE_COMPACT_POLL_INTERVAL_MS + 50),
+	);
 	t.regex(lastFrame() ?? '', /1\/2 agents completed/);
 
 	unmount();
@@ -1417,6 +1452,51 @@ test('CompactDetailResult footer click expands, block click collapses', async t 
 	clickEvents.emit('click', {x: 5, y: 5});
 	await new Promise(resolve => setTimeout(resolve, 50));
 	t.notRegex(lastFrame()!, /out line 5/, 'block click should collapse');
+});
+
+test('stacked CompactDetailResult blocks with different +N footers each hit-test their own footer', async t => {
+	// Regression: the detail-block registry used to key occurrences by the
+	// IDENTITY text (`✦ Bash(`), while the screen match uses the FOOTER text.
+	// Two stacked bash blocks with DIFFERENT hidden counts (… +9 lines vs …
+	// +2 lines) therefore mis-mapped: the first block's click target resolved
+	// to the wrong row and could not be hovered/clicked. The registry must key
+	// by footer text (and header text) independently, computed at event time.
+	setTerminalSize(80, 24);
+	const {lastFrame, unmount} = renderWithTheme(
+		<>
+			<CompactDetailResult
+				toolName="execute_bash"
+				detail="npm run build"
+				output={clickableOutput}
+			/>
+			<CompactDetailResult
+				toolName="execute_bash"
+				detail="git status"
+				output={['a', 'b'].join('\n')}
+			/>
+		</>,
+	);
+	await new Promise(resolve => setTimeout(resolve, 50));
+
+	// Seed the screen like the output overlay would: first block footer at
+	// row 4 (+9 lines), second block footer at row 8 (+2 lines).
+	clearScreen();
+	writeString(4, 0, `    ${clickableFooter}`);
+	writeString(8, 0, '    … +2 lines (ctrl + t to view transcript)');
+
+	// Clicking the FIRST footer (row 4) must expand ONLY the first block.
+	clickEvents.emit('click', {x: 5, y: 4});
+	await new Promise(resolve => setTimeout(resolve, 50));
+	const output = lastFrame()!;
+	t.true(
+		output.includes('out line 12'),
+		'first block expands when its footer is clicked',
+	);
+	t.false(
+		output.includes('… +2 lines (ctrl + t to view transcript)'),
+		'second block stays collapsed',
+	);
+	unmount();
 });
 
 test('stacked identical blocks: expanding one does not expand the other', async t => {
