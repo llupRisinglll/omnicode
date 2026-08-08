@@ -87,23 +87,34 @@ export function isEmptyAssistantMessage(message: TestableMessage): boolean {
 
 /**
  * Drop tool-result messages whose tool_call_id matches no tool_call in a
- * preceding assistant message. Orphaned tool results arise when history
+ * preceding assistant message, and duplicate tool results that re-answer an
+ * already-emitted tool_call_id. Orphaned tool results arise when history
  * compaction summarises an assistant(tool_calls) turn but keeps its tool
- * results verbatim; OpenAI-compatible providers reject the dangling result
- * (or return an empty completion). This is a defensive net for any path that
- * can orphan a result — the primary fix lives in the compaction slicer.
+ * results verbatim; duplicates arise if a steering block retroactively
+ * "cancels" a call that already produced a real result. OpenAI-compatible
+ * providers reject the dangling result and a duplicate tool message for the
+ * same call id ("Messages with role 'tool' must be a response to a preceding
+ * message with 'tool_calls'"). This is a defensive net for any path that can
+ * orphan or duplicate a result — the primary fix lives in the call sites.
  *
  * Exported for testing.
  */
 export function dropOrphanedToolResults(messages: Message[]): Message[] {
 	const seenToolCallIds = new Set<string>();
+	const emittedToolCallIds = new Set<string>();
 	const result: Message[] = [];
 	for (const msg of messages) {
 		if (msg.role === 'tool') {
-			if (msg.tool_call_id && seenToolCallIds.has(msg.tool_call_id)) {
+			if (
+				msg.tool_call_id &&
+				seenToolCallIds.has(msg.tool_call_id) &&
+				!emittedToolCallIds.has(msg.tool_call_id)
+			) {
 				result.push(msg);
+				emittedToolCallIds.add(msg.tool_call_id);
 			}
-			// else: orphaned tool result with no matching prior tool_call — drop.
+			// else: orphaned tool result (no matching prior tool_call) or a
+			// duplicate result for an already-emitted call — drop.
 			continue;
 		}
 		if (msg.role === 'assistant' && msg.tool_calls) {
