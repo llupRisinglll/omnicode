@@ -575,6 +575,8 @@ async function handleBuiltInCommand(
 		developmentMode: options.developmentMode,
 		lastApiUsage,
 		apiCallHistory,
+		onAddToChatQueue: options.onAddToChatQueue,
+		sessionId: options.sessionId ?? null,
 	});
 
 	if (!result) {

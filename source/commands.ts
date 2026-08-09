@@ -104,6 +104,8 @@ class CommandRegistry {
 			developmentMode?: import('@/types/core').DevelopmentMode;
 			lastApiUsage?: import('@/types/core').ApiUsageSnapshot | null;
 			apiCallHistory?: import('@/types/core').ApiCallRecord[];
+			onAddToChatQueue?: (component: React.ReactNode) => void;
+			sessionId?: string | null;
 		},
 	): Promise<void | string | React.ReactNode> {
 		const parts = input.trim().split(/\s+/);

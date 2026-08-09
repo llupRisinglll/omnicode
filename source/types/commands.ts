@@ -16,6 +16,9 @@ export interface Command<T = React.ReactElement | void> {
 			developmentMode?: import('@/types/core').DevelopmentMode;
 			lastApiUsage?: ApiUsageSnapshot | null;
 			apiCallHistory?: ApiCallRecord[];
+			/** Lets commands surface transient progress in the chat history. */
+			onAddToChatQueue?: (component: React.ReactNode) => void;
+			sessionId?: string | null;
 		},
 	) => Promise<T>;
 }

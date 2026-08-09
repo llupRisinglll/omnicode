@@ -386,6 +386,46 @@ test.serial('agents command - bare /agents opens settings on Agents tab', async 
 	t.true(completed);
 });
 
+test.serial(
+	'tmux:fork - command output is display-only and never sent to the provider',
+	async t => {
+		// The fork notice must be visible in chat history (chat queue) while
+		// staying out of `messages` — the array that is persisted and sent to
+		// the LLM — so it never affects context length.
+		const originalDryRun = process.env.NANOCODER_TMUX_FORK_DRY_RUN;
+		process.env.NANOCODER_TMUX_FORK_DRY_RUN = '1';
+		let queued: React.ReactNode = null;
+		let submitted = false;
+		let messagesChanged = false;
+		const options = createResumeTestOptions({});
+		options.onAddToChatQueue = node => {
+			queued = node;
+		};
+		options.onHandleChatMessage = async () => {
+			submitted = true;
+		};
+		options.setMessages = () => {
+			messagesChanged = true;
+		};
+
+		try {
+			await handleMessageSubmission('/tmux:fork', options);
+			// handleBuiltInCommand enqueues via queueMicrotask; let it flush.
+			await new Promise(resolve => setTimeout(resolve, 25));
+		} finally {
+			if (originalDryRun !== undefined) {
+				process.env.NANOCODER_TMUX_FORK_DRY_RUN = originalDryRun;
+			} else {
+				delete process.env.NANOCODER_TMUX_FORK_DRY_RUN;
+			}
+		}
+
+		t.true(React.isValidElement(queued), 'notice renders in chat history');
+		t.false(submitted, 'provider must never see the command');
+		t.false(messagesChanged, 'messages array must stay untouched');
+	},
+);
+
 test.serial('retry command - /retry without a prior user turn shows an error', async t => {
 	let queued: React.ReactNode = null;
 	let submitted = false;

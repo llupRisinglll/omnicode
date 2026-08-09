@@ -56,6 +56,7 @@ interface UseAppHandlersProps {
 	currentProvider: string;
 	currentProviderConfig: import('@/types/config').AIProviderConfig | null;
 	currentModel: string;
+	currentSessionId: string | null;
 	currentTheme: ThemePreset;
 	developmentMode: DevelopmentMode;
 	tune: TuneConfig | undefined;
@@ -702,6 +703,7 @@ export function useAppHandlers(props: UseAppHandlersProps): AppHandlers {
 					providerConfig: props.currentProviderConfig,
 					client: props.client,
 					model: props.currentModel,
+					sessionId: props.currentSessionId,
 					theme: props.currentTheme,
 					updateInfo: props.updateInfo,
 					getMessageTokens: props.getMessageTokens,
