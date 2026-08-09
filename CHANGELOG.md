@@ -1,5 +1,19 @@
 # @nanocollective/nanocoder
 
+# 1.30.0
+
+- Added a dedicated Semantic Memory toggle to `/settings` under Advanced, backed by the `semanticMemoryEnabled` preference. The setting defaults on to preserve existing behavior, and can be turned off to keep agents from persisting reusable context across sessions.
+
+- File tools now resolve relative paths against the shell's current working directory, and `cd` in bash persists across commands — so relative reads and edits work after moving into a subdirectory or worktree. File tools also accept absolute paths that point inside the project, and can still reach the project root or a sibling worktree after `cd`-ing into a subdirectory.
+
+- Moved the rest of nanocoder's configuration into the `/settings` menu, so you can set things up without editing `.json` files by hand. Settings are grouped into Appearance, Input, Behavior, Providers, and Advanced tabs. New menu items let you set the default mode, auto-compact, sessions, reasoning traces, tool auto-approval, and a Web Search API key; view your configured providers and MCP servers before opening the setup wizards; open the Tune Model and Connect IDE wizards; and see the active `NANOCODER_*` environment variables. Advanced also includes an in-app JSON editor for `agents.config.json`: edit strings with the cursor inside the quotes, flip booleans with the arrow keys, and save atomically (a crash can't leave a half-written file).
+
+- Custom slash commands now receive the full typed argument string via `{{args}}` and a `$ARGUMENTS` placeholder, even when the command declares no parameters.
+
+- Command suggestions now appear as soon as you type `/`, and Tab selects the highlighted suggestion. Previously the menu was Tab-triggered and often failed to render, especially in alternate-screen mode. Recalling a `/command` from history with the arrow keys no longer opens the menu, so ↑/↓ keep navigating history freely — the menu returns as soon as you type.
+
+If there are any problems, feedback or thoughts please drop an issue or message us through Discord! Thank you for using Nanocoder.
+
 # 1.29.0
 
 - Added the ability to attach to a running subagent session from the terminal UI for interactive debugging. This feature allows users to inspect exactly what a subagent is doing in real-time, including streaming text and reasoning. You can press `Ctrl+S` while a subagent is running to attach to it, cycle between multiple running subagents, and press `Esc` to detach.
