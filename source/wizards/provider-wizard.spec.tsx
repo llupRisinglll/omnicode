@@ -48,6 +48,79 @@ test('ProviderWizard shows location options', t => {
 	t.regex(output!, /Global user config/);
 });
 
+test('ProviderWizard with initialItems + initialConfigPath skips the location step', t => {
+	const {lastFrame} = renderWithTheme(
+		<ProviderWizard
+			projectDir="/tmp/test-project"
+			initialItems={{
+				providers: [
+					{
+						name: 'Alpha',
+						models: ['alpha-model'],
+						baseUrl: 'http://alpha.local',
+					},
+					{
+						name: 'Beta',
+						models: ['beta-model'],
+						baseUrl: 'http://beta.local',
+					},
+				],
+				modeProviders: {},
+			}}
+			initialConfigPath="/tmp/test-project/agents.config.json"
+			onComplete={() => {}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.notRegex(output, /Where would you like to create your configuration/);
+	t.regex(output, /2 provider\(s\) already added/);
+	t.regex(output, /Edit existing providers/);
+});
+
+test('ProviderWizard initialMode add opens the template picker directly', t => {
+	const {lastFrame} = renderWithTheme(
+		<ProviderWizard
+			projectDir="/tmp/test-project"
+			initialItems={{providers: [], modeProviders: {}}}
+			initialConfigPath="/tmp/test-project/agents.config.json"
+			initialMode="add"
+			onComplete={() => {}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.notRegex(output, /Where would you like to create your configuration/);
+	t.regex(output, /Choose a provider template:/);
+});
+
+test('ProviderWizard initialMode edit opens the named provider form pre-filled', t => {
+	const {lastFrame} = renderWithTheme(
+		<ProviderWizard
+			projectDir="/tmp/test-project"
+			initialItems={{
+				providers: [
+					{
+						name: 'Alpha',
+						models: ['alpha-model'],
+						baseUrl: 'http://alpha.local',
+					},
+				],
+				modeProviders: {},
+			}}
+			initialConfigPath="/tmp/test-project/agents.config.json"
+			initialMode="edit"
+			editProviderName="Alpha"
+			onComplete={() => {}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.notRegex(output, /Would you like to use a template/);
+	t.regex(output, /Custom Provider Configuration/);
+	t.regex(output, /Field 1\/5/);
+});
+
 test('ProviderWizard renders without crashing when onCancel is provided', t => {
 	let cancelCalled = false;
 

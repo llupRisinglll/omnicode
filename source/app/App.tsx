@@ -548,6 +548,7 @@ export default function App({
 		currentProvider: appState.currentProvider,
 		currentProviderConfig: appState.currentProviderConfig,
 		currentModel: appState.currentModel,
+		currentSessionId: appState.currentSessionId,
 		currentTheme: appState.currentTheme,
 		developmentMode: appState.developmentMode,
 		tune: appState.tune,

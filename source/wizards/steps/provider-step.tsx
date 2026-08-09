@@ -24,6 +24,13 @@ interface ProviderStepProps {
 	onDelete?: () => void;
 	existingProviders?: ProviderConfig[];
 	configExists?: boolean;
+	/**
+	 * Jump the step straight into the requested flow, skipping the generic
+	 * add/edit menu: 'add' opens the template picker, 'edit' opens the named
+	 * provider's field form with its current values pre-filled.
+	 */
+	initialMode?: 'add' | 'edit';
+	editProviderName?: string;
 }
 
 type Mode =
@@ -81,6 +88,8 @@ export function ProviderStep({
 	onDelete,
 	existingProviders,
 	configExists = false,
+	initialMode,
+	editProviderName,
 }: ProviderStepProps) {
 	const colors = getColors();
 	const {isNarrow} = useResponsiveTerminal();
@@ -96,7 +105,36 @@ export function ProviderStep({
 		}
 	}, [existingProviders]);
 
-	const [mode, setMode] = useState<Mode>('select-template-or-custom');
+	// Settings-launched entry points: preload the requested provider's form
+	// (edit) or jump to the template picker (add) instead of showing the
+	// generic add/edit/done menu.
+	const preloadedEdit =
+		initialMode === 'edit' && editProviderName
+			? (() => {
+					const index =
+						existingProviders?.findIndex(p => p.name === editProviderName) ??
+						-1;
+					const provider =
+						index >= 0 && existingProviders
+							? existingProviders[index]
+							: undefined;
+					if (!provider) return null;
+					const template = findTemplateForProvider(provider);
+					if (!template) return null;
+					const answers: Record<string, string> = {};
+					if (provider.name) answers.providerName = provider.name;
+					if (provider.baseUrl) answers.baseUrl = provider.baseUrl;
+					if (provider.apiKey) answers.apiKey = provider.apiKey;
+					if (provider.models) answers.model = provider.models.join(', ');
+					return {index, template, answers};
+				})()
+			: null;
+
+	const [mode, setMode] = useState<Mode>(() => {
+		if (initialMode === 'add') return 'template-selection';
+		if (preloadedEdit) return 'field-input';
+		return 'select-template-or-custom';
+	});
 	const {
 		selectedTemplate,
 		currentFieldIndex,
@@ -111,9 +149,18 @@ export function ProviderStep({
 		loadField,
 		resetForm,
 		bumpInputKey,
-	} = useWizardForm<ProviderTemplate>();
+	} = useWizardForm<ProviderTemplate>(
+		preloadedEdit
+			? {
+					initialTemplate: preloadedEdit.template,
+					initialAnswers: preloadedEdit.answers,
+				}
+			: undefined,
+	);
 	const [cameFromCustom, setCameFromCustom] = useState(false);
-	const [editingIndex, setEditingIndex] = useState<number | null>(null);
+	const [editingIndex, setEditingIndex] = useState<number | null>(
+		preloadedEdit ? preloadedEdit.index : null,
+	);
 	const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
 	const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(
 		new Set(),

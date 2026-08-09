@@ -240,4 +240,15 @@ export const lazyCommands: LazyCommand[] = [
 			'Inspect what the prompt scrubber will remove from your prompts',
 		load: () => import('@/commands/privacy').then(m => m.privacyCommand),
 	},
+	{
+		name: 'tool:open-prs',
+		description: 'Open PRs created in this session in the default browser',
+		load: () => import('@/commands/open-prs').then(m => m.openPrsCommand),
+	},
+	{
+		name: 'tmux:fork',
+		description:
+			'Copy this session into a new tmux session, resume it, and run /compact',
+		load: () => import('@/commands/tmux-fork').then(m => m.tmuxForkCommand),
+	},
 ];

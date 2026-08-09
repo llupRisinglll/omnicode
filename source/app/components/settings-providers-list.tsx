@@ -1,7 +1,11 @@
+import {existsSync} from 'node:fs';
+import {join} from 'node:path';
 import {Box, Text, useInput} from 'ink';
 import {useState} from 'react';
 import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
 import {getAppConfig} from '@/config/index';
+import {loadFileProviderConfigs} from '@/config/mcp-config-loader';
+import {getConfigPath} from '@/config/paths';
 import {useResponsiveTerminal} from '@/hooks/useTerminalWidth';
 import {useTheme} from '@/hooks/useTheme';
 import {ProviderWizard} from '@/wizards/provider-wizard';
@@ -19,7 +23,10 @@ export function SettingsProvidersListPanel({
 }) {
 	const {colors} = useTheme();
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
-	const [editing, setEditing] = useState(false);
+	const [editing, setEditing] = useState<{
+		mode: 'add' | 'edit';
+		providerName?: string;
+	} | null>(null);
 	const [selectedIdx, setSelectedIdx] = useState(0);
 
 	const providers = getAppConfig().providers ?? [];
@@ -41,16 +48,35 @@ export function SettingsProvidersListPanel({
 			setSelectedIdx(prev => (prev < totalItems - 1 ? prev + 1 : 0));
 		}
 		if (key.return || input === ' ') {
-			setEditing(true);
+			const provider = providers[selectedIdx];
+			setEditing(
+				provider ? {mode: 'edit', providerName: provider.name} : {mode: 'add'},
+			);
 		}
 	});
 
 	if (editing) {
+		// Edit the SAME merged provider list the panel just showed, at the
+		// active config file (project if one exists, else global) — no
+		// "edit this config vs create elsewhere" detour. Env-provided
+		// providers stay out of the editor because they can't be persisted
+		// to a file.
+		const projectConfigPath = join(process.cwd(), 'agents.config.json');
+		const configPath = existsSync(projectConfigPath)
+			? projectConfigPath
+			: join(getConfigPath(), 'agents.config.json');
 		return (
 			<ProviderWizard
 				projectDir={process.cwd()}
+				initialItems={{
+					providers: loadFileProviderConfigs(),
+					modeProviders: getAppConfig().modeProviders ?? {},
+				}}
+				initialConfigPath={configPath}
+				initialMode={editing.mode}
+				editProviderName={editing.providerName}
 				onComplete={onBack}
-				onCancel={() => setEditing(false)}
+				onCancel={() => setEditing(null)}
 			/>
 		);
 	}
@@ -68,8 +94,8 @@ export function SettingsProvidersListPanel({
 			<Box marginBottom={1}>
 				<Text color={colors.secondary}>
 					{providers.length} provider
-					{providers.length === 1 ? '' : 's'} configured. Enter opens the wizard
-					to add or edit.
+					{providers.length === 1 ? '' : 's'} configured. Select a provider to
+					edit, or use + Add provider.
 				</Text>
 			</Box>
 			{providers.map((p, i) => {
@@ -112,7 +138,7 @@ export function SettingsProvidersListPanel({
 					</Box>
 				);
 			})}
-			{/* Add or edit providers action row */}
+			{/* Add provider action row */}
 			<Box flexDirection="row">
 				<Box minWidth={2}>
 					<Text
@@ -124,13 +150,13 @@ export function SettingsProvidersListPanel({
 					</Text>
 				</Box>
 				<Text bold color={colors.text}>
-					+ Add or edit providers…
+					+ Add provider…
 				</Text>
 			</Box>
 			{!isNarrow && (
 				<Box marginTop={1}>
 					<Text color={colors.secondary}>
-						↑↓ navigate · Enter wizard · Esc back
+						↑↓ navigate · Enter edit/add · Esc back
 					</Text>
 				</Box>
 			)}

@@ -1,6 +1,10 @@
 import test from 'ava';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {MessageBuilder} from './message-builder.js';
 import type {Message, ToolResult} from '@/types/core';
+import {clearPrUrls, loadPrUrls} from '@/utils/pr-store';
 
 test('MessageBuilder starts with initial messages', t => {
 	const userMsg: Message = {role: 'user', content: 'Hello'};
@@ -162,3 +166,73 @@ test('MessageBuilder builds complete conversation flow', t => {
 	t.is(messages[2].role, 'tool');
 	t.is(messages[2].content, '{"setting": "value"}');
 });
+
+test.serial(
+	'MessageBuilder persists PR links from committed content to the PR store',
+	t => {
+		const configDir = mkdtempSync(join(tmpdir(), 'nanocoder-mb-pr-spec-'));
+		const originalConfigDir = process.env.NANOCODER_CONFIG_DIR;
+		process.env.NANOCODER_CONFIG_DIR = configDir;
+		try {
+			clearPrUrls();
+			const builder = new MessageBuilder([]);
+			builder.addToolResults([
+				{
+					tool_call_id: 'gh-create',
+					role: 'tool',
+					name: 'execute_bash',
+					content:
+						'Created pull request https://github.com/acme/app/pull/99',
+				},
+			]);
+			builder.addAssistantMessage({
+				role: 'assistant',
+				content: 'PR is up: https://github.com/acme/app/pull/100',
+			});
+
+			t.deepEqual(loadPrUrls(), [
+				'https://github.com/acme/app/pull/99',
+				'https://github.com/acme/app/pull/100',
+			]);
+		} finally {
+			if (originalConfigDir !== undefined) {
+				process.env.NANOCODER_CONFIG_DIR = originalConfigDir;
+			} else {
+				delete process.env.NANOCODER_CONFIG_DIR;
+			}
+			rmSync(configDir, {recursive: true, force: true});
+		}
+	},
+);
+
+test.serial(
+	'MessageBuilder does not capture PRs merely referenced by research tools',
+	t => {
+		const configDir = mkdtempSync(join(tmpdir(), 'nanocoder-mb-pr-spec-'));
+		const originalConfigDir = process.env.NANOCODER_CONFIG_DIR;
+		process.env.NANOCODER_CONFIG_DIR = configDir;
+		try {
+			clearPrUrls();
+			const builder = new MessageBuilder([]);
+			builder.addToolResults([
+				{
+					tool_call_id: 'search',
+					role: 'tool',
+					name: 'web_search',
+					content:
+						'See https://github.com/payloadcms/payload/pull/8354 for context',
+				},
+			]);
+			builder.addUserMessage('check this PR https://github.com/acme/app/pull/9');
+
+			t.deepEqual(loadPrUrls(), []);
+		} finally {
+			if (originalConfigDir !== undefined) {
+				process.env.NANOCODER_CONFIG_DIR = originalConfigDir;
+			} else {
+				delete process.env.NANOCODER_CONFIG_DIR;
+			}
+			rmSync(configDir, {recursive: true, force: true});
+		}
+	},
+);

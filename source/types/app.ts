@@ -54,6 +54,7 @@ export interface MessageSubmissionOptions {
 	providerConfig: AIProviderConfig | null;
 	client: import('./core').LLMClient | null;
 	model: string;
+	sessionId?: string | null;
 	theme: string;
 	updateInfo: UpdateInfo | null;
 	getMessageTokens: (message: Message) => number;

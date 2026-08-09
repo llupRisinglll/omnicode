@@ -15,6 +15,21 @@ interface ProviderWizardProps {
 	projectDir: string;
 	onComplete: (configPath: string) => void;
 	onCancel?: () => void;
+	/**
+	 * Skip the location step and edit these items at this path directly. Both
+	 * must be set together — used by Settings > Providers so the editor opens
+	 * on the same merged provider list the panel shows.
+	 */
+	initialItems?: ProviderWizardState;
+	initialConfigPath?: string;
+	/**
+	 * Jump the editor straight into add (template picker) or the named
+	 * provider's edit form. Only meaningful with initialItems + path; used by
+	 * Settings > Providers so a provider row edits that provider and the
+	 * bottom action only adds.
+	 */
+	initialMode?: 'add' | 'edit';
+	editProviderName?: string;
 }
 
 function parseProviderConfig(raw: unknown): ProviderWizardState {
@@ -127,12 +142,16 @@ function ProviderWizardSteps({
 	onBack,
 	onDelete,
 	configExists,
+	initialMode,
+	editProviderName,
 }: {
 	items: ProviderWizardState;
 	onComplete: (items: ProviderWizardState) => void;
 	onBack: () => void;
 	onDelete: () => void;
 	configExists: boolean;
+	initialMode?: 'add' | 'edit';
+	editProviderName?: string;
 }) {
 	const [step, setStep] = useState<'providers' | 'modes'>('providers');
 	const [providers, setProviders] = useState(items.providers);
@@ -148,6 +167,8 @@ function ProviderWizardSteps({
 				onBack={onBack}
 				onDelete={onDelete}
 				configExists={configExists}
+				initialMode={initialMode}
+				editProviderName={editProviderName}
 			/>
 		);
 	}
@@ -168,7 +189,15 @@ export function ProviderWizard({
 	projectDir,
 	onComplete,
 	onCancel,
+	initialItems,
+	initialConfigPath,
+	initialMode,
+	editProviderName,
 }: ProviderWizardProps) {
+	const preset =
+		initialItems && initialConfigPath
+			? {configPath: initialConfigPath, items: initialItems}
+			: undefined;
 	return (
 		<BaseConfigWizard<ProviderWizardState>
 			title="Provider Wizard"
@@ -178,9 +207,16 @@ export function ProviderWizard({
 			parseConfig={parseProviderConfig}
 			buildConfig={buildProviderConfigObject}
 			hasItems={items => items.providers.length > 0}
-			renderConfigureStep={args => <ProviderWizardSteps {...args} />}
+			renderConfigureStep={args => (
+				<ProviderWizardSteps
+					{...args}
+					initialMode={initialMode}
+					editProviderName={editProviderName}
+				/>
+			)}
 			renderSummaryItems={items => <ProviderSummaryItems items={items} />}
 			renderCompleteExtras={items => <ProviderCompleteExtras items={items} />}
+			preset={preset}
 			projectDir={projectDir}
 			onComplete={onComplete}
 			onCancel={onCancel}
