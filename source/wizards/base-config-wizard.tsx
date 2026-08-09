@@ -10,7 +10,7 @@ import {dirname, join} from 'node:path';
 import {Box, Text, useFocus, useInput} from 'ink';
 import SelectInput from 'ink-select-input';
 import Spinner from 'ink-spinner';
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {TitledBoxWithPreferences} from '@/components/ui/titled-box';
 import {getColors} from '@/config/index';
 import {getConfigPath} from '@/config/paths';
@@ -61,6 +61,13 @@ export interface BaseConfigWizardProps<T> {
 	renderSummaryItems: (items: T) => React.ReactNode;
 	/** Optional extra content to render in the complete step (after the header). */
 	renderCompleteExtras?: (items: T) => React.ReactNode;
+	/**
+	 * When set, skip the location step and start editing directly at the given
+	 * path with the given items. Used by the Settings panels so the editor
+	 * opens on the same merged list the panel listed, without re-asking where
+	 * to create the configuration.
+	 */
+	preset?: {configPath: string; items: T};
 	projectDir: string;
 	onComplete: (configPath: string) => void;
 	onCancel?: () => void;
@@ -85,17 +92,23 @@ export function BaseConfigWizard<T>({
 	renderConfigureStep,
 	renderSummaryItems,
 	renderCompleteExtras,
+	preset,
 	projectDir,
 	onComplete,
 	onCancel,
 }: BaseConfigWizardProps<T>) {
 	const colors = getColors();
-	const [step, setStep] = useState<BaseWizardStep>('location');
-	const [configPath, setConfigPath] = useState('');
-	const [items, setItems] = useState<T>(initialItems);
+	const [step, setStep] = useState<BaseWizardStep>(
+		preset ? 'configure' : 'location',
+	);
+	const [configPath, setConfigPath] = useState(preset?.configPath ?? '');
+	const [items, setItems] = useState<T>(preset?.items ?? initialItems);
 	const [error, setError] = useState<string | null>(null);
 	const [configCorrupted, setConfigCorrupted] = useState(false);
 	const {boxWidth, isNarrow} = useResponsiveTerminal();
+	// Preset mode hands the wizard its items (e.g. the merged provider list);
+	// loading from disk would replace them with a single file's subset.
+	const presetRef = useRef(preset);
 
 	useFocus({autoFocus: true, id: focusId});
 
@@ -137,7 +150,7 @@ export function BaseConfigWizard<T>({
 	);
 
 	useEffect(() => {
-		if (!configPath) return;
+		if (!configPath || presetRef.current) return;
 		loadExistingConfig(configPath);
 	}, [configPath, loadExistingConfig]);
 
@@ -295,7 +308,7 @@ export function BaseConfigWizard<T>({
 				return renderConfigureStep({
 					items,
 					onComplete: handleConfigureComplete,
-					onBack: () => setStep('location'),
+					onBack: preset ? () => onCancel?.() : () => setStep('location'),
 					onDelete: handleDeleteConfig,
 					configExists: existsSync(configPath),
 				});

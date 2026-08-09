@@ -222,17 +222,18 @@ function loadEnvMCPConfigs(): MCPServerWithSource[] {
 }
 
 /**
- * Load provider configurations from all available levels (project and global)
- * This mirrors the approach used for MCP servers to support hierarchical loading
+ * Load provider configurations from file-backed levels only (project and
+ * global), merged with project taking precedence over global. Env-provided
+ * providers are excluded: they cannot be persisted to a config file, so any
+ * edit written for them would be shadowed by the env value on reload.
  */
-export function loadAllProviderConfigs(): ProviderConfig[] {
+export function loadFileProviderConfigs(): ProviderConfig[] {
 	const projectProviders = loadProjectProviderConfigs();
 	// Skip loading global providers in test environment to allow test isolation
 	const globalProviders =
 		process.env.NODE_ENV === 'test' ? [] : loadGlobalProviderConfigs();
-	const envProviders = loadEnvProviderConfigs();
 
-	// Merge providers with env providers taking highest precedence
+	// Merge providers with project taking precedence over global
 	const providerMap = new Map<string, ProviderConfig>();
 
 	// Add global providers first (lowest priority)
@@ -242,6 +243,26 @@ export function loadAllProviderConfigs(): ProviderConfig[] {
 
 	// Add project providers (medium priority) - overrides global ones
 	for (const provider of projectProviders) {
+		providerMap.set(provider.name, provider);
+	}
+
+	return Array.from(providerMap.values());
+}
+
+/**
+ * Load provider configurations from all available levels (project, global and
+ * env). This mirrors the approach used for MCP servers to support hierarchical
+ * loading. Env providers take the highest precedence.
+ */
+export function loadAllProviderConfigs(): ProviderConfig[] {
+	const fileProviders = loadFileProviderConfigs();
+	const envProviders = loadEnvProviderConfigs();
+
+	// Merge providers with env providers taking highest precedence
+	const providerMap = new Map<string, ProviderConfig>();
+
+	// Add file-backed providers first (lowest priority)
+	for (const provider of fileProviders) {
 		providerMap.set(provider.name, provider);
 	}
 

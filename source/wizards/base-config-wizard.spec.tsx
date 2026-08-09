@@ -75,6 +75,32 @@ test('renders the location step on first mount', t => {
 	t.regex(output, /Global user config/);
 });
 
+test('preset skips the location step and opens the configure step directly', t => {
+	const {lastFrame} = renderWithTheme(
+		<BaseConfigWizard<FakeItems>
+			title="Title"
+			focusId="preset-wizard"
+			configFileName=".x.json"
+			initialItems={{entries: []}}
+			parseConfig={() => ({entries: []})}
+			buildConfig={items => items}
+			hasItems={items => items.entries.length > 0}
+			renderConfigureStep={noopRenderConfigure}
+			renderSummaryItems={noopRenderSummary}
+			preset={{
+				configPath: '/tmp/example/.x.json',
+				items: {entries: ['preloaded']},
+			}}
+			projectDir="/tmp/example"
+			onComplete={() => {}}
+		/>,
+	);
+
+	const output = lastFrame()!;
+	t.notRegex(output, /Where would you like to create your configuration/);
+	t.regex(output, /configure step/);
+});
+
 test('shows the standard footer hints in the wizard frame', t => {
 	const {lastFrame} = renderWithTheme(
 		<BaseConfigWizard<FakeItems>
@@ -371,5 +397,4 @@ test.serial(
 		t.regex(output, /entries: openai,anthropic/);
 	},
 );
-
 

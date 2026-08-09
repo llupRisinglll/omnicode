@@ -27,11 +27,25 @@ export interface WizardFormTemplate {
 	fields: TemplateField[];
 }
 
-export function useWizardForm<T extends WizardFormTemplate>() {
-	const [selectedTemplate, setSelectedTemplate] = useState<T | null>(null);
+export function useWizardForm<T extends WizardFormTemplate>(options?: {
+	initialTemplate?: T;
+	initialAnswers?: Record<string, string>;
+}) {
+	const [selectedTemplate, setSelectedTemplate] = useState<T | null>(
+		options?.initialTemplate ?? null,
+	);
 	const [currentFieldIndex, setCurrentFieldIndex] = useState(0);
-	const [fieldAnswers, setFieldAnswers] = useState<Record<string, string>>({});
-	const [currentValue, setCurrentValue] = useState('');
+	const [fieldAnswers, setFieldAnswers] = useState<Record<string, string>>(
+		options?.initialAnswers ?? {},
+	);
+	const [currentValue, setCurrentValue] = useState(() =>
+		options?.initialTemplate
+			? valueForField(
+					options.initialTemplate.fields[0],
+					options.initialAnswers ?? {},
+				)
+			: '',
+	);
 	const [error, setError] = useState<string | null>(null);
 	// Bumped to force the text input to remount and reset its cursor.
 	const [inputKey, setInputKey] = useState(0);

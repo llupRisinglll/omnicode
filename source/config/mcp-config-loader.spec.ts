@@ -2,7 +2,7 @@ import test from 'ava';
 import {writeFileSync, mkdirSync, rmSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
-import {loadAllMCPConfigs, loadGlobalMCPConfig, loadProjectMCPConfig, loadAllProviderConfigs, mergeMCPConfigs} from '@/config/mcp-config-loader';
+import {loadAllMCPConfigs, loadGlobalMCPConfig, loadProjectMCPConfig, loadAllProviderConfigs, loadFileProviderConfigs, mergeMCPConfigs} from '@/config/mcp-config-loader';
 
 test.beforeEach(t => {
     // Create a temporary directory for testing
@@ -662,6 +662,99 @@ test('hierarchical precedence - NANOCODER_PROVIDERS overrides all', t => {
         t.is(matchingProviders.length, 1);
         t.is(matchingProviders[0].baseUrl, 'http://env-url');
         t.is(matchingProviders[0].apiKey, 'env-key');
+    } finally {
+        if (originalProviders !== undefined) {
+            process.env.NANOCODER_PROVIDERS = originalProviders;
+        } else {
+            delete process.env.NANOCODER_PROVIDERS;
+        }
+        if (originalConfigDir !== undefined) {
+            process.env.NANOCODER_CONFIG_DIR = originalConfigDir;
+        } else {
+            delete process.env.NANOCODER_CONFIG_DIR;
+        }
+        if (originalNodeEnv !== undefined) {
+            process.env.NODE_ENV = originalNodeEnv;
+        } else {
+            delete process.env.NODE_ENV;
+        }
+    }
+});
+
+test('loadFileProviderConfigs - merges project and global, excludes env', t => {
+    const testDir = t.context.testDir as string;
+    const originalProviders = process.env.NANOCODER_PROVIDERS;
+    const originalConfigDir = process.env.NANOCODER_CONFIG_DIR;
+    const originalNodeEnv = process.env.NODE_ENV;
+
+    try {
+        // Enable global config loading for this test
+        delete process.env.NODE_ENV;
+
+        // Set up global config in a separate directory
+        const globalDir = join(testDir, 'global-config');
+        mkdirSync(globalDir, {recursive: true});
+        process.env.NANOCODER_CONFIG_DIR = globalDir;
+        const globalConfig = {
+            nanocoder: {
+                providers: [
+                    {
+                        name: 'shared-provider',
+                        baseUrl: 'http://global-url',
+                        models: ['global-model']
+                    },
+                    {
+                        name: 'global-only',
+                        baseUrl: 'http://global-only-url',
+                        models: ['global-only-model']
+                    }
+                ]
+            }
+        };
+        writeFileSync(join(globalDir, 'agents.config.json'), JSON.stringify(globalConfig));
+
+        // Set up project config in the working directory
+        const projectConfig = {
+            providers: [
+                {
+                    name: 'shared-provider',
+                    baseUrl: 'http://project-url',
+                    models: ['project-model']
+                },
+                {
+                    name: 'project-only',
+                    baseUrl: 'http://project-only-url',
+                    models: ['project-only-model']
+                }
+            ]
+        };
+        writeFileSync(join(testDir, 'agents.config.json'), JSON.stringify(projectConfig));
+
+        // Set up env config (should be excluded by loadFileProviderConfigs)
+        const envConfig = [
+            {
+                name: 'env-only',
+                baseUrl: 'http://env-url',
+                models: ['env-model']
+            }
+        ];
+        process.env.NANOCODER_PROVIDERS = JSON.stringify(envConfig);
+
+        const fileProviders = loadFileProviderConfigs();
+        const names = fileProviders.map(p => p.name).sort();
+        t.deepEqual(names, ['global-only', 'project-only', 'shared-provider']);
+
+        // Project wins over global for the shared name
+        const shared = fileProviders.find(p => p.name === 'shared-provider');
+        t.is(shared?.baseUrl, 'http://project-url');
+
+        // Env providers are not part of the file-backed list
+        t.false(fileProviders.some(p => p.name === 'env-only'));
+
+        // loadAllProviderConfigs still includes env with highest precedence
+        const allProviders = loadAllProviderConfigs();
+        const env = allProviders.find(p => p.name === 'env-only');
+        t.truthy(env);
     } finally {
         if (originalProviders !== undefined) {
             process.env.NANOCODER_PROVIDERS = originalProviders;
