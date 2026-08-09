@@ -2802,6 +2802,7 @@ export function PreviewBody({
 								enabled: true,
 								toolProfile: 'full',
 								aggressiveCompact: false,
+								modelParameters: {reasoningEffort: 'medium'},
 							}}
 							statusInfo={{directory: process.cwd()}}
 							currentModel="preview-model"

@@ -1156,7 +1156,9 @@ const UserInput = memo(function UserInput({
 	}, [completions, commandCompletionAvailableWidth]);
 	// Model badge in the box's bottom-right corner. The ctx figure rides
 	// beside it (bar glyphs dropped — just the estimate marker + percentage),
-	// rendered in secondary so the model name stays the visual anchor.
+	// rendered in secondary so the model name stays the visual anchor. A
+	// configured reasoning effort rides directly after the model name as
+	// [effort] (e.g. deepseek-v4-flash[medium]).
 	const modelInputBadge = (() => {
 		if (!colors.promptChar || !currentModel) return null;
 		const ctxPct = contextPercentUsed ?? null;
@@ -1164,8 +1166,17 @@ const UserInput = memo(function UserInput({
 			ctxPct !== null
 				? ` · ctx ${contextSource === 'api' ? '' : '~'}${ctxPct}%`
 				: '';
-		const modelBudget = Math.max(6, inputWrapWidth - 4 - ctxPart.length);
-		return {model: truncate(currentModel, modelBudget), ctx: ctxPart};
+		const effort = tune?.modelParameters?.reasoningEffort;
+		const effortPart = effort ? `[${effort}]` : '';
+		const modelBudget = Math.max(
+			6,
+			inputWrapWidth - 4 - ctxPart.length - effortPart.length,
+		);
+		return {
+			model: truncate(currentModel, modelBudget),
+			effort: effortPart,
+			ctx: ctxPart,
+		};
 	})();
 
 	// When disabled, show minimal UI to avoid cluttering the screen
@@ -1435,6 +1446,11 @@ const UserInput = memo(function UserInput({
 						{' '}
 						{modelInputBadge.model}
 					</Text>
+					{modelInputBadge.effort && (
+						<Text color={colors.secondary} bold>
+							{modelInputBadge.effort}
+						</Text>
+					)}
 					{modelInputBadge.ctx && (
 						<Text color={colors.secondary} bold>
 							{modelInputBadge.ctx}{' '}

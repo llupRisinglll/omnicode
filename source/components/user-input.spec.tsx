@@ -1215,6 +1215,27 @@ test('promptChar input renders current model as a bottom-right badge', t => {
 	unmount();
 });
 
+test('promptChar badge appends the configured reasoning effort to the model', t => {
+	const {lastFrame, unmount} = render(
+		<PromptCharThemeProvider>
+			<UserInput
+				currentModel="deepseek-v4-flash"
+				tune={{
+					enabled: true,
+					toolProfile: 'full',
+					aggressiveCompact: false,
+					modelParameters: {reasoningEffort: 'medium'},
+				}}
+			/>
+		</PromptCharThemeProvider>,
+	);
+
+	const output = stripAnsi(lastFrame() ?? '');
+	t.regex(output, /deepseek-v4-flash\[medium\]/);
+	t.true(output.indexOf('deepseek-v4-flash[medium]') < output.indexOf('normal mode on'));
+	unmount();
+});
+
 test.serial(
 	'completion rows with realistic long descriptions do not wrap under a promptChar theme',
 	async t => {
